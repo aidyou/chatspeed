@@ -268,7 +268,9 @@ pub fn generate_key_file(path: &Path) -> Result<(), StoreError> {
         .and_then(|_| file.sync_all())
     {
         let _ = fs::remove_file(path);
-        return Err(StoreError::IoError(error.to_string()));
+        return Err(StoreError::IoError(
+            crate::error_diagnostics::FailureMessage::from_error(&error),
+        ));
     }
 
     Ok(())

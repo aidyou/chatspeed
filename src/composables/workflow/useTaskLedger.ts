@@ -17,6 +17,8 @@ export interface ToolViewState {
   arguments?: Record<string, any>
   result?: string
   errorType?: string
+  errorDisplay?: string
+  errorDisplayCopy?: string
   approvalStatus?: 'pending' | 'approved' | 'rejected'
   createdAt: number
   startedAt?: number
@@ -116,6 +118,8 @@ export function useTaskLedger() {
       arguments: state.arguments || existing?.arguments,
       result: state.result ?? existing?.result,
       errorType: state.errorType ?? existing?.errorType,
+      errorDisplay: state.errorDisplay ?? existing?.errorDisplay,
+      errorDisplayCopy: state.errorDisplayCopy ?? existing?.errorDisplayCopy,
       approvalStatus: state.approvalStatus || existing?.approvalStatus || 'pending',
       createdAt: existing?.createdAt || now,
       startedAt,

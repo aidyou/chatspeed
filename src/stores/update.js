@@ -1,3 +1,4 @@
+import { formatUserError } from '@/libs/error'
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { ElMessage } from 'element-plus'
@@ -47,7 +48,7 @@ export const useUpdateStore = defineStore('update', () => {
   }
 
   const handleDownloadFailed = payload => {
-    downloadError.value = typeof payload === 'string' ? payload : String(payload || '')
+    downloadError.value = formatUserError(payload)
     downloadProgress.value = 0
     isCheckingForUpdates.value = false
     console.error('Update download failed:', downloadError.value)
@@ -95,10 +96,10 @@ export const useUpdateStore = defineStore('update', () => {
     } catch (error) {
       if (error instanceof FrontendAppError) {
         console.error(`Failed to restart application: ${error.toFormattedString()}`, error.originalError)
-        ElMessage.error(`${error.toFormattedString()}`)
+        ElMessage.error(formatUserError(error))
       } else {
         console.error('Failed to restart application:', error)
-        ElMessage.error(`${error.message || 'Unknown error'}`)
+        ElMessage.error(formatUserError(error))
       }
     }
   }

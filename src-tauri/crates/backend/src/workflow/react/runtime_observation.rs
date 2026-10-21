@@ -340,6 +340,57 @@ mod tests {
     }
 
     #[test]
+    fn terminal_error_fixture_preserves_content_but_hides_typed_llm_projection() {
+        let content = crate::workflow::react::error::WorkflowEngineError::General(
+            "legacy engine detail".to_string(),
+        )
+        .terminal_error()
+        .content;
+        let mut message = WorkflowMessage {
+            id: None,
+            session_id: "session".to_string(),
+            role: "assistant".to_string(),
+            message: content.clone(),
+            reasoning: None,
+            message_kind: MESSAGE_KIND_RUNTIME_OBSERVATION.to_string(),
+            message_subtype: Some("terminal_error".to_string()),
+            segment_id: 1,
+            source_event_type: None,
+            metadata: Some(runtime_observation_metadata(
+                RuntimeObservationType::TerminalError,
+                json!({ "error_type": "engine" }),
+            )),
+            attached_context: None,
+            step_type: Some("observe".to_string()),
+            step_index: 0,
+            is_error: true,
+            error_type: Some("engine".to_string()),
+            created_at: None,
+        };
+
+        let rendered = render_runtime_observation_for_llm(&message)
+            .expect("typed terminal error should normalize");
+        assert_eq!(rendered.placement, RuntimeObservationPlacement::Hide);
+        assert_eq!(rendered.content, content);
+        assert!(message.message.contains("<SYSTEM_REMINDER>"));
+        assert_eq!(message.metadata.as_ref().unwrap()["ui_visibility"], "show");
+
+        // Old user-role reminders remain model-visible compatibility input.
+        message.role = "user".to_string();
+        message.metadata = None;
+        message.message_kind = "message".to_string();
+        message.message_subtype = None;
+        let legacy = render_runtime_observation_for_llm(&message)
+            .expect("legacy user reminder should normalize");
+        assert_eq!(legacy.placement, RuntimeObservationPlacement::Defer);
+        assert_eq!(
+            legacy.content,
+            wrap_user_observation_for_llm(LEGACY_OBSERVATION_TYPE, &content)
+        );
+        assert_eq!(message.message, content);
+    }
+
+    #[test]
     fn sub_agent_interrupted_metadata_preserves_position_and_stays_hidden_in_ui() {
         let metadata = runtime_observation_metadata(
             RuntimeObservationType::SubAgentInterrupted,

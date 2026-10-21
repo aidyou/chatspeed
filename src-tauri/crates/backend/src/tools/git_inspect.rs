@@ -92,10 +92,9 @@ fn local_branches(workspace_root: &PathBuf) -> Result<Vec<String>, ToolError> {
     ];
     let (code, stdout, stderr) = run_git_command(workspace_root, &args)?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "git branch listing failed: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("git branch listing failed: {}", stderr.trim()).into(),
+        ));
     }
     Ok(stdout
         .lines()
@@ -123,10 +122,9 @@ fn status_for_root(
     args.extend(pathspecs);
     let (code, stdout, stderr) = run_git_command(workspace_root, &args)?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "git status failed: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("git status failed: {}", stderr.trim()).into(),
+        ));
     }
 
     let mut records = stdout.split('\0');
@@ -184,12 +182,12 @@ fn parse_name_status_z(output: &str) -> Result<Vec<(String, String)>, ToolError>
             continue;
         }
         let first_path = records.next().ok_or_else(|| {
-            ToolError::ExecutionFailed("git show returned incomplete name-status data".to_string())
+            ToolError::ExecutionFailed("git show returned incomplete name-status data".into())
         })?;
         let path = if status.contains('R') || status.contains('C') {
             records.next().ok_or_else(|| {
                 ToolError::ExecutionFailed(
-                    "git show returned incomplete rename or copy data".to_string(),
+                    "git show returned incomplete rename or copy data".into(),
                 )
             })?
         } else {
@@ -220,10 +218,9 @@ fn log_for_root(
     args.extend(pathspecs);
     let (code, stdout, stderr) = run_git_command(workspace_root, &args)?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "git log failed: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("git log failed: {}", stderr.trim()).into(),
+        ));
     }
     let commits = stdout
         .split('\x1e')
@@ -256,13 +253,13 @@ fn blame_for_root(
 ) -> Result<Value, ToolError> {
     if pathspecs.len() != 1 || pathspecs[0] == "." {
         return Err(ToolError::ExecutionFailed(
-            "blame requires exactly one authorized file path".to_string(),
+            "blame requires exactly one authorized file path".into(),
         ));
     }
     let path = workspace_root.join(&pathspecs[0]);
     if !path.is_file() {
         return Err(ToolError::ExecutionFailed(
-            "blame requires a file path, not a directory".to_string(),
+            "blame requires a file path, not a directory".into(),
         ));
     }
     let args = vec![
@@ -274,10 +271,9 @@ fn blame_for_root(
     ];
     let (code, stdout, stderr) = run_git_command(workspace_root, &args)?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "git blame failed: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("git blame failed: {}", stderr.trim()).into(),
+        ));
     }
 
     let mut lines = Vec::new();
@@ -305,7 +301,7 @@ fn blame_for_root(
     }
     if source.is_some() {
         return Err(ToolError::ExecutionFailed(
-            "git blame returned incomplete line data".to_string(),
+            "git blame returned incomplete line data".into(),
         ));
     }
 
@@ -333,10 +329,9 @@ fn merge_base_for_root(
     ];
     let (code, stdout, stderr) = run_git_command(workspace_root, &args)?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "git merge-base failed: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("git merge-base failed: {}", stderr.trim()).into(),
+        ));
     }
     let merge_base = stdout.trim();
     if merge_base.len() != 40
@@ -345,7 +340,7 @@ fn merge_base_for_root(
             .all(|character| character.is_ascii_hexdigit())
     {
         return Err(ToolError::ExecutionFailed(
-            "git merge-base did not return a commit".to_string(),
+            "git merge-base did not return a commit".into(),
         ));
     }
     Ok(json!({
@@ -375,15 +370,14 @@ fn show_for_root(
     ];
     let (code, metadata, stderr) = run_git_command(workspace_root, &metadata_args)?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "git show failed: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("git show failed: {}", stderr.trim()).into(),
+        ));
     }
     let fields = metadata.trim().split('\x1f').collect::<Vec<_>>();
     if fields.len() != 5 {
         return Err(ToolError::ExecutionFailed(
-            "git show returned malformed commit metadata".to_string(),
+            "git show returned malformed commit metadata".into(),
         ));
     }
 
@@ -400,10 +394,9 @@ fn show_for_root(
     name_status_args.extend(pathspecs.clone());
     let (code, name_status, stderr) = run_git_command(workspace_root, &name_status_args)?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "git show name-status failed: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("git show name-status failed: {}", stderr.trim()).into(),
+        ));
     }
     let selected_files = parse_name_status_z(&name_status)?
         .into_iter()
@@ -429,10 +422,9 @@ fn show_for_root(
         patch_args.extend(selected_files.into_iter().map(|(_, path)| path));
         let (code, patch, stderr) = run_git_command(workspace_root, &patch_args)?;
         if code != 0 {
-            return Err(ToolError::ExecutionFailed(format!(
-                "git show patch failed: {}",
-                stderr.trim()
-            )));
+            return Err(ToolError::ExecutionFailed(
+                format!("git show patch failed: {}", stderr.trim()).into(),
+            ));
         }
         truncate_lines(&patch, max_lines)
     };
@@ -502,19 +494,19 @@ impl ToolDefinition for GitInspect {
             "status" | "log" | "show" | "blame" | "merge_base"
         ) {
             return Err(ToolError::ExecutionFailed(
-                "operation must be one of: status, log, show, blame, merge_base".to_string(),
+                "operation must be one of: status, log, show, blame, merge_base".into(),
             ));
         }
         let revision = params["revision"].as_str().unwrap_or("HEAD").trim();
         if operation == "show" && revision.is_empty() {
             return Err(ToolError::ExecutionFailed(
-                "revision is required for show".to_string(),
+                "revision is required for show".into(),
             ));
         }
         let other_revision = params["other_revision"].as_str().unwrap_or_default().trim();
         if operation == "merge_base" && other_revision.is_empty() {
             return Err(ToolError::ExecutionFailed(
-                "other_revision is required for merge_base".to_string(),
+                "other_revision is required for merge_base".into(),
             ));
         }
         let line_start = params["line_start"].as_u64().unwrap_or(0) as usize;
@@ -523,8 +515,7 @@ impl ToolDefinition for GitInspect {
             && (line_start == 0 || line_end < line_start || line_end - line_start >= 200)
         {
             return Err(ToolError::ExecutionFailed(
-                "blame requires a valid line_start..line_end range of at most 200 lines"
-                    .to_string(),
+                "blame requires a valid line_start..line_end range of at most 200 lines".into(),
             ));
         }
 
@@ -537,7 +528,7 @@ impl ToolDefinition for GitInspect {
                 || path_groups.values().any(|paths| paths.len() != 1))
         {
             return Err(ToolError::ExecutionFailed(
-                "blame requires exactly one authorized file path in one workspace root".to_string(),
+                "blame requires exactly one authorized file path in one workspace root".into(),
             ));
         }
         let max_count = clamp_param(&params, "max_count", DEFAULT_MAX_COUNT, MAX_COUNT_LIMIT);

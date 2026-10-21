@@ -392,6 +392,7 @@ mod tests {
                 error: ErrorDetail {
                     code: "chat_error".to_string(),
                     message: "boom".to_string(),
+                    presentation: None,
                 },
             },
         );

@@ -514,6 +514,20 @@ pub struct PendingTool {
     pub display_type: Option<String>,
 }
 
+/// Reads the canonical UI-only failure projection from a terminal sub-agent result.
+///
+/// The result payload keeps the legacy model-facing `error` string untouched, so this
+/// typed read is the only place the completion queue learns the safe user projection.
+#[cfg(not(feature = "desktop"))]
+pub(crate) fn sub_agent_completion_user_error(
+    result: &serde_json::Value,
+) -> Option<chatspeed_contracts::UserErrorPresentation> {
+    result
+        .get("error_metadata")
+        .and_then(|metadata| metadata.get("user_error"))
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+}
+
 #[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SubAgentCompletion {
@@ -531,10 +545,18 @@ pub struct SubAgentCompletion {
     pub completed_at_ms: i64,
     #[serde(default)]
     pub consumed: bool,
+    /// UI-only failure projection. It deliberately stays out of `to_signal_result`
+    /// because that payload also feeds the model-facing observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_error: Option<chatspeed_contracts::UserErrorPresentation>,
 }
 
 #[cfg(not(feature = "desktop"))]
 impl SubAgentCompletion {
+    pub fn ui_user_error(&self) -> Option<&chatspeed_contracts::UserErrorPresentation> {
+        self.user_error.as_ref()
+    }
+
     pub fn to_signal_result(&self) -> serde_json::Value {
         let mut result = serde_json::json!({
             "status": self.status,
@@ -919,6 +941,82 @@ mod tests {
         assert_eq!(context.pending_final_review, None);
         assert!(context.pending_completion_reports.is_empty());
         assert!(context.removed_queued_user_message_ids.is_empty());
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    #[test]
+    fn sub_agent_completion_user_error_is_ui_only_and_legacy_serde_compatible() {
+        let completion = SubAgentCompletion {
+            sub_agent_id: "child-1".to_string(),
+            parent_session_id: "parent-1".to_string(),
+            status: "failed".to_string(),
+            result: None,
+            summary: Some("Sub-agent failed".to_string()),
+            error: Some("legacy failure".to_string()),
+            tool_calls_count: 2,
+            usage_summary: None,
+            completed_at_ms: 7,
+            consumed: false,
+            user_error: Some(chatspeed_contracts::UserErrorPresentation {
+                schema_version: 1,
+                message: "overloaded".to_string(),
+                reason: None,
+                upstream_status: Some(503),
+            }),
+        };
+
+        let serialized = serde_json::to_value(&completion).unwrap();
+        assert_eq!(serialized["user_error"]["message"], "overloaded");
+        assert_eq!(serialized["user_error"]["upstream_status"], 503);
+
+        let signal = completion.to_signal_result();
+        assert!(signal.get("user_error").is_none());
+        assert_eq!(signal["error"], "legacy failure");
+        assert_eq!(completion.ui_user_error().unwrap().message, "overloaded");
+
+        let without_user_error = SubAgentCompletion {
+            user_error: None,
+            ..completion
+        };
+        let serialized = serde_json::to_value(&without_user_error).unwrap();
+        assert!(serialized.get("user_error").is_none());
+
+        let legacy = serde_json::json!({
+            "sub_agent_id": "child-1",
+            "parent_session_id": "parent-1",
+            "status": "completed",
+            "result": "done",
+            "summary": "done",
+            "error": null,
+            "tool_calls_count": 1,
+            "completed_at_ms": 7,
+            "consumed": false
+        });
+        let restored: SubAgentCompletion = serde_json::from_value(legacy).unwrap();
+        assert!(restored.user_error.is_none());
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    #[test]
+    fn sub_agent_completion_user_error_reads_only_valid_typed_error_metadata() {
+        let valid = serde_json::json!({
+            "error_metadata": {
+                "user_error": {
+                    "schema_version": 1,
+                    "message": "overloaded",
+                    "upstream_status": 503
+                }
+            }
+        });
+        let projected = sub_agent_completion_user_error(&valid).unwrap();
+        assert_eq!(projected.message, "overloaded");
+        assert_eq!(projected.upstream_status, Some(503));
+
+        assert!(sub_agent_completion_user_error(&serde_json::json!({})).is_none());
+        assert!(sub_agent_completion_user_error(&serde_json::json!({
+            "error_metadata": { "user_error": { "message": 42 } }
+        }))
+        .is_none());
     }
 
     #[cfg(not(feature = "desktop"))]

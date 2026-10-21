@@ -25,6 +25,8 @@ use std::sync::Arc;
 #[cfg(not(feature = "desktop"))]
 use crate::ai::traits::chat::MCPToolDeclaration;
 #[cfg(not(feature = "desktop"))]
+use crate::error_diagnostics::{ErrorProjection, FailureMessage};
+#[cfg(not(feature = "desktop"))]
 use crate::mcp::McpError; // Ensure this is the correct path
 
 #[cfg(not(feature = "desktop"))]
@@ -308,12 +310,15 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
                 let err_msg = e.to_string();
                 self.set_status(McpStatus::Error(format!("Failed to stop: {}", err_msg)))
                     .await;
-                McpStopOutcome::Unproven(McpError::ClientStopError(err_msg))
+                McpStopOutcome::Unproven(McpError::ClientStopError(
+                    crate::error_diagnostics::FailureMessage::leaf(err_msg)
+                        .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                ))
             }
             Err(_) => {
                 let err_msg = format!("MCP stop exceeded its {:?} budget", budget);
                 self.set_status(McpStatus::Error(err_msg.clone())).await;
-                McpStopOutcome::Unproven(McpError::ClientStopError(err_msg))
+                McpStopOutcome::Unproven(McpError::ClientStopError(err_msg.into()))
             }
         }
     }
@@ -344,7 +349,7 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
 
         match result {
             Ok(result) => {
-                let tools = result.map_err(|e| McpError::ClientCallError(e.to_string()))?;
+                let tools = result.map_err(|e| McpError::from_service_error(&e))?;
                 self.set_status(McpStatus::Running).await;
                 Ok(get_tools(&tools))
             }
@@ -369,27 +374,15 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
         match result {
             Ok(val) => Ok(val),
             Err(e) => {
-                let error_string = e.to_string();
-                let connection_error = error_string.to_ascii_lowercase();
-                // Rebuild transports that have lost their process, channel, or HTTP session.
-                if connection_error.contains(" 404")
-                    || connection_error.contains(" 410")
-                    || connection_error.contains("channel closed")
-                    || connection_error.contains("broken pipe")
-                    || connection_error.contains("connection refused")
-                    || connection_error.contains("connection reset")
-                    || connection_error.contains("transport error")
-                    || connection_error.contains("eof")
-                {
-                    log::warn!(
-                        "MCP call to '{}' failed with connection error: {}. Attempting to reconnect and retry.",
-                        self.name().await,
-                        error_string
-                    );
+                // Only a typed origin may rebuild the transport; the display
+                // text is never used as a retry signal.
+                if e.should_reconnect() {
+                    let server_name = self.name().await;
+                    log_retry_diagnostic(&e, &server_name, "retry_call");
 
                     // Stop the client, ignoring errors as it's likely already dead.
                     if let Err(stop_err) = self.stop().await {
-                        log::warn!("Error during stop before reconnect: {}", stop_err);
+                        log_retry_diagnostic(&stop_err, &server_name, "stop_before_retry");
                     }
 
                     // Start a new connection. If this fails, propagate the error.
@@ -397,7 +390,7 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
 
                     log::info!(
                         "Successfully reconnected to MCP server '{}'. Retrying call.",
-                        self.name().await
+                        server_name
                     );
 
                     // Retry the call once.
@@ -432,19 +425,25 @@ pub(crate) trait McpClient: Send + Sync + McpClientInternal {
                 request
             })
             .await
-            .map_err(|e| McpError::ClientCallError(e.to_string()))?
+            .map_err(|e| McpError::from_service_error(&e))?
         };
 
         // Check the `is_error` field from rmcp::model::CallToolResult
         // If `is_error` is Some(true), it indicates a tool execution error.
         if call_tool_result.is_error.unwrap_or(false) {
-            return Err(McpError::ClientCallError(encode_call_error_message(
-                &call_tool_result,
-            )));
+            return Err(McpError::ClientCallError(
+                encode_call_error_message(&call_tool_result).into(),
+            ));
         }
 
         serde_json::to_value(call_tool_result).map_err(|e| {
-            McpError::ClientCallError(format!("Failed to serialize successful content: {}", e))
+            McpError::ClientCallError(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to serialize successful content: {}",
+                    e
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
         })
     }
 
@@ -476,11 +475,35 @@ fn encode_call_error_message(result: &rmcp::model::CallToolResult) -> String {
         .unwrap_or_else(|e| format!("Failed to serialize error content: {}", e))
 }
 
+#[cfg(not(feature = "desktop"))]
+fn log_retry_diagnostic(error: &McpError, server_name: &str, operation: &str) {
+    let origin =
+        error
+            .error_origin()
+            .context("mcp", operation, Some(format!("server={server_name}")));
+    let mut diagnostic = FailureMessage::leaf(error.to_string())
+        .with_origin(origin)
+        .diagnostic();
+    diagnostic.module = "mcp".into();
+    diagnostic.operation = operation.into();
+    log::warn!(target: "error_diagnostic", "{}", diagnostic.to_json_line());
+}
+
 #[cfg(all(test, not(feature = "desktop")))]
 mod tests {
-    use super::encode_call_error_message;
-    use rmcp::model::{CallToolResult, IntoContents};
-    use serde_json::json;
+    use super::{
+        encode_call_error_message, McpClient, McpClientInternal, McpClientResult, McpServerConfig,
+        McpStatus,
+    };
+    use crate::error_diagnostics::FailureMessage;
+    use crate::mcp::McpError;
+    use rmcp::model::{CallToolResult, InitializeRequestParams, IntoContents};
+    use rmcp::service::{RoleClient, RunningService, ServiceError};
+    use serde_json::{json, Value};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::RwLock;
 
     // A provider's structured error must survive `ClientCallError` so the
     // manager can read the stable code; the raw message rides along internally
@@ -508,5 +531,215 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&message).expect("json array");
         assert!(parsed.is_array(), "content fallback stays an array");
         assert!(parsed.get("code").is_none());
+    }
+
+    // Tool-reported errors are a successful transport response; old connection
+    // keywords in their text must never trigger a reconnect.
+    #[test]
+    fn tool_reported_error_never_retries() {
+        let result = CallToolResult::error(
+            "connection reset 404 EOF channel closed"
+                .to_string()
+                .into_contents(),
+        );
+        let error = McpError::ClientCallError(encode_call_error_message(&result).into());
+        assert!(!error.should_reconnect());
+    }
+
+    struct MockClient {
+        config: McpServerConfig,
+        status: Mutex<McpStatus>,
+        attempts: AtomicUsize,
+        stops: AtomicUsize,
+        starts: AtomicUsize,
+        outcomes: Mutex<VecDeque<McpClientResult<Value>>>,
+        start_error: Mutex<Option<McpError>>,
+        service: Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParams>>>>,
+    }
+
+    impl MockClient {
+        fn new(outcomes: Vec<McpClientResult<Value>>) -> Self {
+            let mut config = McpServerConfig::default();
+            config.name = "mock-server".into();
+            Self {
+                config,
+                status: Mutex::new(McpStatus::Stopped),
+                attempts: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+                starts: AtomicUsize::new(0),
+                outcomes: Mutex::new(outcomes.into()),
+                start_error: Mutex::new(None),
+                service: Arc::new(RwLock::new(None)),
+            }
+        }
+
+        fn with_start_error(self, error: McpError) -> Self {
+            *self.start_error.lock().unwrap() = Some(error);
+            self
+        }
+
+        fn attempts(&self) -> usize {
+            self.attempts.load(Ordering::SeqCst)
+        }
+
+        fn stops(&self) -> usize {
+            self.stops.load(Ordering::SeqCst)
+        }
+
+        fn starts(&self) -> usize {
+            self.starts.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl McpClientInternal for MockClient {
+        async fn set_status(&self, status: McpStatus) {
+            *self.status.lock().unwrap() = status;
+        }
+
+        async fn notify_status_change(&self, _name: String, _status: McpStatus) {}
+    }
+
+    #[async_trait::async_trait]
+    impl McpClient for MockClient {
+        async fn name(&self) -> String {
+            self.config.name.clone()
+        }
+
+        async fn config(&self) -> McpServerConfig {
+            self.config.clone()
+        }
+
+        async fn update_disabled_tools(
+            &self,
+            _tool_name: &str,
+            _is_disabled: bool,
+        ) -> McpClientResult<()> {
+            Ok(())
+        }
+
+        fn client(
+            &self,
+        ) -> Arc<RwLock<Option<RunningService<RoleClient, InitializeRequestParams>>>> {
+            self.service.clone()
+        }
+
+        async fn status(&self) -> McpStatus {
+            self.status.lock().unwrap().clone()
+        }
+
+        async fn on_status_change(&self, _callback: super::StatusChangeCallback) {}
+
+        async fn perform_connect(
+            &self,
+        ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParams>> {
+            Err(McpError::General(FailureMessage::leaf(
+                "mock does not connect",
+            )))
+        }
+
+        async fn start(&self) -> McpClientResult<()> {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            if let Some(error) = self.start_error.lock().unwrap().clone() {
+                return Err(error);
+            }
+            self.set_status(McpStatus::Connected).await;
+            Ok(())
+        }
+
+        async fn stop(&self) -> McpClientResult<()> {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+            self.set_status(McpStatus::Stopped).await;
+            Ok(())
+        }
+
+        async fn try_call(&self, _tool_name: &str, _args: Value) -> McpClientResult<Value> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            self.outcomes
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Err(McpError::ClientCallError(FailureMessage::leaf(
+                        "mock has no outcome",
+                    )))
+                })
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_reconnect_once_retries_exactly_once_after_stop_start() {
+        let client = MockClient::new(vec![
+            Err(McpError::from_service_error(&ServiceError::TransportClosed)),
+            Ok(json!({"ok": true})),
+        ]);
+
+        let value = client
+            .call("tool", json!({}))
+            .await
+            .expect("retry succeeds");
+
+        assert_eq!(value, json!({"ok": true}));
+        assert_eq!(client.attempts(), 2);
+        assert_eq!(client.stops(), 1);
+        assert_eq!(client.starts(), 1);
+    }
+
+    #[tokio::test]
+    async fn typed_retry_failure_does_not_recurse() {
+        let client = MockClient::new(vec![
+            Err(McpError::from_service_error(&ServiceError::TransportClosed)),
+            Err(McpError::from_service_error(&ServiceError::TransportClosed)),
+        ]);
+
+        assert!(client.call("tool", json!({})).await.is_err());
+        assert_eq!(client.attempts(), 2);
+        assert_eq!(client.stops(), 1);
+        assert_eq!(client.starts(), 1);
+    }
+
+    #[tokio::test]
+    async fn start_failure_does_not_attempt_a_second_call() {
+        let client = MockClient::new(vec![Err(McpError::from_service_error(
+            &ServiceError::TransportClosed,
+        ))])
+        .with_start_error(McpError::ClientStartError(FailureMessage::leaf(
+            "start failed",
+        )));
+
+        let error = client
+            .call("tool", json!({}))
+            .await
+            .expect_err("start fails");
+        assert!(matches!(error, McpError::ClientStartError(_)));
+        assert_eq!(client.attempts(), 1);
+        assert_eq!(client.stops(), 1);
+        assert_eq!(client.starts(), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_text_error_never_retries() {
+        let client = MockClient::new(vec![Err(McpError::ClientCallError(FailureMessage::leaf(
+            "channel closed connection reset 404 EOF",
+        )))]);
+
+        assert!(client.call("tool", json!({})).await.is_err());
+        assert_eq!(client.attempts(), 1);
+        assert_eq!(client.stops(), 0);
+        assert_eq!(client.starts(), 0);
+    }
+
+    #[tokio::test]
+    async fn typed_cancelled_error_never_retries_even_with_old_keywords() {
+        let client = MockClient::new(vec![Err(McpError::from_service_error(
+            &ServiceError::Cancelled {
+                reason: Some("connection reset 404 EOF".into()),
+            },
+        ))]);
+
+        assert!(client.call("tool", json!({})).await.is_err());
+        assert_eq!(client.attempts(), 1);
+        assert_eq!(client.stops(), 0);
+        assert_eq!(client.starts(), 0);
     }
 }

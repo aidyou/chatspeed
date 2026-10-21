@@ -476,14 +476,24 @@ fn parse_body<T: DeserializeOwned>(body: &str, what: &str) -> Result<T, Response
 }
 
 /// Maps a terminal failure onto a stable control-plane error envelope.
+///
+/// The legacy `code`/`message` pair and every status stay unchanged; the
+/// optional `presentation` carries the safe, localized user explanation so a
+/// unit variant is never rendered as a bare `terminal_*` token.
 fn terminal_error_response(error: &TerminalError) -> Response {
+    use crate::error_diagnostics::ErrorProjection;
+    use chatspeed_contracts::ErrorEnvelope;
+
+    let envelope = |code: &str, message: String| {
+        ErrorEnvelope::new(code, message).with_presentation(error.user_error())
+    };
     // A closed gate refuses new terminal work with the canonical stopping code.
     if let TerminalError::Stopping(_code, message) = error {
-        return dto::error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
+        let body = envelope(
             chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
             message.clone(),
         );
+        return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
     }
     let (status, code) = match error {
         TerminalError::SessionNotFound => (StatusCode::NOT_FOUND, "not_found"),
@@ -503,12 +513,13 @@ fn terminal_error_response(error: &TerminalError) -> Response {
             chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING,
         ),
     };
-    dto::error_response(status, code, error.to_string())
+    (status, axum::Json(envelope(code, error.to_string()))).into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_diagnostics::FailureMessage;
     use crate::terminal::TerminalStreamBroker;
     use chatspeed_contracts::{TerminalExitEvent, TerminalOutputEvent};
 
@@ -566,9 +577,86 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            terminal_error_response(&TerminalError::SpawnFailed("boom".to_string())).status(),
+            terminal_error_response(&TerminalError::SpawnFailed(FailureMessage::leaf(
+                "boom".to_string()
+            )))
+            .status(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
+    }
+
+    #[tokio::test]
+    async fn unit_terminal_errors_keep_the_legacy_pair_and_add_a_human_projection() {
+        let generic = rust_i18n::t!("chat.error_feedback").to_string();
+        let cases = [
+            (
+                TerminalError::SessionNotFound,
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "terminal.session_not_found",
+            ),
+            (
+                TerminalError::SessionExited,
+                StatusCode::CONFLICT,
+                "conflict",
+                "terminal.session_exited",
+            ),
+            (
+                TerminalError::ShellUnavailable,
+                StatusCode::BAD_REQUEST,
+                "invalid_input",
+                "terminal.shell_unavailable",
+            ),
+            (
+                TerminalError::InvalidSize,
+                StatusCode::BAD_REQUEST,
+                "invalid_input",
+                "terminal.invalid_size",
+            ),
+            (
+                TerminalError::Forbidden("not the owner; Authorization: Bearer CANARY".to_string()),
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "terminal.forbidden",
+            ),
+        ];
+        for (error, status, code, key) in cases {
+            let response = terminal_error_response(&error);
+            assert_eq!(response.status(), status);
+            let bytes = axum::body::to_bytes(response.into_body(), 8192)
+                .await
+                .unwrap();
+            let envelope: chatspeed_contracts::ErrorEnvelope =
+                serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(envelope.error.code, code);
+            assert_eq!(envelope.error.message, error.to_string());
+            let presentation = envelope.error.presentation.expect("presentation");
+            assert_eq!(presentation.message, rust_i18n::t!(key).to_string());
+            assert_ne!(presentation.message, generic);
+            assert!(!presentation.message.contains("terminal_"));
+            assert!(!presentation.message.contains("CANARY"));
+            assert_eq!(presentation.reason, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_terminal_cause_is_redacted_and_not_replaced_by_a_token() {
+        let response = terminal_error_response(&TerminalError::SpawnFailed(FailureMessage::leaf(
+            "Authorization: Bearer CANARY",
+        )));
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let envelope: chatspeed_contracts::ErrorEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(envelope.error.code, "terminal_failure");
+        assert_eq!(
+            envelope.error.message,
+            "terminal_spawn_failed: Authorization: Bearer CANARY"
+        );
+        let presentation = envelope.error.presentation.expect("presentation");
+        assert!(!presentation.message.contains("CANARY"));
+        assert!(!presentation.message.contains("terminal_spawn_failed"));
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chatspeed_contracts::UserErrorPresentation;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -14,6 +15,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::ai::traits::chat::WorkflowUsageAttribution;
 use crate::ccproxy::ChatProtocol;
 use crate::db::{Agent, MainStore, ModelConfig, WorkflowMessage};
+use crate::error_diagnostics::{ErrorOrigin, ErrorProjection};
 use crate::tools::{
     helper::generate_shell_approval_patterns as shared_generate_shell_approval_patterns,
     ToolCategory, ToolManager, ToolScope, MCP_TOOL_NAME_SPLIT, TOOL_ASK_USER,
@@ -26,7 +28,7 @@ use crate::workflow::react::{
     compression::{CompressionMode, ContextCompressor},
     context::ContextManager,
     dispatcher::{Dispatcher, DispatcherConfig},
-    error::WorkflowEngineError,
+    error::{CompressionFailure, WorkflowEngineError},
     events::WorkflowEvent,
     file_preview::{
         attach_display_context, attach_normalized_display_path,
@@ -52,9 +54,9 @@ use crate::workflow::react::{
     sinks::{Sink, TauriSink},
     skills::{SkillManifest, SkillScanner},
     types::{
-        EffectiveTaskObjective, ExecutionContext, GatewayPayload, PendingCompletionReport,
-        PendingTool, QueuedUserMessage, RuntimeState, StepType, SubAgentCompletion, WaitReason,
-        WorkflowSignal, WorkflowState,
+        sub_agent_completion_user_error, EffectiveTaskObjective, ExecutionContext, GatewayPayload,
+        PendingCompletionReport, PendingTool, QueuedUserMessage, RuntimeState, StepType,
+        SubAgentCompletion, WaitReason, WorkflowSignal, WorkflowState,
     },
 };
 
@@ -334,6 +336,10 @@ impl WorkflowExecutor {
     ) {
         if let Some(llm_content) = reinforced.llm_content.as_ref() {
             metadata["llm_content"] = serde_json::json!(llm_content);
+        }
+
+        if let Some(user_error) = reinforced.user_error.as_ref() {
+            metadata["user_error"] = serde_json::json!(user_error);
         }
 
         if tool_name == TOOL_SUBMIT_RESULT {
@@ -899,10 +905,13 @@ impl WorkflowExecutor {
         match server.status().await {
             crate::mcp::client::McpStatus::Connected | crate::mcp::client::McpStatus::Running => {}
             status => {
-                return Err(crate::tools::ToolError::ExecutionFailed(format!(
-                    "MCP server '{}' is not available (status: {})",
-                    server_name, status
-                )));
+                return Err(crate::tools::ToolError::ExecutionFailed(
+                    format!(
+                        "MCP server '{}' is not available (status: {})",
+                        server_name, status
+                    )
+                    .into(),
+                ));
             }
         }
 
@@ -1311,8 +1320,15 @@ impl WorkflowExecutor {
         // proxy-routing mode ("group@alias") that the chat layer resolves downstream, so only a
         // missing model name proves the compressor has no model role.
         if self.compressor.model.trim().is_empty() {
+            let message = "Goal tracking requires a resolved compression model";
             return Err(WorkflowEngineError::CompressionFailed(
-                "Goal tracking requires a resolved compression model".to_string(),
+                CompressionFailure::leaf(message).with_origin(
+                    ErrorOrigin::leaf(message, None, None, None).context(
+                        "workflow",
+                        "goal_tracking",
+                        None,
+                    ),
+                ),
             ));
         }
         let tracker = GoalTracker::new(
@@ -1743,6 +1759,7 @@ impl WorkflowExecutor {
         sub_agent_id: &str,
         status: &str,
         result: &serde_json::Value,
+        user_error: Option<&UserErrorPresentation>,
     ) -> Result<Option<GatewayPayload>, WorkflowEngineError> {
         let Some(message) = self.context.messages.iter_mut().rev().find(|message| {
             let Some(metadata) = message.metadata.as_ref() else {
@@ -1770,6 +1787,9 @@ impl WorkflowExecutor {
         metadata["review_result"] = result.clone();
         if let Some(usage_summary) = result.get("usage_summary") {
             metadata["review_usage_summary"] = usage_summary.clone();
+        }
+        if let Some(user_error) = user_error {
+            metadata["user_error"] = serde_json::json!(user_error);
         }
 
         let message_id = message.id.ok_or_else(|| {
@@ -5896,7 +5916,10 @@ impl WorkflowExecutor {
                 tool_name: tool_name.to_string(),
                 error: error.to_string(),
                 error_type: Some(Self::tool_error_type(error).to_string()),
-                error_details: Self::tool_error_details(error),
+                error_details: Self::failure_details_with_user_error(
+                    Self::tool_error_details(error),
+                    Some(&error.user_error()),
+                ),
                 canonical_tool_name,
                 display_name,
                 tool_category,
@@ -5927,6 +5950,7 @@ impl WorkflowExecutor {
             display_type: "text".to_string(),
             approval_status: None,
             observation_kind: None,
+            user_error: Some(error.user_error()),
         }
     }
 
@@ -5937,6 +5961,24 @@ impl WorkflowExecutor {
             "error_type": Self::tool_error_type(error),
             "message": bounded,
         }))
+    }
+
+    /// Adds the UI-only typed projection without changing the legacy
+    /// `message`/`error_type` fields or the model-facing error text.
+    fn failure_details_with_user_error(
+        details: Option<serde_json::Value>,
+        user_error: Option<&UserErrorPresentation>,
+    ) -> Option<serde_json::Value> {
+        let mut details = details.unwrap_or_else(|| serde_json::json!({}));
+        if let Some(user_error) = user_error {
+            if let Ok(projection) = serde_json::to_value(user_error) {
+                details["user_error"] = projection;
+            }
+        }
+        match &details {
+            serde_json::Value::Object(values) if values.is_empty() => None,
+            _ => Some(details),
+        }
     }
 
     fn tool_error_type(error: &crate::tools::ToolError) -> &'static str {
@@ -6069,7 +6111,10 @@ impl WorkflowExecutor {
                     .clone()
                     .unwrap_or_else(|| reinforced.content.clone()),
                 error_type: reinforced.error_type.clone(),
-                error_details: None,
+                error_details: Self::failure_details_with_user_error(
+                    None,
+                    reinforced.user_error.as_ref(),
+                ),
                 canonical_tool_name,
                 display_name,
                 tool_category,
@@ -6648,7 +6693,7 @@ impl WorkflowExecutor {
                         Err(error @ WorkflowEngineError::Cancelled(_)) => {
                             let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
                                 "Tool execution interrupted because the workflow was cancelled"
-                                    .to_string(),
+                                    .into(),
                             ));
                             for (tool_call_id, tool_name) in &started_tools {
                                 self.append_tool_terminal_event(
@@ -6743,7 +6788,7 @@ impl WorkflowExecutor {
                 Ok(result) => result,
                 Err(error @ WorkflowEngineError::Cancelled(_)) => {
                     let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
-                        "Tool execution interrupted because the workflow was cancelled".to_string(),
+                        "Tool execution interrupted because the workflow was cancelled".into(),
                     ));
                     self.append_tool_terminal_event(&id, &name, &cancelled_result)
                         .await;
@@ -6841,6 +6886,7 @@ impl WorkflowExecutor {
             display_type: "text".to_string(),
             approval_status: None,
             observation_kind: Some(ObservationKind::TurnBlockedPostponed),
+            user_error: None,
         }
     }
 
@@ -6884,6 +6930,7 @@ impl WorkflowExecutor {
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+                user_error: None,
             });
         }
 
@@ -6906,6 +6953,7 @@ impl WorkflowExecutor {
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+                user_error: None,
             });
         }
 
@@ -6963,6 +7011,7 @@ impl WorkflowExecutor {
                         error_type: Some("ToolUnavailable".to_string()),
                         approval_status: None,
                         observation_kind: None,
+            user_error: None,
                     }));
                 }
                 if !self.policy.is_strict_manual_planning() {
@@ -6976,6 +7025,7 @@ impl WorkflowExecutor {
                         error_type: Some("ToolUnavailable".to_string()),
                         approval_status: None,
                         observation_kind: None,
+            user_error: None,
                     }));
                 }
                 return self.handle_submit_plan_intercept(id, args, text_part).await;
@@ -6992,6 +7042,7 @@ impl WorkflowExecutor {
                         display_type: "text".to_string(),
                         approval_status: None,
                         observation_kind: None,
+            user_error: None,
                     }));
                 }
                 let completion_result = self
@@ -7034,6 +7085,7 @@ impl WorkflowExecutor {
                             display_type: "text".to_string(),
                             approval_status: None,
                             observation_kind: None,
+            user_error: None,
                         }));
                     }
                 }
@@ -7078,6 +7130,7 @@ impl WorkflowExecutor {
                         display_type: "text".to_string(),
                         approval_status: None,
                         observation_kind: None,
+            user_error: None,
                     }));
                 }
             }
@@ -7100,6 +7153,7 @@ impl WorkflowExecutor {
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+                user_error: None,
             }));
         }
 
@@ -7118,6 +7172,7 @@ impl WorkflowExecutor {
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+            user_error: None,
             }));
         }
 
@@ -7244,6 +7299,9 @@ impl WorkflowExecutor {
         sub_agent_id: String,
         result: serde_json::Value,
     ) -> Result<bool, WorkflowEngineError> {
+        // Capture the UI-only projection before any branch marks the durable completion consumed.
+        // The model-facing signal payload intentionally never carries this field.
+        let user_error = self.pending_completion_user_error_for_ui(&sub_agent_id, &result);
         let is_pending_final_review = self
             .pending_final_review
             .as_ref()
@@ -7259,6 +7317,7 @@ impl WorkflowExecutor {
                     &sub_agent_id,
                     &resolution.status,
                     &result,
+                    user_error.as_ref(),
                 )
                 .await?;
             if let Some(payload) = final_review_card_payload {
@@ -7269,8 +7328,13 @@ impl WorkflowExecutor {
                     completion.consumed = true;
                 }
             }
-            self.append_sub_agent_completion_observation(&sub_agent_id, &result, &resolution)
-                .await?;
+            self.append_sub_agent_completion_observation(
+                &sub_agent_id,
+                &result,
+                &resolution,
+                user_error.as_ref(),
+            )
+            .await?;
 
             if self
                 .handle_final_review_completion(&sub_agent_id, &result)
@@ -7290,8 +7354,13 @@ impl WorkflowExecutor {
                 }
             }
 
-            self.append_sub_agent_completion_observation(&sub_agent_id, &result, &resolution)
-                .await?;
+            self.append_sub_agent_completion_observation(
+                &sub_agent_id,
+                &result,
+                &resolution,
+                user_error.as_ref(),
+            )
+            .await?;
 
             self.update_state(WorkflowState::Thinking).await?;
             self.save_snapshot().await?;
@@ -7299,6 +7368,23 @@ impl WorkflowExecutor {
         } else {
             Ok(false)
         }
+    }
+
+    fn pending_completion_user_error_for_ui(
+        &self,
+        sub_agent_id: &str,
+        result: &serde_json::Value,
+    ) -> Option<UserErrorPresentation> {
+        if let Some(user_error) = self
+            .pending_sub_agent_completions
+            .iter()
+            .find(|completion| completion.sub_agent_id == sub_agent_id)
+            .and_then(SubAgentCompletion::ui_user_error)
+        {
+            return Some(user_error.clone());
+        }
+
+        sub_agent_completion_user_error(result)
     }
 
     fn resolve_sub_agent_completion_for_observation(
@@ -7370,6 +7456,7 @@ impl WorkflowExecutor {
         sub_agent_id: &str,
         result: &serde_json::Value,
         resolution: &SubAgentResolution,
+        user_error: Option<&UserErrorPresentation>,
     ) -> Result<(), WorkflowEngineError> {
         let already_projected = Self::has_projected_sub_agent_completion(
             &self.context.messages,
@@ -7448,6 +7535,9 @@ impl WorkflowExecutor {
                 metadata["error_type"] =
                     json!(if resolution.is_error { "SubAgentFailed" } else { "" });
                 metadata["ui_visibility"] = json!("hide");
+                if let Some(user_error) = user_error {
+                    metadata["user_error"] = json!(user_error);
+                }
                 metadata
             }),
         )
@@ -9561,6 +9651,140 @@ mod recovery_tests {
         ));
     }
 
+    #[tokio::test]
+    async fn durable_sub_agent_failure_projects_ui_user_error_without_model_metadata() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "durable-sub-agent-user-error";
+        let child_id = "child-failed";
+        let agent = test_agent("durable-sub-agent-user-error-agent");
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::SubAgent);
+        context.waiting_on_sub_agent_id = Some(child_id.to_string());
+        context.sub_agent_sessions.push(child_id.to_string());
+        store
+            .upsert_execution_context(&context)
+            .expect("failed to seed parent context");
+
+        let completion = SubAgentCompletion {
+            sub_agent_id: child_id.to_string(),
+            parent_session_id: session_id.to_string(),
+            status: "failed".to_string(),
+            result: None,
+            summary: None,
+            error: Some("legacy failure".to_string()),
+            tool_calls_count: 1,
+            usage_summary: None,
+            completed_at_ms: 1,
+            consumed: false,
+            user_error: Some(UserErrorPresentation {
+                schema_version: 1,
+                message: "overloaded".to_string(),
+                reason: None,
+                upstream_status: Some(503),
+            }),
+        };
+        assert!(store
+            .persist_sub_agent_completion(Some(1), &completion)
+            .expect("persist completion"));
+
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: Arc::new(std::sync::Mutex::new(Vec::new())),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![workspace_root()],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(21).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        executor.state = WorkflowState::AwaitingSubAgent;
+        executor.sub_agent_id = Some(child_id.to_string());
+        executor.sub_agent_sessions = vec![child_id.to_string()];
+
+        // Startup restores this queue from the execution context before applying its signal.
+        executor.pending_sub_agent_completions = store
+            .get_execution_context(session_id)
+            .expect("read durable completion")
+            .expect("parent context")
+            .pending_sub_agent_completions;
+        // The restart signal intentionally carries only the legacy model payload.
+        let legacy_signal = completion.to_signal_result();
+        assert!(executor
+            .apply_sub_agent_completion(child_id.to_string(), legacy_signal.clone())
+            .await
+            .expect("apply completion"));
+        assert_eq!(executor.state, WorkflowState::Thinking);
+        assert!(executor.sub_agent_id.is_none());
+        assert!(executor.sub_agent_sessions.is_empty());
+
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("read snapshot");
+        let observation = snapshot
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("observation_type"))
+                    .and_then(|value| value.as_str())
+                    == Some("sub_agent_completion")
+            })
+            .expect("completion observation");
+        assert_eq!(
+            observation.metadata.as_ref().unwrap()["user_error"]["message"],
+            "overloaded"
+        );
+        assert!(observation.message.contains("legacy failure"));
+        assert!(!observation.message.contains("overloaded"));
+        assert!(observation.metadata.as_ref().unwrap()["result"]
+            .get("user_error")
+            .is_none());
+        assert!(observation.metadata.as_ref().unwrap()["result"]
+            .get("error_metadata")
+            .is_none());
+
+        let restored = store
+            .get_execution_context(session_id)
+            .expect("read context")
+            .expect("parent context");
+        assert_eq!(restored.pending_sub_agent_completions.len(), 1);
+        assert_eq!(
+            restored.pending_sub_agent_completions[0].sub_agent_id,
+            child_id
+        );
+        assert_eq!(
+            restored.pending_sub_agent_completions[0]
+                .ui_user_error()
+                .map(|error| error.message.as_str()),
+            Some("overloaded")
+        );
+
+        assert!(!executor
+            .apply_sub_agent_completion(child_id.to_string(), legacy_signal)
+            .await
+            .expect("duplicate completion is ignored"));
+    }
+
     #[test]
     fn tool_duration_metadata_excludes_workflow_control_tools() {
         for tool_name in [
@@ -9593,6 +9817,7 @@ mod recovery_tests {
             display_type: "choice".to_string(),
             approval_status: None,
             observation_kind: None,
+            user_error: None,
         };
 
         assert_eq!(
@@ -9624,6 +9849,334 @@ mod recovery_tests {
                 &failed,
             ),
             "failed"
+        );
+    }
+
+    #[test]
+    fn tool_observation_metadata_appends_ui_user_error_without_rewriting_content() {
+        let reinforced = ReinforcedResult {
+            content: "Error: legacy failure".to_string(),
+            llm_content: None,
+            title: "Custom Tool".to_string(),
+            summary: "Error: legacy failure".to_string(),
+            is_error: true,
+            error_type: Some("Other".to_string()),
+            display_type: "text".to_string(),
+            approval_status: None,
+            observation_kind: None,
+            user_error: Some(UserErrorPresentation {
+                schema_version: 1,
+                message: "overloaded".to_string(),
+                reason: None,
+                upstream_status: Some(503),
+            }),
+        };
+        let mut metadata = json!({ "tool_name": "custom_tool" });
+
+        WorkflowExecutor::enrich_tool_observation_metadata(
+            "custom_tool",
+            &mut metadata,
+            &reinforced,
+        );
+
+        assert_eq!(reinforced.content, "Error: legacy failure");
+        assert_eq!(metadata["user_error"]["message"], "overloaded");
+        assert_eq!(metadata["user_error"]["upstream_status"], 503);
+        assert!(metadata.get("content").is_none());
+    }
+
+    fn recording_executor(
+        session_id: &str,
+        agent_id: &str,
+    ) -> (
+        tempfile::TempDir,
+        Arc<MainStore>,
+        Arc<std::sync::Mutex<Vec<GatewayPayload>>>,
+        WorkflowExecutor,
+    ) {
+        let (temp_dir, store) = create_test_store();
+        let agent = test_agent(agent_id);
+        store.add_agent(&agent).expect("failed to add test agent");
+        store
+            .create_workflow(session_id, "test", &agent.id, None, None)
+            .expect("failed to create test workflow");
+
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+            payloads: payloads.clone(),
+        });
+        let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+        let mut executor = WorkflowExecutor::new(
+            session_id.to_string(),
+            store.clone(),
+            chat_state,
+            gateway,
+            Arc::new(UnusedSubAgentFactory),
+            agent,
+            vec![workspace_root()],
+            std::env::temp_dir(),
+            None,
+            None,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(21).expect("failed to create tsid")),
+            Arc::new(ToolManager::new()),
+            false,
+            ExecutionPolicy::standard(),
+        );
+        executor.dispatcher = None;
+        (temp_dir, store, payloads, executor)
+    }
+
+    #[tokio::test]
+    async fn tool_terminal_dispatch_projects_same_user_error_for_ordinary_and_reinforced_paths() {
+        let session_id = "tool-terminal-user-error";
+        let (_temp_dir, store, payloads, mut executor) =
+            recording_executor(session_id, "tool-terminal-user-error-agent");
+        executor.state = WorkflowState::Thinking;
+
+        let error = crate::tools::ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf("Execution failed: outer wrapper")
+                .with_origin(crate::error_diagnostics::ErrorOrigin::leaf(
+                    "socket closed",
+                    None,
+                    None,
+                    Some(503),
+                )),
+        );
+        let legacy_message = error.to_string();
+        let expected_user_error =
+            serde_json::to_value(error.user_error()).expect("serialize user error");
+        let failure: Result<serde_json::Value, crate::tools::ToolError> = Err(error);
+        let error = failure
+            .as_ref()
+            .expect_err("the constructed result must be an error");
+
+        let before_state = executor.state.clone();
+        let before_content_len = executor.context.messages.len();
+        let before_events = store
+            .list_workflow_events(session_id)
+            .expect("list workflow events")
+            .len();
+
+        executor
+            .dispatch_tool_terminal_payload("ordinary", "custom_tool", &failure)
+            .await;
+        let reinforced = WorkflowExecutor::tool_error_reinforced_result("custom_tool", error);
+        let reinforced_content = reinforced.content.clone();
+        executor
+            .dispatch_reinforced_tool_terminal_payload("reinforced", "custom_tool", &reinforced)
+            .await;
+
+        let tool_call = json!({
+            "function": {
+                "name": "custom_tool",
+                "arguments": {}
+            }
+        });
+        let observation =
+            ObservationReinforcer::reinforce_with_context(&tool_call, &failure, None, None);
+        let mut ordinary_metadata = json!({});
+        WorkflowExecutor::enrich_tool_observation_metadata(
+            "custom_tool",
+            &mut ordinary_metadata,
+            &observation,
+        );
+        let mut reinforced_metadata = json!({});
+        WorkflowExecutor::enrich_tool_observation_metadata(
+            "custom_tool",
+            &mut reinforced_metadata,
+            &reinforced,
+        );
+
+        let recorded = payloads.lock().expect("payload lock");
+        assert_eq!(recorded.len(), 2);
+
+        let GatewayPayload::ToolFailed {
+            tool_call_id: ordinary_id,
+            error: ordinary_error,
+            error_type: ordinary_type,
+            error_details: ordinary_details,
+            ..
+        } = &recorded[0]
+        else {
+            panic!("expected an ordinary tool failure payload");
+        };
+        assert_eq!(ordinary_id, "ordinary");
+        assert_eq!(ordinary_error, &legacy_message);
+        assert_eq!(ordinary_type.as_deref(), Some("Other"));
+        let ordinary_details = ordinary_details.as_ref().expect("ordinary details");
+        assert_eq!(ordinary_details["error_type"].as_str(), Some("Other"));
+        assert_eq!(
+            ordinary_details["message"].as_str(),
+            Some(legacy_message.as_str())
+        );
+        assert_eq!(ordinary_details["user_error"], expected_user_error);
+        assert_eq!(
+            ordinary_details["user_error"],
+            ordinary_metadata["user_error"]
+        );
+        assert_eq!(ordinary_details["user_error"]["message"], "socket closed");
+        assert_eq!(ordinary_details["user_error"]["upstream_status"], 503);
+        assert_eq!(observation.content, format!("Error: {}", legacy_message));
+
+        let GatewayPayload::ToolFailed {
+            tool_call_id: reinforced_id,
+            error: reinforced_error,
+            error_type: reinforced_type,
+            error_details: reinforced_details,
+            ..
+        } = &recorded[1]
+        else {
+            panic!("expected a reinforced tool failure payload");
+        };
+        assert_eq!(reinforced_id, "reinforced");
+        assert_eq!(reinforced_error, &legacy_message);
+        assert_eq!(reinforced_type.as_deref(), Some("Other"));
+        let reinforced_details = reinforced_details.as_ref().expect("reinforced details");
+        assert_eq!(reinforced_details["user_error"], expected_user_error);
+        assert_eq!(
+            reinforced_details["user_error"],
+            reinforced_metadata["user_error"]
+        );
+        assert!(reinforced_details.get("message").is_none());
+        assert_eq!(reinforced.content, reinforced_content);
+        assert_eq!(reinforced.content, legacy_message);
+        assert!(reinforced.llm_content.is_none());
+
+        assert_eq!(executor.state, before_state);
+        assert_eq!(executor.context.messages.len(), before_content_len);
+        assert_eq!(
+            store
+                .list_workflow_events(session_id)
+                .expect("list workflow events")
+                .len(),
+            before_events
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_terminal_dispatch_hides_security_and_sandbox_policy_details_in_user_error() {
+        let session_id = "tool-terminal-hidden-policy";
+        let (_temp_dir, store, payloads, mut executor) =
+            recording_executor(session_id, "tool-terminal-hidden-policy-agent");
+        executor.state = WorkflowState::Thinking;
+
+        let errors = [
+            crate::tools::ToolError::Security("private path /secret token=CANARY".to_string()),
+            crate::tools::ToolError::SandboxFailure(crate::tools::SandboxFailure {
+                backend: crate::tools::ShellExecutionBackendKind::Host,
+                runtime: None,
+                profile: None,
+                image: None,
+                reason: crate::tools::SandboxFailureReason::InvalidPlan,
+                message: "private path /secret token=CANARY".to_string(),
+                execution_plan: None,
+            }),
+        ];
+
+        let before_state = executor.state.clone();
+        let before_content_len = executor.context.messages.len();
+        let before_events = store
+            .list_workflow_events(session_id)
+            .expect("list workflow events")
+            .len();
+
+        for (index, error) in errors.into_iter().enumerate() {
+            let legacy_message = error.to_string();
+            let expected_type = WorkflowExecutor::tool_error_type(&error);
+            let expected_user_error =
+                serde_json::to_value(error.user_error()).expect("serialize user error");
+            let rendered_projection =
+                serde_json::to_string(&expected_user_error).expect("render user error");
+            assert!(!rendered_projection.contains("CANARY"));
+            assert!(!rendered_projection.contains("/secret"));
+            assert!(!rendered_projection.contains("private path"));
+
+            let failure: Result<serde_json::Value, crate::tools::ToolError> = Err(error);
+            let error = failure
+                .as_ref()
+                .expect_err("the constructed result must be an error");
+            executor
+                .dispatch_tool_terminal_payload(&format!("ordinary-{index}"), "shell", &failure)
+                .await;
+            let reinforced = WorkflowExecutor::tool_error_reinforced_result("shell", error);
+            executor
+                .dispatch_reinforced_tool_terminal_payload(
+                    &format!("reinforced-{index}"),
+                    "shell",
+                    &reinforced,
+                )
+                .await;
+
+            let tool_call = json!({
+                "function": {
+                    "name": "shell",
+                    "arguments": {}
+                }
+            });
+            let observation =
+                ObservationReinforcer::reinforce_with_context(&tool_call, &failure, None, None);
+            let mut ordinary_metadata = json!({});
+            WorkflowExecutor::enrich_tool_observation_metadata(
+                "shell",
+                &mut ordinary_metadata,
+                &observation,
+            );
+            let mut reinforced_metadata = json!({});
+            WorkflowExecutor::enrich_tool_observation_metadata(
+                "shell",
+                &mut reinforced_metadata,
+                &reinforced,
+            );
+            assert_eq!(ordinary_metadata["user_error"], expected_user_error);
+            assert_eq!(reinforced_metadata["user_error"], expected_user_error);
+
+            let recorded = payloads.lock().expect("payload lock");
+            let ordinary = &recorded[index * 2];
+            let GatewayPayload::ToolFailed {
+                tool_call_id,
+                error: ordinary_error,
+                error_type,
+                error_details,
+                ..
+            } = ordinary
+            else {
+                panic!("expected an ordinary tool failure payload");
+            };
+            assert_eq!(tool_call_id, &format!("ordinary-{index}"));
+            assert_eq!(ordinary_error, &legacy_message);
+            assert_eq!(error_type.as_deref(), Some(expected_type));
+            let details = error_details.as_ref().expect("ordinary details");
+            assert_eq!(details["user_error"], expected_user_error);
+            assert_eq!(details["user_error"], ordinary_metadata["user_error"]);
+
+            let GatewayPayload::ToolFailed {
+                tool_call_id,
+                error: reinforced_error,
+                error_type,
+                error_details,
+                ..
+            } = &recorded[index * 2 + 1]
+            else {
+                panic!("expected a reinforced tool failure payload");
+            };
+            assert_eq!(tool_call_id, &format!("reinforced-{index}"));
+            assert_eq!(reinforced_error, &legacy_message);
+            assert_eq!(error_type.as_deref(), Some(expected_type));
+            let details = error_details.as_ref().expect("reinforced details");
+            assert_eq!(details["user_error"], expected_user_error);
+            assert_eq!(details["user_error"], reinforced_metadata["user_error"]);
+            assert_eq!(reinforced.content, legacy_message);
+            assert!(reinforced.user_error.is_some());
+        }
+
+        assert_eq!(executor.state, before_state);
+        assert_eq!(executor.context.messages.len(), before_content_len);
+        assert_eq!(
+            store
+                .list_workflow_events(session_id)
+                .expect("list workflow events")
+                .len(),
+            before_events
         );
     }
 

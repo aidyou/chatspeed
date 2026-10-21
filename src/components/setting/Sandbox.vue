@@ -281,6 +281,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
 import { invoke } from '@tauri-apps/api/core'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { useSandboxSchemeStore } from '@/stores/sandbox_scheme'
 
 const { t } = useI18n()
@@ -466,7 +467,7 @@ const loadRuntimeStatus = async () => {
     })
   } catch (error) {
     runtimeStatus.value = null
-    showMessage(String(error), 'error')
+    showMessage(formatUserError(error, t('common.errorFallback')), 'error')
   } finally {
     runtimeLoading.value = false
   }
@@ -606,7 +607,7 @@ const toggleSchemeEnabled = async (scheme, enabled) => {
     })
     await schemeStore.fetchSchemes()
   } catch (error) {
-    showMessage(String(error), 'error')
+    showMessage(formatUserError(error, t('common.errorFallback')), 'error')
   } finally {
     togglingSchemeId.value = ''
   }
@@ -642,7 +643,7 @@ const checkHealth = async () => {
       .map(runtime => `${runtime.toUpperCase()}: ${status[runtime]?.state || 'unknown'}`)
       .join(' · ')
   } catch (error) {
-    showMessage(String(error), 'error')
+    showMessage(formatUserError(error, t('common.errorFallback')), 'error')
   } finally {
     checking.value = false
   }
@@ -664,7 +665,7 @@ const save = async () => {
     dialogVisible.value = false
     showMessage(t('common.saveSuccess'), 'success')
   } catch (error) {
-    showMessage(String(error), 'error')
+    showMessage(formatUserError(error, t('common.errorFallback')), 'error')
   } finally {
     saving.value = false
   }
@@ -679,7 +680,9 @@ const remove = async scheme => {
     await schemeStore.fetchSchemes()
     showMessage(t('common.deleteSuccess'), 'success')
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close') showMessage(String(error), 'error')
+    if (error !== 'cancel' && error !== 'close') {
+      showMessage(formatUserError(error, t('common.errorFallback')), 'error')
+    }
   }
 }
 

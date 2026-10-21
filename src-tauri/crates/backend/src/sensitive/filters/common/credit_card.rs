@@ -14,7 +14,7 @@ impl CreditCardFilter {
         let regex = Regex::new(r#"\b(?:4\d{3}|5[1-5]\d{2})[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"#)
             .map_err(|e| SensitiveError::RegexCompilationFailed {
                 pattern: "credit_card_regex".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             })?;
         Ok(Self { regex })
     }

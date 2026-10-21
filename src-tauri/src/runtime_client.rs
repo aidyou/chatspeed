@@ -31,8 +31,9 @@ use std::time::{Duration, Instant};
 
 use chatspeed_contracts::{
     ClientBridgeCapability, ClientBridgeDeclaration, ClientBridgeWorkEnvelope,
-    ClientCapabilityInvocation, ClientCapabilityResult, RuntimeShutdownRequest,
-    BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
+    ClientCapabilityInvocation, ClientCapabilityResult, ErrorEnvelope, RuntimeShutdownRequest,
+    UserErrorPresentation, BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
+    RUNTIME_CODE_RUNTIME_STOPPING,
 };
 use chatspeed_runtime_client::{
     process_alive, runtime_needs_start, BridgeSession, ClientError, Heartbeat, LeaseGuard,
@@ -178,15 +179,42 @@ pub enum RuntimeUnavailable {
     /// The runtime rejected this client's authentication.
     #[error("runtime rejected this client: {0}")]
     Rejected(String),
-    /// The runtime returned a structured error.
+    /// The runtime returned a structured error. The message keeps the
+    /// historical `runtime returned an error: <status> <code>: <message>`
+    /// shape, while the typed payload preserves the status, the canonical code
+    /// and the optional safe presentation for callers that branch on them.
     #[error("runtime returned an error: {0}")]
-    Server(String),
+    Server(RuntimeServerError),
     /// The caller asked for something the supervisor refuses to do.
     #[error("invalid runtime client configuration: {0}")]
     InvalidConfig(String),
     /// No lease is held, so the control-plane client is not available.
     #[error("runtime client is not connected")]
     NotConnected,
+}
+
+/// Typed structured error the runtime returned over the control plane.
+///
+/// `Display` reproduces the historical `Server(String)` payload
+/// (`<status> <code>: <message>`) so adapters that format the supervisor error
+/// keep the same text, while the fields let callers branch on the canonical
+/// code without reconstructing it from the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeServerError {
+    /// HTTP status the runtime answered with.
+    pub status: u16,
+    /// Canonical error envelope code, e.g. `runtime_stopping`.
+    pub code: String,
+    /// Redacted wire message.
+    pub message: String,
+    /// Safe presentation the runtime attached, when present.
+    pub presentation: Option<UserErrorPresentation>,
+}
+
+impl fmt::Display for RuntimeServerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}: {}", self.status, self.code, self.message)
+    }
 }
 
 impl RuntimeUnavailable {
@@ -196,19 +224,86 @@ impl RuntimeUnavailable {
             ClientError::Discovery(message) => Self::Discovery(redact_secrets(&message)),
             ClientError::Protocol(message) => Self::Protocol(redact_secrets(&message)),
             ClientError::Transport(message) => Self::Unreachable(redact_secrets(&message)),
-            ClientError::Auth(message) => Self::Rejected(redact_secrets(&message)),
-            ClientError::Server {
-                status,
-                code,
-                message,
-            } => Self::Server(format!("{status} {code}: {}", redact_secrets(&message))),
+            ClientError::Auth(auth) => Self::Rejected(redact_secrets(&auth.to_string())),
+            ClientError::Server(response) => Self::Server(RuntimeServerError {
+                status: response.status,
+                code: response.code,
+                message: redact_secrets(&response.message),
+                presentation: response.presentation,
+            }),
             ClientError::InvalidRequest(message) => Self::InvalidConfig(message),
             ClientError::Serialization(message) => Self::Protocol(redact_secrets(&message)),
         }
     }
 
-    fn is_runtime_stopping(&self) -> bool {
-        matches!(self, Self::Server(message) if message.contains("runtime_stopping"))
+    /// Reports whether the structured server error carries the stable
+    /// `runtime_stopping` code, so retry logic never reconstructs it from text.
+    pub fn is_runtime_stopping(&self) -> bool {
+        matches!(self, Self::Server(response) if response.code == RUNTIME_CODE_RUNTIME_STOPPING)
+    }
+}
+
+/// Serializes one public runtime rejection for the Tauri IPC boundary.
+///
+/// Tauri commands still reject with `String`, so the adapter emits the shared
+/// envelope as JSON instead of flattening it. `code` and `message` stay the
+/// legacy pair old readers consume, `presentation` is optional and already
+/// redacted by the runtime, and `status` preserves the rejection's HTTP
+/// meaning. Only the runtime's public `Server`/`Auth` rejections use this
+/// helper; internal `String` failures must not be wrapped as user-facing JSON.
+pub(crate) fn public_rejection_wire(
+    status: u16,
+    code: &str,
+    legacy_message: &str,
+    presentation: Option<UserErrorPresentation>,
+) -> String {
+    let mut envelope = ErrorEnvelope::new(code, legacy_message);
+    envelope.error.presentation = presentation;
+    let mut wire = serde_json::to_value(envelope).unwrap_or_else(|_| {
+        serde_json::json!({
+            "error": { "code": code, "message": legacy_message }
+        })
+    });
+    if let Some(object) = wire.as_object_mut() {
+        object.insert("status".to_string(), serde_json::json!(status));
+    }
+    wire.to_string()
+}
+
+/// Maps one control-plane client error to the IPC string error.
+///
+/// Public rejections keep their structured envelope; transport, discovery,
+/// protocol and serialization failures stay technical strings. No variant
+/// contributes a source chain to the wire.
+pub(crate) fn client_error_wire(error: ClientError) -> String {
+    match error {
+        ClientError::Server(response) => public_rejection_wire(
+            response.status,
+            &response.code,
+            &response.message,
+            response.presentation,
+        ),
+        ClientError::Auth(auth) => {
+            public_rejection_wire(auth.status, &auth.code, &auth.message, auth.presentation)
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Maps one supervisor failure to the IPC string error.
+///
+/// A structured runtime rejection keeps the same status/code/presentation
+/// envelope as the direct client path, so an availability failure cannot erase
+/// the classification. Every other variant keeps its technical description.
+pub(crate) fn runtime_error_wire(error: RuntimeUnavailable) -> String {
+    match error {
+        RuntimeUnavailable::Server(response) => public_rejection_wire(
+            response.status,
+            &response.code,
+            &response.message,
+            response.presentation,
+        ),
+        other => other.to_string(),
     }
 }
 
@@ -1230,6 +1325,43 @@ async fn connect_once(
     Ok(())
 }
 
+/// Preserve dependency targets and levels before the desktop file filter sees them.
+fn forward_runtime_log_line(line: &str) {
+    let line = redact_secrets(line);
+    if let Some((level, target, message)) = runtime_log_record(&line) {
+        log::log!(target: target, level, "[RuntimeChild] {}", message);
+    } else {
+        // Unstructured child stderr remains available for native crash diagnosis,
+        // but cannot bypass file filtering by masquerading as project info.
+        eprintln!("[RuntimeChild] {}", line);
+    }
+}
+
+fn runtime_log_record(line: &str) -> Option<(log::Level, &str, &str)> {
+    if line.starts_with('{') {
+        if let Ok(report) = serde_json::from_str::<serde_json::Value>(line) {
+            if report.get("event").and_then(serde_json::Value::as_str) == Some("error_diagnostic") {
+                return Some((log::Level::Error, "error_diagnostic", line));
+            }
+        }
+    }
+    let (level, record) = line.split_once("] ")?;
+    let level = level.strip_prefix('[').and_then(parse_runtime_log_level)?;
+    let (target, message) = record.split_once(": ")?;
+    Some((level, target, message))
+}
+
+fn parse_runtime_log_level(level: &str) -> Option<log::Level> {
+    match level {
+        "ERROR" => Some(log::Level::Error),
+        "WARN" => Some(log::Level::Warn),
+        "INFO" => Some(log::Level::Info),
+        "DEBUG" => Some(log::Level::Debug),
+        "TRACE" => Some(log::Level::Trace),
+        _ => None,
+    }
+}
+
 /// for its readiness handshake.
 ///
 /// Starting can lose a race with another client: a spawn that is refused because
@@ -1305,9 +1437,7 @@ async fn start_runtime_with_budget(
         }
         match chatspeed_runtime_client::spawn_runtime_with_config(config) {
             Ok(mut child) => {
-                child.forward_stderr_to(|line| {
-                    log::info!("[RuntimeChild] {}", redact_secrets(line));
-                });
+                child.forward_stderr_to(forward_runtime_log_line);
                 log::info!(
                     "[RuntimeSupervisor] spawned runtime child {}; readiness budget {:?}",
                     child.id(),
@@ -1688,6 +1818,72 @@ fn skip_secret(value: &str) -> &str {
 mod tests {
     use super::*;
     use chatspeed_contracts::{ControlPlaneDiscovery, PROTOCOL_VERSION};
+    use chatspeed_runtime_client::ClientResponseError;
+
+    #[test]
+    fn child_log_records_preserve_targets_levels_and_file_filtering() {
+        use log::Log;
+
+        let directory = tempfile::tempdir().expect("temporary log directory");
+        let path = directory.path().join("runtime-child.log");
+        let (_, logger) = fern::Dispatch::new()
+            .level(log::LevelFilter::Debug)
+            .filter(|record| {
+                record.target().contains("chatspeed")
+                    || (record.level() < log::LevelFilter::Info
+                        && !matches!(
+                            record.target(),
+                            "ccproxy_client_logger" | "ccproxy_upstream_logger"
+                        ))
+            })
+            .format(crate::logger::file_log_formatter)
+            .chain(fern::log_file(&path).expect("temporary file sink"))
+            .into_log();
+        for line in [
+            "[INFO] rmcp::service: THIRD_PARTY_INFO",
+            "[DEBUG] rmcp::service: THIRD_PARTY_DEBUG",
+            "[TRACE] tracing::span: THIRD_PARTY_TRACE",
+            "[WARN] rmcp::service: THIRD_PARTY_WARN",
+            "[ERROR] rmcp::service: THIRD_PARTY_ERROR",
+            "[INFO] chatspeed_runtime_backend::owner: PROJECT_INFO: still intact",
+            "[DEBUG] chatspeed_runtime::startup: PROJECT_DEBUG",
+            r#"{"event":"error_diagnostic","error":"STARTUP_FAILURE"}"#,
+        ] {
+            let (level, target, message) = runtime_log_record(line).expect("structured child log");
+            logger.log(
+                &log::Record::builder()
+                    .args(format_args!("[RuntimeChild] {}", message))
+                    .target(target)
+                    .level(level)
+                    .build(),
+            );
+        }
+        logger.flush();
+        let output = std::fs::read_to_string(path).expect("read file sink");
+        for noise in ["THIRD_PARTY_INFO", "THIRD_PARTY_DEBUG", "THIRD_PARTY_TRACE"] {
+            assert!(
+                !output.contains(noise),
+                "external noise reached file: {noise}"
+            );
+        }
+        for retained in [
+            "THIRD_PARTY_WARN",
+            "THIRD_PARTY_ERROR",
+            "PROJECT_INFO: still intact",
+            "PROJECT_DEBUG",
+            "STARTUP_FAILURE",
+        ] {
+            assert!(output.contains(retained), "missing log: {retained}");
+        }
+        assert_eq!(output.lines().count(), 5);
+        assert_eq!(
+            runtime_log_record("[WARN] rmcp::service: retry"),
+            Some((log::Level::Warn, "rmcp::service", "retry"))
+        );
+        assert!(runtime_log_record("[CodeGraph] update available").is_none());
+        assert!(runtime_log_record("native stderr without metadata").is_none());
+        assert!(runtime_log_record("[INVALID] rmcp::service: unknown level").is_none());
+    }
 
     fn discovery_with_token(token: &str) -> ControlPlaneDiscovery {
         ControlPlaneDiscovery {
@@ -1699,6 +1895,108 @@ mod tests {
             token: token.to_string(),
             started_at: "now".to_string(),
         }
+    }
+
+    fn server_error(status: u16, code: &str, message: &str) -> RuntimeUnavailable {
+        RuntimeUnavailable::from_client_error(ClientError::Server(ClientResponseError {
+            legacy_display: String::new(),
+            status,
+            code: code.to_string(),
+            message: message.to_string(),
+            presentation: None,
+        }))
+    }
+
+    #[test]
+    fn is_runtime_stopping_uses_the_typed_code_not_the_message_text() {
+        assert!(server_error(503, RUNTIME_CODE_RUNTIME_STOPPING, "draining").is_runtime_stopping());
+
+        // Same message, different code: must not classify as stopping.
+        assert!(!server_error(503, "unavailable", "draining").is_runtime_stopping());
+        // A code that only embeds the marker as a substring or a display-shaped
+        // string must not reconstruct the classification from text.
+        assert!(!server_error(503, "not_runtime_stopping", "draining").is_runtime_stopping());
+        assert!(!RuntimeUnavailable::Unreachable(
+            "runtime returned an error: 503 runtime_stopping: draining".to_string()
+        )
+        .is_runtime_stopping());
+        assert!(!RuntimeUnavailable::NotConnected.is_runtime_stopping());
+    }
+
+    #[test]
+    fn a_typed_server_error_keeps_the_status_code_and_display() {
+        let error = server_error(503, RUNTIME_CODE_RUNTIME_STOPPING, "draining");
+        match &error {
+            RuntimeUnavailable::Server(response) => {
+                assert_eq!(response.status, 503);
+                assert_eq!(response.code, RUNTIME_CODE_RUNTIME_STOPPING);
+                assert_eq!(response.message, "draining");
+                assert!(response.presentation.is_none());
+            }
+            other => panic!("expected a typed server error, got {other:?}"),
+        }
+        // The Display keeps the historical flat payload for callers that format.
+        assert_eq!(
+            error.to_string(),
+            "runtime returned an error: 503 runtime_stopping: draining"
+        );
+    }
+
+    #[test]
+    fn a_typed_server_error_keeps_the_optional_presentation() {
+        let presentation = UserErrorPresentation {
+            schema_version: 1,
+            message: "The runtime is shutting down; try again".to_string(),
+            reason: Some(chatspeed_contracts::ErrorReason::RuntimeStopping),
+            upstream_status: None,
+        };
+        let error =
+            RuntimeUnavailable::from_client_error(ClientError::Server(ClientResponseError {
+                legacy_display: String::new(),
+                status: 503,
+                code: RUNTIME_CODE_RUNTIME_STOPPING.to_string(),
+                message: "runtime is stopping".to_string(),
+                presentation: Some(presentation.clone()),
+            }));
+        match &error {
+            RuntimeUnavailable::Server(response) => {
+                assert_eq!(response.presentation.as_ref(), Some(&presentation));
+            }
+            other => panic!("expected a typed server error, got {other:?}"),
+        }
+        // The presentation never leaks into the display string.
+        assert!(!error.to_string().contains("try again"));
+    }
+
+    #[test]
+    fn the_ipc_runtime_error_keeps_the_structured_server_payload() {
+        let wire = serde_json::from_str::<serde_json::Value>(&runtime_error_wire(
+            RuntimeUnavailable::Server(RuntimeServerError {
+                status: 503,
+                code: RUNTIME_CODE_RUNTIME_STOPPING.to_string(),
+                message: "runtime is stopping".to_string(),
+                presentation: Some(UserErrorPresentation {
+                    schema_version: 1,
+                    message: "The runtime is shutting down; try again".to_string(),
+                    reason: Some(chatspeed_contracts::ErrorReason::RuntimeStopping),
+                    upstream_status: Some(503),
+                }),
+            }),
+        ))
+        .expect("structured rejection is a JSON envelope");
+
+        assert_eq!(wire["error"]["code"], RUNTIME_CODE_RUNTIME_STOPPING);
+        assert_eq!(wire["error"]["message"], "runtime is stopping");
+        assert_eq!(wire["status"], 503);
+        assert_eq!(wire["error"]["presentation"]["reason"], "runtime_stopping");
+        assert_eq!(wire["error"]["presentation"]["upstream_status"], 503);
+    }
+
+    #[test]
+    fn the_ipc_runtime_error_keeps_technical_failures_as_plain_text() {
+        let wire = runtime_error_wire(RuntimeUnavailable::NotConnected);
+        assert_eq!(wire, "runtime client is not connected");
+        assert!(!wire.starts_with('{'));
     }
 
     #[cfg(unix)]
@@ -1733,7 +2031,12 @@ mod tests {
         // A credential-shaped control-plane message is scrubbed before it can be
         // stored in a status document or logged.
         let error = RuntimeUnavailable::from_client_error(ClientError::Auth(
-            "Bearer test-token rejected".to_string(),
+            chatspeed_runtime_client::AuthError {
+                status: 401,
+                code: "unauthorized".to_string(),
+                message: "Bearer test-token rejected".to_string(),
+                presentation: None,
+            },
         ));
         let rendered = format!("{error:?} {error}");
         assert!(!rendered.contains("test-token"), "{rendered}");

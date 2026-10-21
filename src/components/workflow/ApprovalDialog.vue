@@ -115,6 +115,7 @@ import FilePreviewDiff from '@/components/workflow/FilePreviewDiff.vue'
 import { formatPlanApprovalMarkdown } from '@/composables/workflow/planApproval'
 import { writeClipboard } from '@/libs/clipboard'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -378,7 +379,7 @@ const copyPlanMarkdown = async () => {
     showMessage(t('common.copied'), 'success')
   } catch (error) {
     console.error('Failed to copy plan:', error)
-    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+    showMessage(t('common.operationFailed', { error: formatUserError(error) }), 'error')
   }
 }
 

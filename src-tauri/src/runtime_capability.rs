@@ -25,6 +25,10 @@
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
+#[cfg(test)]
+use chatspeed_contracts::UserErrorPresentation;
+#[cfg(test)]
+use chatspeed_runtime_client::ClientResponseError;
 use chatspeed_runtime_client::{ClientError, RuntimeClient};
 
 use crate::ai::traits::chat::MCPToolDeclaration;
@@ -424,14 +428,31 @@ fn new_key() -> String {
 
 /// Maps a transport/domain client error into a capability error, preserving the
 /// runtime's own stable code and already-redacted message.
+///
+/// The optional safe presentation is projected flat beside `code`/`message`
+/// and also feeds the explicit origin, so a reason or upstream status is never
+/// inferred from message text.
 fn map_client_error(error: ClientError) -> CapabilityError {
     match error {
-        ClientError::Server {
-            code: server_code,
-            message,
-            ..
-        } => CapabilityError::new(&server_code, message),
-        ClientError::Auth(message) => CapabilityError::new(code::FORBIDDEN, message),
+        ClientError::Server(response) => {
+            let message = response
+                .presentation
+                .as_ref()
+                .map_or(&response.message, |p| &p.message)
+                .clone();
+            let mut mapped = CapabilityError::new(&response.code, message);
+            if let Some(presentation) = response.presentation {
+                mapped = mapped.with_user_error(presentation);
+            }
+            mapped
+        }
+        ClientError::Auth(auth) => {
+            let mut mapped = CapabilityError::new(code::FORBIDDEN, auth.to_string());
+            if let Some(presentation) = auth.presentation {
+                mapped = mapped.with_user_error(presentation);
+            }
+            mapped
+        }
         ClientError::InvalidRequest(message) => {
             CapabilityError::new(code::INVALID_REQUEST, message)
         }
@@ -442,8 +463,23 @@ fn map_client_error(error: ClientError) -> CapabilityError {
 
 /// Maps a supervisor availability failure to `runtime_unavailable`, so the Tauri
 /// wire fails closed instead of pretending the operation succeeded.
+///
+/// The availability classification stays `runtime_unavailable`; an optional
+/// presentation preserves the cause without replacing that existing code.
 fn map_runtime_error(error: RuntimeUnavailable) -> CapabilityError {
-    CapabilityError::new(code::RUNTIME_UNAVAILABLE, error.to_string())
+    match error {
+        RuntimeUnavailable::Server(response) => {
+            let mut mapped = CapabilityError::new(
+                code::RUNTIME_UNAVAILABLE,
+                format!("runtime returned an error: {response}"),
+            );
+            if let Some(presentation) = response.presentation {
+                mapped = mapped.with_user_error(presentation);
+            }
+            mapped
+        }
+        other => CapabilityError::new(code::RUNTIME_UNAVAILABLE, other.to_string()),
+    }
 }
 
 /// Maps a request serialization failure to an internal capability error.
@@ -473,6 +509,8 @@ fn encode_path_segment(segment: &str) -> String {
 mod tests {
     use super::*;
     use crate::mcp::client::McpProtocolType;
+    use chatspeed_contracts::ErrorReason;
+    use chatspeed_runtime_backend::error_diagnostics::ErrorProjection;
 
     fn stdio_config() -> McpServerConfig {
         McpServerConfig {
@@ -501,13 +539,83 @@ mod tests {
 
     #[test]
     fn a_server_error_keeps_its_capability_code_and_message() {
-        let error = map_client_error(ClientError::Server {
+        let error = map_client_error(ClientError::Server(ClientResponseError {
+            legacy_display: "server error 404: MCP server 1 does not exist (not_found)".to_string(),
             status: 404,
             code: "not_found".to_string(),
             message: "MCP server 1 does not exist".to_string(),
-        });
+            presentation: None,
+        }));
         assert_eq!(error.code(), code::NOT_FOUND);
         assert_eq!(error.message, "MCP server 1 does not exist");
+    }
+
+    #[test]
+    fn a_server_error_prefers_the_safe_presentation_message() {
+        let error = map_client_error(ClientError::Server(ClientResponseError {
+            legacy_display: "server error 404: MCP server 1 does not exist (not_found)".to_string(),
+            status: 404,
+            code: "not_found".to_string(),
+            message: "MCP server 1 does not exist".to_string(),
+            presentation: Some(UserErrorPresentation {
+                schema_version: 1,
+                message: "The MCP server was removed".to_string(),
+                reason: None,
+                upstream_status: None,
+            }),
+        }));
+        assert_eq!(error.code(), code::NOT_FOUND);
+        assert_eq!(error.message, "The MCP server was removed");
+    }
+
+    #[test]
+    fn a_server_presentation_is_projected_flat_without_a_second_envelope() {
+        let presentation = UserErrorPresentation {
+            schema_version: 1,
+            message: "The MCP server was removed".to_string(),
+            reason: Some(ErrorReason::RuntimeStopping),
+            upstream_status: Some(503),
+        };
+        let error = map_client_error(ClientError::Server(ClientResponseError {
+            legacy_display: "server error 404: MCP server 1 does not exist (not_found)".to_string(),
+            status: 404,
+            code: "not_found".to_string(),
+            message: "MCP server 1 does not exist".to_string(),
+            presentation: Some(presentation.clone()),
+        }));
+
+        let wire = serde_json::to_value(&error).expect("capability error wire");
+        // The flat capability contract keeps its code and message keys.
+        assert_eq!(wire["code"], "not_found");
+        assert_eq!(wire["message"], "The MCP server was removed");
+        // The safe projection is optional and sits beside them, not nested in
+        // an `error` envelope.
+        assert_eq!(wire["presentation"]["reason"], "runtime_stopping");
+        assert_eq!(wire["presentation"]["upstream_status"], 503);
+        assert!(wire.get("error").is_none());
+        // The origin comes from structured presentation fields only.
+        assert_eq!(
+            error.user_error().reason,
+            Some(ErrorReason::RuntimeStopping)
+        );
+        assert_eq!(error.user_error().upstream_status, Some(503));
+    }
+
+    #[test]
+    fn a_runtime_server_failure_keeps_its_availability_code() {
+        let error = map_runtime_error(RuntimeUnavailable::Server(
+            crate::runtime_client::RuntimeServerError {
+                status: 503,
+                code: "runtime_stopping".to_string(),
+                message: "runtime is stopping".to_string(),
+                presentation: None,
+            },
+        ));
+        assert_eq!(error.code(), code::RUNTIME_UNAVAILABLE);
+        assert_eq!(
+            error.message,
+            "runtime returned an error: 503 runtime_stopping: runtime is stopping"
+        );
     }
 
     #[test]

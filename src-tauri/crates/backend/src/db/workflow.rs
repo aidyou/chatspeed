@@ -3379,6 +3379,7 @@ mod tests {
             usage_summary: None,
             completed_at_ms: 1,
             consumed: false,
+            user_error: None,
         }
     }
 
@@ -3463,6 +3464,46 @@ mod tests {
         assert!(restored.pending_sub_agent_completions[0].consumed);
         assert!(restored.sub_agent_sessions.is_empty());
         assert_eq!(restored.waiting_on_sub_agent_id.as_deref(), Some("child-1"));
+    }
+
+    #[test]
+    fn persist_sub_agent_completion_round_trips_ui_only_user_error() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "completion-user-error";
+        let mut context = ExecutionContext::new(session_id.to_string());
+        context.wait_reason = Some(WaitReason::SubAgent);
+        context.waiting_on_sub_agent_id = Some("child-1".to_string());
+        context.sub_agent_sessions.push("child-1".to_string());
+        store.upsert_execution_context(&context).unwrap();
+
+        let mut completion = test_completion(session_id, "child-1");
+        completion.status = "failed".to_string();
+        completion.result = None;
+        completion.error = Some("legacy failure".to_string());
+        completion.user_error = Some(chatspeed_contracts::UserErrorPresentation {
+            schema_version: 1,
+            message: "overloaded".to_string(),
+            reason: None,
+            upstream_status: Some(503),
+        });
+
+        assert!(store
+            .persist_sub_agent_completion(Some(1), &completion)
+            .unwrap());
+
+        let restored = store.get_execution_context(session_id).unwrap().unwrap();
+        let restored = &restored.pending_sub_agent_completions[0];
+        assert_eq!(restored.error.as_deref(), Some("legacy failure"));
+        assert_eq!(
+            restored.ui_user_error().map(|error| error.message.as_str()),
+            Some("overloaded")
+        );
+        assert_eq!(
+            restored
+                .ui_user_error()
+                .and_then(|error| error.upstream_status),
+            Some(503)
+        );
     }
 
     #[test]

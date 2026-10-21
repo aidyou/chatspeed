@@ -1,4 +1,5 @@
 import { isWorkflowMcpTool } from './toolClassification.js'
+import { normalizeUserError } from '../../libs/error.js'
 
 // Models occasionally emit zero-width formatting characters as an otherwise empty message.
 // They are not removed by String.prototype.trim(), so exclude them from visibility checks.
@@ -47,6 +48,47 @@ export const normalizeWorkflowErrorAlertContent = value => {
       : content
   } catch {
     return content
+  }
+}
+
+export const resolveWorkflowUserError = (metadataOrMessage, fallback = '') => {
+  const message = metadataOrMessage?.metadata && typeof metadataOrMessage.metadata === 'object'
+    ? metadataOrMessage
+    : null
+  const metadata = message?.metadata || metadataOrMessage
+  const candidates = [
+    metadata?.user_error,
+    metadata?.data?.user_error,
+    message?.user_error,
+    message?.data?.user_error,
+    metadata?.result?.error_metadata?.user_error
+  ]
+  const userError = candidates.find(value => value !== undefined && value !== null)
+  if (userError === undefined) return null
+
+  const envelope =
+    userError && typeof userError === 'object' && userError.presentation
+      ? userError
+      : { presentation: userError }
+  const normalized = normalizeUserError(envelope, fallback)
+  if (!normalized.message) return null
+  return {
+    ...normalized,
+    display: normalized.message,
+    displayCopy: normalized.message
+  }
+}
+
+export const resolveWorkflowErrorDisplay = (metadataOrMessage, legacyContent, fallback = '') => {
+  const userError = resolveWorkflowUserError(metadataOrMessage, fallback)
+  if (userError) return userError
+
+  const display = normalizeWorkflowErrorAlertContent(legacyContent)
+  return {
+    message: display || fallback,
+    reason: 'unknown',
+    display: display || fallback,
+    displayCopy: display || fallback
   }
 }
 
@@ -617,6 +659,7 @@ export const resolveFinalReviewSubAgentCompletion = (message, completion) => {
   return {
     execution_status: result.status || metadata.sub_agent_status || metadata.execution_status || '',
     result,
+    user_error: resolveWorkflowUserError(message),
     sub_agent_name: metadata.sub_agent_name || '',
     sub_agent_task: metadata.sub_agent_task || '',
     data: {}
@@ -632,10 +675,12 @@ export const collectSubAgentCompletions = (visibleGroups = [], progressValues = 
       const completionId = meta.sub_agent_id || meta.data?.sub_agent_id
       if (meta.observation_type !== 'sub_agent_completion' || !completionId) continue
 
+      const completionUserError = resolveWorkflowUserError(message)
       completions.set(completionId, {
-        summary: meta.summary || '',
+        summary: completionUserError?.display || meta.summary || '',
         execution_status: meta.execution_status || '',
         result: meta.result || {},
+        user_error: completionUserError,
         sub_agent_name: meta.sub_agent_name || '',
         sub_agent_task: meta.sub_agent_task || '',
         data: meta.data || {}
@@ -648,10 +693,12 @@ export const collectSubAgentCompletions = (visibleGroups = [], progressValues = 
     const result = progress?.result
     if (!completionId || !result || typeof result !== 'object') continue
 
+    const progressUserError = resolveWorkflowUserError(progress)
     completions.set(completionId, {
-      summary: progress.summary || result.summary || '',
+      summary: progressUserError?.display || progress.summary || result.summary || '',
       execution_status: progress.status || result.status || '',
       result,
+      user_error: progressUserError,
       sub_agent_name: progress.agentName || progress.agent_name || '',
       sub_agent_task: progress.task || '',
       data: {}

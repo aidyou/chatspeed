@@ -10,7 +10,7 @@ pub struct ProjectFilter {
 impl ProjectFilter {
     pub fn new() -> Result<Self, SensitiveError> {
         let regex = Regex::new(r#"(?i)(?:Project\s+Name|Project\s+Title|Project|Scheme\s+Name|Study\s+Title)[:：]\s*([^\n\r]+)"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_project_regex".to_string(), message: e.to_string() })?;
+            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_project_regex".to_string(), message: crate::error_diagnostics::FailureMessage::from_error(&e) })?;
         Ok(Self { regex })
     }
 }

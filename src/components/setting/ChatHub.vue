@@ -99,6 +99,7 @@ import { Sortable } from 'sortablejs-vue3'
 
 import { FrontendAppError } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { useChatHubStore } from '@/stores/chatHub'
 
 /**
@@ -141,7 +142,7 @@ const isValidChatHubUrl = value => {
 }
 
 const reportChatHubError = (message, error) => {
-  showMessage(message, 'error')
+  showMessage(formatUserError(error, message), 'error')
   if (error instanceof FrontendAppError) {
     console.error('ChatHub operation failed:', error.toFormattedString(), error.originalError)
   } else {

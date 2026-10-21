@@ -2,6 +2,8 @@ import i18n from '@/i18n/index.js'
 import { invoke } from '@tauri-apps/api/core'
 import he from 'he'
 import { marked } from 'marked'
+import { resolveToolResultState, resolveToolResultDisplay } from '@/libs/toolResultState.js'
+import { formatUserError } from '@/libs/error'
 
 // Regular expressions
 const CODE_BLOCK_REGEX = /```([^\n]*)\n([\s\S]*?)```/g
@@ -631,7 +633,12 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
       break
     case 'error':
       chatState.step = ''
-      refs.chatErrorMessage.value = parseErrorMsg(payload?.chunk)
+      // Normalize only the displayed copy. The stream payload and its metadata stay
+      // untouched so completion handlers keep the original terminal payload.
+      refs.chatErrorMessage.value = formatUserError(
+        { presentation: payload?.metadata?.user_error, message: payload?.chunk },
+        i18n.global.t('common.errorFallback')
+      )
       isDone = true
       break
     case 'text':
@@ -691,43 +698,11 @@ export const handleChatMessage = (payload, chatStateRef, refs, onComplete) => {
   return isDone
 }
 
-const parseErrorMsg = errorStr => {
-  if (!errorStr) {
-    return ''
-  }
-  try {
-    // The backend now sends a unified JSON object: { status: u16, message: String }
-    const err = JSON.parse(errorStr)
-    // The 'message' field contains the full, pre-formatted error string from Rust's AiError.
-    if (err?.message) {
-      return err.message
-    }
-  } catch {
-    // If parsing fails, it's likely a plain string error message, so we return it directly.
-  }
-  // Fallback for non-JSON strings or JSON without a 'message' field.
-  return errorStr
-}
-
 const createToolCallHtml = (content, toolCalls) => {
   toolCalls.forEach(call => {
     const functionName = call?.function?.name
     if (functionName) {
-      let status = ''
-      if (!call.result) {
-        status = 'calling'
-      } else {
-        let parsedResult
-        try {
-          parsedResult = typeof call.result === 'string' ? JSON.parse(call.result) : call.result
-          status = parsedResult?.error ? 'error' : 'success'
-        } catch {
-          status =
-            typeof call.result === 'string' && call.result.startsWith('Error: ')
-              ? 'error'
-              : 'success'
-        }
-      }
+      const status = resolveToolResultState(call)
 
       let tools = '<div class="chat-tool-calls">'
       let args = []
@@ -749,8 +724,9 @@ const createToolCallHtml = (content, toolCalls) => {
       } else {
         tools += `<div class="tool-name ${status}"><span>${toolName(functionName, args)}</span></div>`
       }
+      const displayedResult = resolveToolResultDisplay(call)
       const result =
-        typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)
+        typeof displayedResult === 'string' ? displayedResult : JSON.stringify(displayedResult, null, 2)
       // Escape HTML in arguments and result to prevent XSS and highlight.js warnings
       const escapedArguments = htmlspecialchars(call.function.arguments || '')
       // const escapedResult = htmlspecialchars(result || '')

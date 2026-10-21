@@ -15,7 +15,7 @@ impl NameFilter {
         let name_pattern = Regex::new(r#"\b[A-Z][a-z]+(?:\s[A-Z][a-z]+)*\b"#).map_err(|e| {
             SensitiveError::RegexCompilationFailed {
                 pattern: "en_name_pattern".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             }
         })?;
 
@@ -29,7 +29,7 @@ impl NameFilter {
         ])
         .map_err(|e| SensitiveError::RegexCompilationFailed {
             pattern: "en_name_context".to_string(),
-            message: e.to_string(),
+            message: crate::error_diagnostics::FailureMessage::from_error(&e),
         })?;
 
         Ok(Self {

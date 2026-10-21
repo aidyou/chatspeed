@@ -28,6 +28,8 @@ import { formatActiveModelName } from './modelConfigSelection'
 import { removeWorkflowInputDraft } from './useWorkflowInputDraftCache'
 import { AGENT_ROLE, SUB_AGENT_ROLE } from '@/constants/agent'
 import { resolveExecutionStylePreference } from '@/constants/executionStyle'
+import { USER_ERROR_REASONS } from '@/constants/errorReasons'
+import { formatUserError, normalizeUserError } from '@/libs/error'
 
 /**
  * Composable for core workflow operations
@@ -1397,7 +1399,8 @@ export function useWorkflowCore({
                         payload.tool_call_id,
                         false,
                         detailedError,
-                        payload.error_type
+                        payload.error_type,
+                        errorDetail
                     )
                 } else if (payload.type === 'task_completed') {
                     workflowStore.recordTaskCompleted(
@@ -1606,7 +1609,7 @@ export function useWorkflowCore({
             console.error('[Workflow] selectWorkflow failed:', error)
             // Automatic recovery reports through the runtime banner, never a toast loop.
             if (background) throw error
-            showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+            showMessage(t('workflow.startFailed', { error: formatUserError(error) }), 'error')
             return
         }
         if (workflowStore.currentWorkflowId !== id || currentSessionId.value !== id) {
@@ -1837,7 +1840,7 @@ export function useWorkflowCore({
             return true
         } catch (error) {
             console.error('Failed to start workflow:', error)
-            showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+            showMessage(t('workflow.startFailed', { error: formatUserError(error) }), 'error')
             return false
         }
     }
@@ -1963,7 +1966,7 @@ export function useWorkflowCore({
                         workflowStore.removeQueuedMessage(queuedId)
                     }
                     console.error('Failed to send signal:', error)
-                    showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+                    showMessage(t('workflow.startFailed', { error: formatUserError(error) }), 'error')
                     return false
                 }
             } else {
@@ -2020,8 +2023,8 @@ export function useWorkflowCore({
                     }
                     return true
                 } catch (error) {
-                    const errorText = String(error)
-                    if (errorText.includes('Session is stopping')) {
+                    const reason = normalizeUserError(error).reason
+                    if (reason === USER_ERROR_REASONS.SESSION_STOPPING) {
                         removeProvisionalMessage()
                         showMessage(
                             t('workflow.stopping') || 'Task is stopping. Please wait a moment.',
@@ -2031,7 +2034,7 @@ export function useWorkflowCore({
                     }
                     // Recovery path: session is already active in manager, route the same
                     // client identity through the canonical user-message signal.
-                    if (errorText.includes('Session already exists')) {
+                    if (reason === USER_ERROR_REASONS.SESSION_ALREADY_EXISTS) {
                         try {
                             if (targetIsCurrentSession) {
                                 workflowStore.setHasLiveSession(true)
@@ -2044,13 +2047,13 @@ export function useWorkflowCore({
                         } catch (signalError) {
                             removeProvisionalMessage()
                             console.error('Failed to fallback to workflow_signal after Session already exists:', signalError)
-                            showMessage(t('workflow.startFailed', { error: String(signalError) }), 'error')
+                            showMessage(t('workflow.startFailed', { error: formatUserError(signalError) }), 'error')
                             return false
                         }
                     }
                     removeProvisionalMessage()
                     console.error('Failed to resume workflow:', error)
-                    showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+                    showMessage(t('workflow.startFailed', { error: formatUserError(error) }), 'error')
                     return false
                 }
             }
@@ -2127,8 +2130,8 @@ export function useWorkflowCore({
             startedSession = true
             return true
         } catch (error) {
-            const errorText = String(error)
-            if (errorText.includes('Session already exists')) {
+            const reason = normalizeUserError(error).reason
+            if (reason === USER_ERROR_REASONS.SESSION_ALREADY_EXISTS) {
                 try {
                     workflowStore.setHasLiveSession(true)
                     await invokeWrapper('workflow_signal', {
@@ -2139,11 +2142,11 @@ export function useWorkflowCore({
                     return true
                 } catch (signalError) {
                     console.error('Failed to recover continue request through workflow_signal:', signalError)
-                    showMessage(t('workflow.startFailed', { error: String(signalError) }), 'error')
+                    showMessage(t('workflow.startFailed', { error: formatUserError(signalError) }), 'error')
                     return false
                 }
             }
-            if (errorText.includes('Session is stopping')) {
+            if (reason === USER_ERROR_REASONS.SESSION_STOPPING) {
                 showMessage(
                     t('workflow.stopping') || 'Task is stopping. Please wait a moment.',
                     'warning'
@@ -2151,7 +2154,7 @@ export function useWorkflowCore({
                 return false
             }
             console.error('Failed to continue workflow:', error)
-            showMessage(t('workflow.startFailed', { error: errorText }), 'error')
+            showMessage(t('workflow.startFailed', { error: formatUserError(error) }), 'error')
             return false
         } finally {
             // A start that reached the backend keeps the lock until the store stops reporting
@@ -2206,7 +2209,7 @@ export function useWorkflowCore({
                 return
             } catch (error) {
                 console.error('Failed to approve live submit_plan:', error)
-                showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+                showMessage(t('workflow.startFailed', { error: formatUserError(error) }), 'error')
                 return
             }
         }
@@ -2403,7 +2406,7 @@ export function useWorkflowCore({
                         console.warn('[Workflow] Failed to restore workflow listeners after delete failure:', syncError)
                     })
                 }
-                showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+                showMessage(t('common.operationFailed', { error: formatUserError(error) }), 'error')
             } finally {
                 if (!backendDeleteCompleted) {
                     setWorkflowDeleting(id, false)
@@ -2464,7 +2467,7 @@ export function useWorkflowCore({
         } catch (error) {
             console.error('Failed to create new workflow:', error)
             if (background) throw error
-            showMessage(t('workflow.startFailed', { error: String(error) }), 'error')
+            showMessage(t('workflow.startFailed', { error: formatUserError(error) }), 'error')
             return false
         }
     }

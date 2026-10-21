@@ -345,20 +345,46 @@ pub async fn dispatch_data_command(
 #[cfg(not(feature = "desktop"))]
 fn parse_body<T: DeserializeOwned>(body: Value) -> Result<T, ApplicationError> {
     serde_json::from_value(body).map_err(|error| {
-        ApplicationError::invalid_input(format!("invalid data command body: {error}"))
+        ApplicationError::invalid_input(format!("invalid data command body: {error}")).with_origin(
+            crate::error_diagnostics::ErrorOrigin::from_error(&error).context(
+                "data",
+                "parse_request",
+                None,
+            ),
+        )
     })
 }
 
 /// Serializes a successful response into the exact historical wire shape.
 #[cfg(not(feature = "desktop"))]
 fn to_value<T: Serialize>(value: T) -> Result<Value, ApplicationError> {
-    serde_json::to_value(value).map_err(|error| ApplicationError::internal(error.to_string()))
+    serde_json::to_value(value).map_err(|error| {
+        ApplicationError::internal(error.to_string()).with_origin(
+            crate::error_diagnostics::ErrorOrigin::from_error(&error).context(
+                "data",
+                "serialize_response",
+                None,
+            ),
+        )
+    })
 }
 
 /// Maps a store failure to a stable internal application error.
 #[cfg(not(feature = "desktop"))]
-fn store_error(error: impl std::fmt::Display) -> ApplicationError {
-    ApplicationError::internal(error.to_string())
+fn store_error(error: crate::db::StoreError) -> ApplicationError {
+    let origin = error.error_origin().context("data", "store", None);
+    ApplicationError::internal(error.to_string()).with_origin(origin)
+}
+
+fn diagnostic_error(error: &(dyn std::error::Error + 'static)) -> ApplicationError {
+    ApplicationError::internal(error.to_string()).with_origin(
+        crate::error_diagnostics::ErrorOrigin::from_error(error).context("data", "operation", None),
+    )
+}
+
+#[cfg(not(feature = "desktop"))]
+fn text_error(message: String) -> ApplicationError {
+    ApplicationError::internal(message)
 }
 
 /// Resolves the writer/reader runtime the store owns.
@@ -948,8 +974,8 @@ fn sandbox_add_core(
 ) -> Result<Value, ApplicationError> {
     let SandboxSchemeBody { scheme } = parse_body(body)?;
     let mut scheme = scheme;
-    scheme.id = svc.tsid_generator.generate().map_err(store_error)?;
-    assign_missing_scheme_item_ids(&mut scheme, &svc.tsid_generator).map_err(store_error)?;
+    scheme.id = svc.tsid_generator.generate().map_err(text_error)?;
+    assign_missing_scheme_item_ids(&mut scheme, &svc.tsid_generator).map_err(text_error)?;
     svc.main_store
         .add_sandbox_scheme(&scheme)
         .map_err(store_error)?;
@@ -963,7 +989,7 @@ fn sandbox_update_core(
 ) -> Result<Value, ApplicationError> {
     let SandboxSchemeBody { scheme } = parse_body(body)?;
     let mut scheme = scheme;
-    assign_missing_scheme_item_ids(&mut scheme, &svc.tsid_generator).map_err(store_error)?;
+    assign_missing_scheme_item_ids(&mut scheme, &svc.tsid_generator).map_err(text_error)?;
     svc.main_store
         .update_sandbox_scheme(&scheme)
         .map_err(store_error)?;
@@ -999,7 +1025,7 @@ fn sensitive_update_core(
     body: Value,
 ) -> Result<Value, ApplicationError> {
     let SensitiveConfigBody { config } = parse_body(body)?;
-    let config_value = serde_json::to_value(&config).map_err(store_error)?;
+    let config_value = serde_json::to_value(&config).map_err(|error| diagnostic_error(&error))?;
     svc.main_store
         .set_config("sensitive_config", &config_value)
         .map_err(store_error)?;
@@ -1690,7 +1716,7 @@ async fn backup_setting_core(
         .and_then(|mut backup| backup.backup_to_directory())
     })
     .await
-    .map_err(store_error)?
+    .map_err(|error| diagnostic_error(&error))?
     .map_err(store_error)?;
     Ok(Value::Null)
 }
@@ -1955,6 +1981,42 @@ fn resolve_model_profile_core(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn store_error_keeps_internal_kind_and_typed_origin() {
+        use crate::error_diagnostics::{ErrorOrigin, ErrorProjection, FailureMessage};
+        let store = crate::db::StoreError::Query(
+            FailureMessage::leaf("wrapped store message").with_origin(ErrorOrigin::leaf(
+                "disk failed: token=CANARY",
+                None,
+                Some("internal_error".into()),
+                Some(503),
+            )),
+        );
+        let error = store_error(store);
+        assert_eq!(
+            error.kind,
+            crate::workflow::react::application_types::ApplicationErrorKind::Internal
+        );
+        assert_eq!(error.to_string(), "wrapped store message");
+        assert!(!error.user_error().message.contains("CANARY"));
+        assert!(error.user_error().message.starts_with("disk failed:"));
+        assert_eq!(
+            error.origin.as_ref().unwrap().code.as_deref(),
+            Some("internal_error")
+        );
+        assert!(error
+            .origin
+            .as_ref()
+            .unwrap()
+            .frames
+            .iter()
+            .any(|frame| frame.module == "data"));
+        assert_eq!(
+            text_error("already exists".into()).user_error().reason,
+            None
+        );
+    }
 
     #[test]
     fn allowlist_covers_known_commands_and_rejects_unknown() {

@@ -403,6 +403,7 @@ import { useModelStore } from '@/stores/model'
 import { useWindowStore } from '@/stores/window'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage, isEmpty } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { sendSyncState } from '@/libs/sync'
 import { writeClipboard } from '@/libs/clipboard'
 import {
@@ -914,7 +915,7 @@ const loadTrendPopoverData = async proxy => {
 
     trendPendingRender.value = true
   } catch (error) {
-    trendError.value = formatError(error)
+    trendError.value = formatUserError(error, t('common.errorFallback'))
     trendPendingRender.value = false
     destroyTrendChart()
   } finally {
@@ -995,20 +996,18 @@ const handleHide = async () => {
   }
 }
 
-const formatError = error => {
-  if (typeof error?.toFormattedString === 'function') {
-    return error.toFormattedString()
-  }
-  return error?.message || String(error)
-}
-
 const copyProxyIdToClipboard = async alias => {
   try {
     await writeClipboard(alias)
     showMessage(t('proxySwitcher.proxyIdCopySuccess'), 'success')
   } catch (error) {
     console.error('Failed to copy proxy server id:', error)
-    showMessage(t('proxySwitcher.proxyIdCopyFailed', { error: formatError(error) }), 'error')
+    showMessage(
+      t('proxySwitcher.proxyIdCopyFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
   }
 }
 
@@ -1018,7 +1017,12 @@ const handleActivateGroup = async name => {
     await proxyGroupStore.setActiveGroup(name)
     sendSyncState('proxy_group_changed', 'proxy_switcher', { activeGroup: name })
   } catch (error) {
-    showMessage(t('settings.proxyGroup.saveFailed', { error: formatError(error) }), 'error')
+    showMessage(
+      t('settings.proxyGroup.saveFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
   }
 }
 
@@ -1093,7 +1097,12 @@ const saveSelectedTargets = async targets => {
     })
     return true
   } catch (error) {
-    showMessage(t('settings.proxy.saveFailed', { error: formatError(error) }), 'error')
+    showMessage(
+      t('settings.proxy.saveFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
     return false
   }
 }
@@ -1187,7 +1196,12 @@ const handleToggleToolCompatMode = async group => {
       'success'
     )
   } catch (error) {
-    showMessage(t('settings.proxyGroup.saveFailed', { error: formatError(error) }), 'error')
+    showMessage(
+      t('settings.proxyGroup.saveFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
   }
 }
 

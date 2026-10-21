@@ -59,7 +59,10 @@ impl MainStore {
                     e
                 );
                 StoreError::JsonError(
-                    t!("db.json_parse_failed_mcp_config", error = e.to_string()).to_string(),
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!("db.json_parse_failed_mcp_config", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 )
             })?;
 
@@ -103,7 +106,10 @@ impl MainStore {
         let _config_update_guard = self.config_update_lock.lock();
         let config_json = serde_json::to_string(&config).map_err(|e| {
             StoreError::JsonError(
-                t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
+                )
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         let (id, mcps) = self.db_runtime()?.write_blocking(move |conn| {
@@ -147,7 +153,10 @@ impl MainStore {
         let description = description.to_string();
         let config_json = serde_json::to_string(&config).map_err(|e| {
             StoreError::JsonError(
-                t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.json_serialize_failed_mcp_config", error = e.to_string()).to_string(),
+                )
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         let mcps = self.db_runtime()?.write_blocking(move |conn| {

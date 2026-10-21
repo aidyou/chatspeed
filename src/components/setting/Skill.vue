@@ -158,6 +158,8 @@ import { Sortable } from 'sortablejs-vue3'
 
 import iconfonts from '@/components/icon/type.js'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
+import { FrontendAppError } from '@/libs/tauri'
 
 import { useSettingStore } from '@/stores/setting'
 import { useSkillStore } from '@/stores/skill'
@@ -347,13 +349,10 @@ const updateSkill = () => {
         })
         .catch(err => {
           if (err instanceof FrontendAppError) {
-            showMessage(t('settings.skill.saveFailed', { error: err.toFormattedString() }), 'error')
+            showMessage(formatUserError(err, t('settings.skill.saveFailed')), 'error')
             console.error(`Error updating skill: ${err.toFormattedString()}`, err.originalError)
           } else {
-            showMessage(
-              t('settings.skill.saveFailed', { error: err.message || String(err) }),
-              'error'
-            )
+            showMessage(formatUserError(err, t('settings.skill.saveFailed')), 'error')
             console.error('Error updating skill:', err)
           }
         })
@@ -382,13 +381,10 @@ const deleteSkill = id => {
       })
       .catch(err => {
         if (err instanceof FrontendAppError) {
-          showMessage(t('settings.skill.deleteFailed', { error: err.toFormattedString() }), 'error')
+          showMessage(formatUserError(err, t('settings.skill.deleteFailed')), 'error')
           console.error(`Error deleting skill: ${err.toFormattedString()}`, err.originalError)
         } else {
-          showMessage(
-            t('settings.skill.deleteFailed', { error: err.message || String(err) }),
-            'error'
-          )
+          showMessage(formatUserError(err, t('settings.skill.deleteFailed')), 'error')
           console.error('Error deleting skill:', err)
         }
       })
@@ -405,16 +401,10 @@ const onDragEnd = () => {
         `settings.skill.updateOrderFailed: ${err.toFormattedString()}`,
         err.originalError
       )
-      showMessage(
-        t('settings.skill.updateOrderFailed', { error: err.toFormattedString() }),
-        'error'
-      )
+      showMessage(formatUserError(err, t('settings.skill.updateOrderFailed')), 'error')
     } else {
       console.error('settings.skill.updateOrderFailed', err)
-      showMessage(
-        t('settings.skill.updateOrderFailed', { error: err.message || String(err) }),
-        'error'
-      )
+      showMessage(formatUserError(err, t('settings.skill.updateOrderFailed')), 'error')
     }
   })
 }
@@ -462,12 +452,10 @@ const showPresetSkills = async () => {
         `Failed to load preset skills: ${error.toFormattedString()}`,
         error.originalError
       )
-      ElMessage.error(t('settings.skill.loadPresetError', { error: error.toFormattedString() }))
+      ElMessage.error(formatUserError(error, t('settings.skill.loadPresetError')))
     } else {
       console.error('Failed to load preset skills:', error)
-      ElMessage.error(
-        t('settings.skill.loadPresetError', { error: error.message || String(error) })
-      )
+      ElMessage.error(formatUserError(error, t('settings.skill.loadPresetError')))
     }
   }
 }
@@ -505,11 +493,18 @@ const importSkill = skill => {
     })
     .catch(err => {
       if (err instanceof FrontendAppError) {
-        showMessage(t('settings.skill.importFailed', { error: err.toFormattedString() }), 'error')
+        showMessage(
+          t('settings.skill.importFailed', {
+            error: formatUserError(err, t('common.errorFallback'))
+          }),
+          'error'
+        )
         console.error(`Error importing skill: ${err.toFormattedString()}`, err.originalError)
       } else {
         showMessage(
-          t('settings.skill.importFailed', { error: err.message || String(err) }),
+          t('settings.skill.importFailed', {
+            error: formatUserError(err, t('common.errorFallback'))
+          }),
           'error'
         )
         console.error('Error importing skill:', err)

@@ -12,7 +12,7 @@ impl MobileFilter {
         let regex = Regex::new(r#"\b(?:\+?1[-\s.]?)?\(?\d{3}\)?[-\s.]?\d{3}[-\s.]?\d{4}\b"#)
             .map_err(|e| SensitiveError::RegexCompilationFailed {
                 pattern: "en_mobile_regex".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             })?;
         Ok(Self { regex })
     }

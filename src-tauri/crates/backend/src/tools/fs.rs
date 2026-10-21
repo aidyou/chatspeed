@@ -74,12 +74,18 @@ fn validate_tool_path_for_listing(
         ));
     }
     if let Some(path_guard) = path_guard {
-        let guard = path_guard
-            .read()
-            .map_err(|e| ToolError::ExecutionFailed(format!("PathGuard lock poisoned: {}", e)))?;
-        guard
-            .validate_for_listing(path, false)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Security Error: {}", e)))?;
+        let guard = path_guard.read().map_err(|e| {
+            ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
+                "PathGuard lock poisoned: {}",
+                e
+            )))
+        })?;
+        guard.validate_for_listing(path, false).map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!("Security Error: {}", e))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
+        })?;
     }
     Ok(())
 }
@@ -95,12 +101,17 @@ fn is_tool_path_allowed(
     let Some(path_guard) = path_guard else {
         return Ok(true);
     };
-    let guard = path_guard
-        .read()
-        .map_err(|error| ToolError::ExecutionFailed(format!("PathGuard lock poisoned: {error}")))?;
-    guard
-        .is_chatspeed_allowed(path, is_dir)
-        .map_err(|error| ToolError::ExecutionFailed(format!("Security Error: {error}")))
+    let guard = path_guard.read().map_err(|error| {
+        ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
+            "PathGuard lock poisoned: {error}"
+        )))
+    })?;
+    guard.is_chatspeed_allowed(path, is_dir).map_err(|error| {
+        ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(format!("Security Error: {error}"))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )
+    })
 }
 
 fn format_read_file_open_error(path_str: &str, error: &std::io::Error) -> ToolError {
@@ -293,10 +304,13 @@ fn execute_read_file(
             continue;
         }
         if content.len() > READ_FILE_MAX_LINE_LENGTH {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Line {} is too long. Use 'grep' or read_file with a smaller targeted range.",
-                i + 1
-            )));
+            return Err(ToolError::ExecutionFailed(
+                format!(
+                    "Line {} is too long. Use 'grep' or read_file with a smaller targeted range.",
+                    i + 1
+                )
+                .into(),
+            ));
         }
         let rendered_line = format!("{:>6}\t{}", i + 1, content);
         let rendered_len = rendered_line.chars().count() + 1;
@@ -527,7 +541,7 @@ fn execute_edit_file(
             return Err(ToolError::ExecutionFailed(format!(
                 "The old_string is not unique (found {} matches with Windows line endings). Please provide more surrounding context to uniquely identify the location.",
                 matches.len()
-            )));
+            ).into()));
         }
 
         start_line = raw_content[..matches[0]].lines().count();
@@ -546,7 +560,7 @@ fn execute_edit_file(
             return Err(ToolError::ExecutionFailed(format!(
                 "The old_string is not unique (found {} matches with Unix line endings). Please provide more surrounding context to uniquely identify the location.",
                 matches.len()
-            )));
+            ).into()));
         }
 
         start_line = raw_content[..matches[0]].lines().count();
@@ -569,7 +583,7 @@ fn execute_edit_file(
                 return Err(ToolError::ExecutionFailed(format!(
                     "The old_string is not unique (found {} matches after normalization). Please provide more surrounding context.",
                     matches.len()
-                )));
+                ).into()));
             }
 
             start_line = normalized_file[..matches[0]].lines().count();
@@ -593,7 +607,7 @@ fn execute_edit_file(
         return Err(ToolError::ExecutionFailed(format!(
             "The old_string was not found in the file (checked {} lines). Please ensure you copied the text EXACTLY, including all whitespace and indentation.",
             lines_count
-        )));
+        ).into()));
     }
 
     fs::write(&resolved_path, &final_content).map_err(|e| {
@@ -1409,7 +1423,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             match e {
-                ToolError::ExecutionFailed(msg) => assert!(msg.contains("too long")),
+                ToolError::ExecutionFailed(msg) => assert!(msg.as_str().contains("too long")),
                 _ => panic!("Expected ExecutionFailed error"),
             }
         }
@@ -1768,7 +1782,7 @@ mod tests {
         let result = tool.call(params).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            ToolError::ExecutionFailed(msg) => assert!(msg.contains("not unique")),
+            ToolError::ExecutionFailed(msg) => assert!(msg.as_str().contains("not unique")),
             _ => panic!("Expected ExecutionFailed error"),
         }
     }
@@ -1790,7 +1804,7 @@ mod tests {
         let result = tool.call(params).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            ToolError::ExecutionFailed(msg) => assert!(msg.contains("not found")),
+            ToolError::ExecutionFailed(msg) => assert!(msg.as_str().contains("not found")),
             _ => panic!("Expected ExecutionFailed error"),
         }
     }

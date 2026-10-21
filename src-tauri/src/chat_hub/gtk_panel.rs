@@ -15,6 +15,7 @@
 use std::rc::Rc;
 use std::sync::{Mutex, MutexGuard};
 
+use chatspeed_runtime_backend::error_diagnostics::FailureMessage;
 use tauri::{AppHandle, PhysicalSize, Wry};
 use wry::{WebContext, WebView, WebViewBuilderExtUnix, WebViewExtUnix};
 
@@ -93,7 +94,7 @@ impl ChatHubPageState {
         let key = tab_id.unwrap_or_else(|| DEFAULT_TAB_ID.to_string());
         if key.is_empty() {
             return Err(AppError::General {
-                message: "the ChatHub tab id is empty".to_string(),
+                message: FailureMessage::leaf("the ChatHub tab id is empty"),
             });
         }
 
@@ -150,7 +151,7 @@ impl ChatHubPageState {
 
         let tabs = &mut inner.tabs;
         let tab = tabs.get_mut(&key).ok_or_else(|| AppError::General {
-            message: "the ChatHub tab is missing".to_string(),
+            message: FailureMessage::leaf("the ChatHub tab is missing"),
         })?;
 
         if tab.url != url {
@@ -187,7 +188,7 @@ impl ChatHubPageState {
     pub fn reload(&self, _app: &AppHandle<Wry>, tab_id: &str) -> Result<()> {
         let inner = self.lock()?;
         let tab = inner.tabs.get(tab_id).ok_or_else(|| AppError::General {
-            message: format!("the ChatHub tab '{tab_id}' is not open"),
+            message: FailureMessage::leaf(format!("the ChatHub tab '{tab_id}' is not open")),
         })?;
 
         tab.webview.reload()?;
@@ -263,7 +264,7 @@ impl ChatHubPageState {
     /// Locks the state, reporting a poisoned lock as a plain error instead of a panic.
     fn lock(&self) -> Result<MutexGuard<'_, Inner>> {
         self.inner.lock().map_err(|_| AppError::General {
-            message: "the ChatHub page state is poisoned".to_string(),
+            message: FailureMessage::leaf("the ChatHub page state is poisoned"),
         })
     }
 }

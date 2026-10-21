@@ -175,7 +175,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { writeClipboard } from '@/libs/clipboard'
-import { FrontendAppError } from '@/libs/tauri'
+import { formatUserError } from '@/libs/error'
 import { showMessage } from '@/libs/util'
 import { useMcpStore } from '@/stores/mcp'
 
@@ -369,8 +369,7 @@ const run = async () => {
     resultText.value = formatResult(rawResult)
     showMessage(t('settings.mcp.executeDialog.executeSuccess'), 'success')
   } catch (e) {
-    errorText.value =
-      e instanceof FrontendAppError ? e.toFormattedString() : e?.message || String(e)
+    errorText.value = formatUserError(e, t('common.errorFallback'))
     console.error('Error running MCP tool:', e)
   } finally {
     running.value = false
@@ -383,7 +382,10 @@ const copyResult = async () => {
     showMessage(t('common.copied'), 'success')
   } catch (e) {
     console.error('Failed to copy result:', e)
-    showMessage(t('common.operationFailed', { error: e?.message || String(e) }), 'error')
+    showMessage(
+      t('common.operationFailed', { error: formatUserError(e, t('common.errorFallback')) }),
+      'error'
+    )
   }
 }
 </script>

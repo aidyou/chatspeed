@@ -5,11 +5,20 @@
 
 use crate::ai::error::AiError;
 use crate::db::error::StoreError;
+use crate::error_diagnostics::{ErrorDiagnostic, ErrorOrigin, ErrorProjection, FailureMessage};
 use crate::tools::ToolError;
 
+use chatspeed_contracts::UserErrorPresentation;
 use serde::Serialize;
 use serde_json::{json, Value};
 use thiserror::Error;
+
+/// A compression precondition failure.
+///
+/// This aliases the shared failure carrier so a compression failure keeps one
+/// legacy display/serde string plus an optional structured origin, exactly like
+/// every other diagnostic-aware error.
+pub type CompressionFailure = FailureMessage;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkflowTerminalError {
@@ -96,7 +105,7 @@ pub enum WorkflowEngineError {
     /// tracked goal would silently drift, so this is a direct termination rather
     /// than a recoverable step error.
     #[error("Compression failed: {0}")]
-    CompressionFailed(String),
+    CompressionFailed(CompressionFailure),
 
     #[error("Gateway error: {0}")]
     Gateway(String),
@@ -118,6 +127,28 @@ pub enum WorkflowEngineError {
 }
 
 impl WorkflowEngineError {
+    /// Returns the structured cause for the failures that can carry one.
+    ///
+    /// Raw upstream bodies, provider status codes, and compression precondition
+    /// origins stay typed here instead of being re-derived from display text.
+    pub fn error_origin(&self) -> Option<ErrorOrigin> {
+        match self {
+            Self::Ai(error) => Some(error.error_origin()),
+            Self::Db(error) => Some(error.error_origin()),
+            Self::Tool(error) => Some(error.error_origin()),
+            Self::Cancelled(message)
+            | Self::Security(message)
+            | Self::Gateway(message)
+            | Self::General(message) => Some(ErrorOrigin::leaf(message, None, None, None)),
+            Self::LlmRetryExhausted {
+                source: Some(source),
+                ..
+            } => Some(source.error_origin()),
+            Self::CompressionFailed(failure) => failure.origin().cloned(),
+            _ => None,
+        }
+    }
+
     fn ai_terminal_error(
         error: &AiError,
         retry_attempts: Option<(u32, u32)>,
@@ -172,7 +203,7 @@ impl WorkflowEngineError {
     }
 
     pub fn terminal_error(&self) -> WorkflowTerminalError {
-        match self {
+        let mut terminal = match self {
             Self::Ai(error) => Self::ai_terminal_error(error, None),
             Self::LlmRetryExhausted {
                 source,
@@ -215,14 +246,166 @@ impl WorkflowEngineError {
                 error_type: "engine",
                 metadata: json!({ "error_type": "engine" }),
             },
+        };
+        let presentation = self.user_error();
+        terminal.metadata["user_error"] = serde_json::to_value(&presentation)
+            .unwrap_or_else(|_| json!({ "schema_version": 1, "message": presentation.message }));
+        terminal
+    }
+}
+
+impl ErrorProjection for WorkflowEngineError {
+    fn user_error(&self) -> UserErrorPresentation {
+        FailureMessage {
+            legacy: self.to_string(),
+            origin: self.error_origin(),
         }
+        .user_error()
+    }
+
+    fn diagnostic(&self) -> ErrorDiagnostic {
+        let mut diagnostic = FailureMessage {
+            legacy: self.to_string(),
+            origin: self.error_origin(),
+        }
+        .diagnostic();
+        diagnostic.module = "workflow".into();
+        diagnostic.operation = "engine".into();
+        diagnostic
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::WorkflowEngineError;
+    use super::{CompressionFailure, WorkflowEngineError};
     use crate::ai::error::AiError;
+    use crate::error_diagnostics::{ErrorOrigin, ErrorProjection, FailureMessage};
+
+    #[test]
+    fn typed_domain_and_leaf_causes_do_not_gain_engine_prefixes_in_ui() {
+        for error in [
+            WorkflowEngineError::Tool(crate::tools::ToolError::ExecutionFailed(
+                FailureMessage::leaf("legacy tool wrapper").with_origin(ErrorOrigin::leaf(
+                    "tool refused token=CANARY",
+                    None,
+                    None,
+                    Some(503),
+                )),
+            )),
+            WorkflowEngineError::Db(crate::db::StoreError::IoError(
+                FailureMessage::leaf("legacy store wrapper").with_origin(ErrorOrigin::leaf(
+                    "store refused token=CANARY",
+                    None,
+                    None,
+                    Some(503),
+                )),
+            )),
+            WorkflowEngineError::General("leaf refused token=CANARY".to_string()),
+        ] {
+            let legacy = error.to_string();
+            let terminal = error.terminal_error();
+            assert!(terminal.content.contains(&legacy));
+            let presentation = error.user_error();
+            assert!(!presentation.message.contains("CANARY"));
+            assert!(!presentation.message.contains("legacy"));
+            assert!(!presentation.message.contains("General error:"));
+            assert!(!presentation.message.contains("Tool error:"));
+            assert!(!presentation.message.contains("Database error:"));
+            assert_eq!(
+                terminal.metadata["user_error"]["message"],
+                presentation.message
+            );
+        }
+    }
+
+    #[test]
+    fn compression_failure_keeps_legacy_display_and_serialized_string() {
+        let error = WorkflowEngineError::CompressionFailed(CompressionFailure::leaf(
+            "Goal tracking failed after 5 attempts",
+        ));
+
+        assert_eq!(
+            error.to_string(),
+            "Compression failed: Goal tracking failed after 5 attempts"
+        );
+        assert_eq!(
+            serde_json::to_value(&error).expect("serialize compression failure"),
+            serde_json::json!({
+                "type": "CompressionFailed",
+                "details": "Goal tracking failed after 5 attempts"
+            })
+        );
+    }
+
+    #[test]
+    fn terminal_ai_error_appends_safe_user_error_to_existing_metadata() {
+        let raw_body = r#"{"error":{"message":"quota exhausted"}}"#;
+        let terminal = WorkflowEngineError::Ai(AiError::RawApiRequestFailed {
+            status_code: 429,
+            provider: "provider".to_string(),
+            details: raw_body.to_string(),
+        })
+        .terminal_error();
+
+        assert_eq!(terminal.content, raw_body);
+        assert_eq!(terminal.error_type, "rate_limited");
+        assert_eq!(terminal.metadata["error_type"], "rate_limited");
+        assert_eq!(terminal.metadata["upstream_status_code"], 429);
+        assert_eq!(terminal.metadata["provider"], "provider");
+        assert_eq!(terminal.metadata["user_error"]["schema_version"], 1);
+        assert_eq!(
+            terminal.metadata["user_error"]["message"],
+            "quota exhausted"
+        );
+        assert_eq!(terminal.metadata["user_error"]["upstream_status"], 429);
+    }
+
+    #[test]
+    fn compression_terminal_keeps_exact_content_and_projects_source_user_error() {
+        let cause = AiError::RawApiRequestFailed {
+            status_code: 503,
+            provider: "provider".to_string(),
+            details: r#"{"error":{"message":"overloaded"}}"#.to_string(),
+        };
+        let last_error = format!("Goal tracking failed after 5 attempts: {cause}");
+        let failure =
+            CompressionFailure::leaf(last_error.clone()).with_origin(cause.error_origin());
+        let terminal = WorkflowEngineError::CompressionFailed(failure).terminal_error();
+
+        assert_eq!(
+            terminal.content,
+            format!(
+                "Compression failed: {last_error}\n<SYSTEM_REMINDER>Compression is a precondition for continuing this task: without a valid handoff the context would drift. This is a fatal error, not a retryable tool-argument problem. Inform the user that the workflow stopped because context compression could not be prepared, and do not attempt to continue the task.</SYSTEM_REMINDER>"
+            )
+        );
+        assert_eq!(terminal.error_type, "compression_failed");
+        assert_eq!(terminal.metadata["error_type"], "compression_failed");
+        assert_eq!(terminal.metadata["user_error"]["message"], "overloaded");
+        assert_eq!(terminal.metadata["user_error"]["upstream_status"], 503);
+    }
+
+    #[test]
+    fn compression_origin_keeps_the_latest_typed_cause() {
+        let failure = CompressionFailure::leaf("Goal tracking failed").with_origin(
+            ErrorOrigin::leaf("parse failed", None, None, None).context(
+                "workflow",
+                "parse_goals",
+                None,
+            ),
+        );
+        let error = WorkflowEngineError::CompressionFailed(failure);
+        let origin = error.error_origin().expect("compression origin");
+        assert_eq!(origin.message, "parse failed");
+        assert_eq!(origin.frames[0].operation, "parse_goals");
+
+        let without_origin =
+            WorkflowEngineError::CompressionFailed(CompressionFailure::leaf("no typed cause"));
+        assert!(without_origin.error_origin().is_none());
+        assert_eq!(
+            without_origin.user_error().message,
+            "Compression failed: no typed cause"
+        );
+    }
 
     #[test]
     fn terminal_ai_errors_expose_structured_auth_and_billing_types() {
@@ -276,9 +459,9 @@ mod tests {
 
     #[test]
     fn compression_failures_terminate_with_an_explicit_precondition_message() {
-        let terminal = WorkflowEngineError::CompressionFailed(
-            "Goal tracking failed after 5 attempts".to_string(),
-        )
+        let terminal = WorkflowEngineError::CompressionFailed(CompressionFailure::leaf(
+            "Goal tracking failed after 5 attempts",
+        ))
         .terminal_error();
 
         assert_eq!(terminal.error_type, "compression_failed");
@@ -290,6 +473,31 @@ mod tests {
         assert!(!terminal
             .content
             .contains("correct your parameters and retry"));
+    }
+
+    #[test]
+    fn terminal_error_fixture_keeps_legacy_engine_content_and_tagged_serialization() {
+        let error = WorkflowEngineError::General("legacy engine detail".to_string());
+        assert_eq!(
+            serde_json::to_value(&error).expect("serialize engine error"),
+            serde_json::json!({"type": "General", "details": "legacy engine detail"})
+        );
+        let terminal = error.terminal_error();
+        assert_eq!(terminal.error_type, "engine");
+        assert_eq!(
+            terminal.metadata,
+            serde_json::json!({
+                "error_type": "engine",
+                "user_error": {
+                    "schema_version": 1,
+                    "message": "legacy engine detail"
+                }
+            })
+        );
+        assert_eq!(
+            terminal.content,
+            "Critical Error: General error: legacy engine detail\n<SYSTEM_REMINDER>A fatal error occurred in the execution engine. If this error is related to invalid tool arguments, please correct your parameters and retry. If it is a system-level issue, please inform the user about the failure.</SYSTEM_REMINDER>"
+        );
     }
 
     #[test]

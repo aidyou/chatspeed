@@ -20,7 +20,7 @@ impl InternationalCreditCardFilter {
         let regex = Regex::new(&patterns.join("|")).map_err(|e| {
             SensitiveError::RegexCompilationFailed {
                 pattern: "international_credit_card_regex".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             }
         })?;
         Ok(Self { regex })

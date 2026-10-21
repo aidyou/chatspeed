@@ -40,12 +40,15 @@
 //! The runtime owns no WebView: this module is compiled only for the desktop-free
 //! build and the desktop control plane keeps exactly its previous routes.
 
+use crate::ai::error::AiError;
 use crate::ai::interaction::chat_completion::{
     list_models_async, start_new_chat_interaction, ChatState,
 };
 use crate::ai::traits::chat::{ChatMetadata, ChatResponse, MessageType, ModelDetails};
 use crate::ccproxy::ChatProtocol;
 use crate::db::MainStore;
+use crate::error::AppError;
+use crate::error_diagnostics::ErrorProjection;
 use crate::libs::window_channels::ChannelHandle;
 use crate::workflow::react::client::http::dto;
 use crate::workflow::react::client::http::server::{with_idempotency, ControlPlaneState};
@@ -57,8 +60,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chatspeed_contracts::{
     ChatProtocolDto, ChatResponseDto, ChatStartRequest, ChatStartResponse, ChatStopRequest,
-    ChatStopResponse, ChatStreamEnvelope, ChatStreamEvent, ErrorDetail, FinishReasonDto,
-    ListModelsRequest, MessageTypeDto, ModelDetailsDto,
+    ChatStopResponse, ChatStreamEnvelope, ChatStreamEvent, ErrorDetail, ErrorEnvelope,
+    FinishReasonDto, ListModelsRequest, MessageTypeDto, ModelDetailsDto, UserErrorPresentation,
 };
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -255,11 +258,12 @@ async fn list_runtime_models(State(state): State<ControlPlaneState>, body: Strin
                 .collect::<Vec<_>>();
             Json(models).into_response()
         }
-        Err(error) => dto::error_response(
-            StatusCode::BAD_GATEWAY,
-            "model_list_failed",
-            error.to_string(),
-        ),
+        Err(error) => {
+            let presentation = model_list_error_presentation(&error);
+            let body = ErrorEnvelope::new("model_list_failed", error.to_string())
+                .with_presentation(presentation);
+            (StatusCode::BAD_GATEWAY, Json(body)).into_response()
+        }
     }
 }
 
@@ -378,17 +382,20 @@ async fn start_runtime_chat_inner(
             };
             // The turn never reached the dispatcher: terminate any observer the
             // client already attached with an explicit typed error.
+            let presentation = error.user_error();
             state.chat_streams.publish(
                 &chat_id,
                 ChatStreamEvent::Error {
                     error: ErrorDetail {
                         code: code.to_string(),
                         message: error.to_string(),
+                        presentation: Some(presentation.clone()),
                     },
                 },
             );
             end_chat_stream(&state.chat_streams, &chat_id).await;
-            dto::error_response(status, code, error.to_string())
+            let body = ErrorEnvelope::new(code, error.to_string()).with_presentation(presentation);
+            (status, Json(body)).into_response()
         }
     }
 }
@@ -519,6 +526,19 @@ async fn forward_chat_responses(
         );
         let finish_reason = response.finish_reason;
         let is_error = matches!(response.r#type, MessageTypeDto::Error);
+        // The canonical error chunk carries the safe application projection; the
+        // typed terminal envelope keeps its stable code/message but forwards it.
+        let user_error = if is_error {
+            response
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("user_error"))
+                .and_then(|value| {
+                    serde_json::from_value::<UserErrorPresentation>(value.clone()).ok()
+                })
+        } else {
+            None
+        };
         broker.publish(&chat_id, ChatStreamEvent::Response { response });
         if terminal {
             if is_error {
@@ -528,6 +548,7 @@ async fn forward_chat_responses(
                         error: ErrorDetail {
                             code: "chat_error".to_string(),
                             message: "The chat turn ended with an error".to_string(),
+                            presentation: user_error,
                         },
                     },
                 );
@@ -545,6 +566,7 @@ async fn forward_chat_responses(
                 error: ErrorDetail {
                     code: "chat_stream_detached".to_string(),
                     message: "The chat turn stopped producing output".to_string(),
+                    presentation: None,
                 },
             },
         );
@@ -566,6 +588,19 @@ async fn end_chat_stream(broker: &ChatStreamBroker, chat_id: &str) {
 
 fn require_chat_plane(state: &ControlPlaneState) -> Result<Arc<dyn RuntimeChatPlane>, Response> {
     state.chat.clone().ok_or_else(runtime_unavailable_response)
+}
+
+/// Keeps the provider's real HTTP answer for list models while the AiError status
+/// still keeps its historical retry classification.
+fn model_list_error_presentation(error: &AppError) -> UserErrorPresentation {
+    if let AppError::Ai(AiError::ApiRequestFailed { details, .. }) = error {
+        if let Some(origin) = details.origin() {
+            if origin.status.is_some() || origin.reason.is_some() {
+                return details.user_error();
+            }
+        }
+    }
+    error.user_error()
 }
 
 /// Stable answer for a control plane whose process owns no runtime chat.
@@ -850,12 +885,21 @@ mod tests {
         let entry = broker.entry("chat-1");
         let mut subscription = entry.subscribe();
         let (tx, mut rx) = mpsc::channel::<Arc<ChatResponse>>(8);
-        tx.send(Arc::new(chunk(
-            "chat-1",
-            "{\"error\":\"boom\"}",
-            MessageType::Error,
-            Some(FinishReason::Error),
-        )))
+        tx.send(Arc::new(ChatResponse {
+            chat_id: "chat-1".to_string(),
+            chunk: "{\"error\":\"boom\"}".to_string(),
+            r#type: MessageType::Error,
+            metadata: Some(json!({
+                "windowLabel": "main",
+                "user_error": {
+                    "schema_version": 1,
+                    "message": "Provider declined the request",
+                    "reason": "unsupported_list_models",
+                    "upstream_status": 405
+                }
+            })),
+            finish_reason: Some(FinishReason::Error),
+        }))
         .await
         .expect("error chunk");
         drop(tx);
@@ -865,8 +909,47 @@ mod tests {
         let response = subscription.recv().await.expect("error response");
         assert!(matches!(response.event, ChatStreamEvent::Response { .. }));
         let terminal = subscription.recv().await.expect("terminal error");
-        assert!(matches!(terminal.event, ChatStreamEvent::Error { .. }));
+        let ChatStreamEvent::Error { error } = &terminal.event else {
+            panic!("expected a typed terminal error");
+        };
+        assert_eq!(error.code, "chat_error");
+        assert_eq!(error.message, "The chat turn ended with an error");
+        let presentation = error.presentation.as_ref().expect("safe presentation");
+        assert_eq!(presentation.message, "Provider declined the request");
+        assert_eq!(
+            presentation.reason,
+            Some(chatspeed_contracts::ErrorReason::UnsupportedListModels)
+        );
+        assert_eq!(presentation.upstream_status, Some(405));
         assert!(terminal.is_terminal());
+    }
+
+    #[test]
+    fn model_list_presentation_uses_the_actual_network_origin() {
+        use crate::error_diagnostics::{ErrorOrigin, FailureMessage};
+
+        let error = AppError::Ai(AiError::ApiRequestFailed {
+            status_code: 500,
+            provider: "OpenAI".to_string(),
+            details: FailureMessage::leaf("legacy list models failure").with_origin(
+                ErrorOrigin::leaf(
+                    "list models is not supported",
+                    Some(chatspeed_contracts::ErrorReason::UnsupportedListModels),
+                    None,
+                    Some(405),
+                ),
+            ),
+        });
+
+        let presentation = model_list_error_presentation(&error);
+        assert_eq!(presentation.message, "list models is not supported");
+        assert_eq!(
+            presentation.reason,
+            Some(chatspeed_contracts::ErrorReason::UnsupportedListModels)
+        );
+        assert_eq!(presentation.upstream_status, Some(405));
+        // The AiError projection keeps its historical retry status.
+        assert_eq!(error.user_error().upstream_status, Some(500));
     }
 
     #[tokio::test]
@@ -888,6 +971,7 @@ mod tests {
                 error: ErrorDetail {
                     code: "chat_stream_detached".to_string(),
                     message: "The chat turn stopped producing output".to_string(),
+                    presentation: None,
                 },
             }
         );

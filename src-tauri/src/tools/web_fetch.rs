@@ -17,6 +17,7 @@ use crate::{
     },
     tools::{web_config::WebToolConfig, ToolCallResult, ToolError},
 };
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 
 const DIRECT_TEXT_FETCH_EXTENSIONS: &[&str] = &[
     "bat",
@@ -195,12 +196,15 @@ impl WebFetch {
         if let Some(proxy_server) = proxy.server.as_ref() {
             let mut reqwest_proxy = reqwest::Proxy::all(proxy_server).map_err(|e| {
                 ToolError::ExecutionFailed(
-                    t!(
-                        "tools.web_scraper_failed",
-                        url = url,
-                        details = e.to_string()
+                    FailureMessage::leaf(
+                        t!(
+                            "tools.web_scraper_failed",
+                            url = url,
+                            details = e.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(ErrorOrigin::from_error(&e)),
                 )
             })?;
             if let (Some(username), Some(password)) =
@@ -212,12 +216,15 @@ impl WebFetch {
         }
         let client = client_builder.build().map_err(|e| {
             ToolError::ExecutionFailed(
-                t!(
-                    "tools.web_scraper_failed",
-                    url = url,
-                    details = e.to_string()
+                FailureMessage::leaf(
+                    t!(
+                        "tools.web_scraper_failed",
+                        url = url,
+                        details = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -246,12 +253,15 @@ impl WebFetch {
             .await
             .map_err(|e| {
                 ToolError::ExecutionFailed(
-                    t!(
-                        "tools.web_scraper_failed",
-                        url = url,
-                        details = e.to_string()
+                    FailureMessage::leaf(
+                        t!(
+                            "tools.web_scraper_failed",
+                            url = url,
+                            details = e.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(ErrorOrigin::from_error(&e)),
                 )
             })?;
 
@@ -277,12 +287,15 @@ impl WebFetch {
         })
         .map_err(|e| {
             ToolError::ExecutionFailed(
-                t!(
-                    "tools.web_scraper_failed",
-                    url = url,
-                    details = e.to_string()
+                FailureMessage::leaf(
+                    t!(
+                        "tools.web_scraper_failed",
+                        url = url,
+                        details = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(e.error_origin()),
             )
         })?;
 
@@ -295,24 +308,27 @@ impl WebFetch {
             .await
             .map_err(|e| {
                 ToolError::ExecutionFailed(
-                    t!(
-                        "tools.web_scraper_failed",
-                        url = url,
-                        details = e.to_string()
+                    FailureMessage::leaf(
+                        t!(
+                            "tools.web_scraper_failed",
+                            url = url,
+                            details = e.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(e.error_origin()),
                 )
             })?;
 
         if !response.is_success() {
-            return Err(ToolError::ExecutionFailed(
+            return Err(ToolError::ExecutionFailed(FailureMessage::leaf(
                 t!(
                     "tools.web_scraper_failed",
                     url = url,
                     details = format!("unexpected status {}", response.status)
                 )
                 .to_string(),
-            ));
+            )));
         }
 
         Ok(response.body.unwrap_or_default())
@@ -383,12 +399,15 @@ impl WebFetch {
                 .await
                 .map_err(|e| {
                     ToolError::ExecutionFailed(
-                        t!(
-                            "tools.web_scraper_failed",
-                            url = url,
-                            details = e.to_string()
+                        FailureMessage::leaf(
+                            t!(
+                                "tools.web_scraper_failed",
+                                url = url,
+                                details = e.to_string()
+                            )
+                            .to_string(),
                         )
-                        .to_string(),
+                        .with_origin(ErrorOrigin::from_error(e.root_cause())),
                     )
                 })?
         };

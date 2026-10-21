@@ -79,6 +79,7 @@ mod tools;
 mod tray;
 mod updater;
 mod window;
+use chatspeed_runtime_backend::error_diagnostics::FailureMessage;
 use chatspeed_runtime_backend::workflow;
 
 #[cfg(test)]
@@ -1071,7 +1072,9 @@ pub async fn run() -> crate::error::Result<()> {
         })
         // Run the Tauri application with the generated context
         .build(tauri::generate_context!())
-        .map_err(|e| AppError::General{message:e.to_string()})?
+        .map_err(|e| AppError::General {
+            message: FailureMessage::from_error(&e),
+        })?
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { code, .. } = &event {
                 log::info!("[DesktopLifecycle] application exit requested; code={code:?}");

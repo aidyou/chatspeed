@@ -65,6 +65,8 @@ pub mod model_catalog_service;
 
 pub mod tools;
 
+pub mod error_diagnostics;
+
 pub mod capability;
 
 /// The single runtime work-admission gate and lifecycle seam (U-4).

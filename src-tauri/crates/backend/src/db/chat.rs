@@ -272,11 +272,14 @@ impl MainStore {
             .transpose()
             .map_err(|error| {
                 StoreError::JsonError(
-                    t!(
-                        "db.json_serialize_failed_metadata",
-                        error = error.to_string()
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!(
+                            "db.json_serialize_failed_metadata",
+                            error = error.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
                 )
             })?;
         runtime
@@ -341,11 +344,14 @@ impl MainStore {
             .transpose()
             .map_err(|error| {
                 StoreError::JsonError(
-                    t!(
-                        "db.json_serialize_failed_metadata",
-                        error = error.to_string()
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!(
+                            "db.json_serialize_failed_metadata",
+                            error = error.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
                 )
             })?;
         runtime

@@ -36,10 +36,15 @@
 </template>
 <script setup>
 import { computed, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { useI18n } from 'vue-i18n'
+import { formatUserError } from '@/libs/error'
 import { open } from '@tauri-apps/plugin-dialog'
 import { pictureDir, documentDir } from '@tauri-apps/api/path'
 
 import { imagePreview } from '@/libs/fs'
+
+const { t } = useI18n()
 
 const props = defineProps({
   type: {
@@ -138,7 +143,7 @@ const selectFile = async () => {
       emit('fileChanged', props.defaultPath ? [props.defaultPath] : []) // Emit event with default path if no files are selected
     }
   } catch (error) {
-    ElMessage.error(t('common.uploadFailed')) // Show error message if file selection fails
+    ElMessage.error(formatUserError(error, t('common.uploadFailed')))
   }
 }
 

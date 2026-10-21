@@ -13,6 +13,10 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::capability::redaction;
+use crate::error_diagnostics::{ErrorDiagnostic, ErrorOrigin, ErrorProjection, FailureMessage};
+use chatspeed_contracts::error::UserErrorPresentation;
+
 /// The manifest schema this service understands.
 pub const PLUGIN_SCHEMA: &str = "chatspeed.agent-skills.plugin/v2";
 /// The version of the inventory collection returned by the runtime.
@@ -58,10 +62,41 @@ pub mod plugin_code {
 }
 
 /// A plugin service failure with a stable code and a non-secret message.
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    #[test]
+    fn projection_does_not_change_legacy_plugin_code_or_payload() {
+        let error = PluginError::io("legacy wrapper").with_origin(ErrorOrigin::leaf(
+            "root token=CANARY",
+            None,
+            None,
+            Some(503),
+        ));
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({"code":"io_error","message":"legacy wrapper"})
+        );
+        assert_eq!(error.to_string(), "io_error: legacy wrapper");
+        assert!(!error.user_error().message.contains("CANARY"));
+        assert!(error.user_error().message.starts_with("root"));
+        assert_eq!(error.user_error().upstream_status, Some(503));
+        assert_eq!(error.diagnostic().code.as_deref(), Some(plugin_code::IO));
+        assert!(!PluginError::io("token=CANARY")
+            .redacted_message()
+            .contains("CANARY"));
+    }
+}
+
+/// A plugin service failure with a stable code and a non-secret message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PluginError {
     pub code: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<UserErrorPresentation>,
+    #[serde(skip, default)]
+    pub(crate) origin: Option<ErrorOrigin>,
 }
 
 impl PluginError {
@@ -69,7 +104,32 @@ impl PluginError {
         Self {
             code: code.to_string(),
             message: message.into(),
+            presentation: None,
+            origin: None,
         }
+    }
+
+    /// Attaches the runtime's safe presentation plus the explicit origin it
+    /// describes. The origin is built only from structured fields, never from
+    /// message text, so a keyword in the legacy message cannot invent a reason.
+    pub fn with_user_error(mut self, presentation: UserErrorPresentation) -> Self {
+        self.origin = Some(ErrorOrigin::leaf(
+            presentation.message.clone(),
+            presentation.reason,
+            Some(self.code.clone()),
+            presentation.upstream_status,
+        ));
+        self.presentation = Some(presentation);
+        self
+    }
+
+    pub fn redacted_message(&self) -> String {
+        redaction::redact_text(&self.message)
+    }
+
+    pub fn with_origin(mut self, origin: ErrorOrigin) -> Self {
+        self.origin = Some(origin);
+        self
     }
 
     pub fn invalid_manifest(message: impl Into<String>) -> Self {
@@ -108,6 +168,44 @@ impl std::fmt::Display for PluginError {
 }
 
 impl std::error::Error for PluginError {}
+
+impl ErrorProjection for PluginError {
+    fn user_error(&self) -> UserErrorPresentation {
+        let message = self
+            .origin
+            .as_ref()
+            .map(|origin| origin.message.as_str())
+            .unwrap_or(&self.message);
+        UserErrorPresentation {
+            schema_version: 1,
+            message: crate::error_diagnostics::sanitize_user_message(&redaction::redact_text(
+                message,
+            )),
+            reason: self.origin.as_ref().and_then(|origin| origin.reason),
+            upstream_status: self.origin.as_ref().and_then(|origin| origin.status),
+        }
+    }
+    fn diagnostic(&self) -> ErrorDiagnostic {
+        let mut diagnostic = self
+            .origin
+            .as_ref()
+            .map(|origin| {
+                FailureMessage::leaf(self.message.clone())
+                    .with_origin(origin.clone())
+                    .diagnostic()
+            })
+            .unwrap_or_else(|| FailureMessage::leaf(self.message.clone()).diagnostic());
+        diagnostic.code = Some(self.code.clone());
+        diagnostic.error = redaction::redact_text(&diagnostic.error);
+        diagnostic
+    }
+}
+
+impl PluginError {
+    pub fn error_origin(&self) -> Option<&ErrorOrigin> {
+        self.origin.as_ref()
+    }
+}
 
 /// The strict plugin manifest: `schema`, `id`, `version`, `entry`, `assets`,
 /// `permissions` and optional `ui`. An unknown field is refused so the contract
@@ -175,7 +273,9 @@ impl PluginManifest {
     /// Parses and fully validates a manifest.
     pub fn parse(json: &str) -> Result<Self, PluginError> {
         let manifest: PluginManifest = serde_json::from_str(json).map_err(|error| {
-            PluginError::invalid_manifest(format!("unparsable manifest: {error}"))
+            PluginError::invalid_manifest(format!("unparsable manifest: {error}")).with_origin(
+                ErrorOrigin::from_error(&error).context("plugin", "parse_manifest", None),
+            )
         })?;
         manifest.validate()?;
         Ok(manifest)

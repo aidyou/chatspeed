@@ -439,6 +439,7 @@ import { ElMessageBox } from 'element-plus'
 import { invokeWrapper } from '@/libs/tauri'
 import { imagePreview, imageSourceUrl } from '@/libs/fs'
 import { showMessage, Uuid } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import {
   buildPricingMaps,
   estimateCostFromPricing,
@@ -1847,7 +1848,7 @@ async function addImageAttachmentFromPath(path, name = '') {
   } catch (error) {
     removeImageAttachment(pendingAttachment.id)
     console.error('Failed to add workflow image attachment from path:', error)
-    showMessage(t('chat.errorOnAddAttachment', { error: error.message || String(error) }), 'error')
+    showMessage(t('chat.errorOnAddAttachment', { error: formatUserError(error) }), 'error')
     return false
   }
 }
@@ -1888,7 +1889,7 @@ async function addImageAttachmentFromFile(file) {
       removeImageAttachment(pendingAttachment.id)
     }
     console.error('Failed to add workflow image attachment:', error)
-    showMessage(t('chat.errorOnAddAttachment', { error: error.message || String(error) }), 'error')
+    showMessage(t('chat.errorOnAddAttachment', { error: formatUserError(error) }), 'error')
     return false
   }
 }
@@ -2144,9 +2145,7 @@ function appendImageAnalysisErrorMessage(error, attachments = [], sessionId = nu
     return
   }
 
-  const errorMessage = String(
-    error?.message || t('chat.errorOnAddAttachment', { error: String(error) })
-  ).trim()
+  const errorMessage = formatUserError(error, t('chat.errorOnAddAttachment'))
 
   workflowStore.addMessage({
     sessionId,
@@ -2276,7 +2275,7 @@ inputComposable.onSendMessage.value = async () => {
     }
     inFlightDraftSessionIds.delete(messageTarget.sessionId)
     isPreparingImageSend.value = false
-    showMessage(error?.message || t('chat.errorOnAddAttachment', { error: String(error) }), 'error')
+    showMessage(formatUserError(error, t('chat.errorOnAddAttachment')), 'error')
     scrollMessageListToBottom()
     return
   }
@@ -2424,7 +2423,7 @@ const triggerManualCompression = async () => {
     return true
   } catch (error) {
     console.error('Failed to trigger manual context compression:', error)
-    showMessage(t('workflow.manualCompressFailed', { error: String(error) }), 'error')
+    showMessage(t('workflow.manualCompressFailed', { error: formatUserError(error) }), 'error')
     return false
   }
 }
@@ -2528,7 +2527,7 @@ const addAuthorizedPathFromCommand = async path => {
     return true
   } catch (error) {
     console.error('Failed to add authorized directory from slash command:', error)
-    showMessage(t('workflow.authorizedDirectoryAddFailed', { error: String(error) }), 'error')
+    showMessage(t('workflow.authorizedDirectoryAddFailed', { error: formatUserError(error) }), 'error')
     return false
   }
 }
@@ -2543,7 +2542,7 @@ const removeAuthorizedPathFromCommand = async path => {
     return true
   } catch (error) {
     console.error('Failed to remove authorized directory from slash command:', error)
-    showMessage(t('workflow.authorizedDirectoryRemoveFailed', { error: String(error) }), 'error')
+    showMessage(t('workflow.authorizedDirectoryRemoveFailed', { error: formatUserError(error) }), 'error')
     return false
   }
 }
@@ -2618,7 +2617,7 @@ const onClearContextFrame = async () => {
     showMessage(t('workflow.clearContextFrameDone'), 'success')
   } catch (error) {
     console.error('Failed to begin new workflow context frame:', error)
-    showMessage(t('workflow.clearContextFrameFailed', { error: String(error) }), 'error')
+    showMessage(t('workflow.clearContextFrameFailed', { error: formatUserError(error) }), 'error')
   }
 }
 
@@ -2845,7 +2844,7 @@ const onDeleteAutomation = async automationId => {
       }
     }
   } catch (error) {
-    showMessage(error?.message || String(error), 'error')
+    showMessage(formatUserError(error), 'error')
   }
 }
 
@@ -3009,7 +3008,7 @@ const onDeleteLastMessage = async () => {
     showMessage(t('workflow.deleteLastMessageDone'), 'success')
   } catch (error) {
     console.error('Failed to delete last workflow message:', error)
-    showMessage(t('workflow.deleteLastMessageFailed', { error: String(error) }), 'error')
+    showMessage(t('workflow.deleteLastMessageFailed', { error: formatUserError(error) }), 'error')
   }
 }
 

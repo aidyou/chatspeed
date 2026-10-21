@@ -39,6 +39,7 @@ pub enum ApplicationErrorKind {
 pub struct ApplicationError {
     pub kind: ApplicationErrorKind,
     pub message: String,
+    pub origin: Option<crate::error_diagnostics::ErrorOrigin>,
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -47,7 +48,32 @@ impl ApplicationError {
         Self {
             kind,
             message: message.into(),
+            origin: None,
         }
+    }
+
+    pub fn with_origin(mut self, origin: crate::error_diagnostics::ErrorOrigin) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+
+    pub fn from_failure(
+        kind: ApplicationErrorKind,
+        failure: crate::error_diagnostics::FailureMessage,
+    ) -> Self {
+        Self {
+            kind,
+            message: failure.legacy,
+            origin: failure.origin,
+        }
+    }
+
+    pub fn with_reason(self, reason: chatspeed_contracts::ErrorReason) -> Self {
+        let mut origin = self.origin.clone().unwrap_or_else(|| {
+            crate::error_diagnostics::ErrorOrigin::leaf(&self.message, None, None, None)
+        });
+        origin.reason = Some(reason);
+        self.with_origin(origin)
     }
 
     pub fn not_found(message: impl Into<String>) -> Self {
@@ -80,6 +106,28 @@ impl ApplicationError {
 }
 
 #[cfg(not(feature = "desktop"))]
+impl crate::error_diagnostics::ErrorProjection for ApplicationError {
+    fn user_error(&self) -> chatspeed_contracts::UserErrorPresentation {
+        let failure = crate::error_diagnostics::FailureMessage {
+            legacy: self.message.clone(),
+            origin: self.origin.clone(),
+        };
+        failure.user_error()
+    }
+
+    fn diagnostic(&self) -> crate::error_diagnostics::ErrorDiagnostic {
+        let failure = crate::error_diagnostics::FailureMessage {
+            legacy: self.message.clone(),
+            origin: self.origin.clone(),
+        };
+        let mut diagnostic = failure.diagnostic();
+        diagnostic.module = "application".into();
+        diagnostic.operation = "request".into();
+        diagnostic
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
 impl std::fmt::Display for ApplicationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
@@ -97,5 +145,24 @@ impl From<String> for ApplicationError {
 impl From<&str> for ApplicationError {
     fn from(message: &str) -> Self {
         Self::internal(message)
+    }
+}
+
+#[cfg(all(test, not(feature = "desktop")))]
+mod tests {
+    use super::*;
+    use crate::error_diagnostics::ErrorProjection;
+
+    #[test]
+    fn with_reason_preserves_legacy_error_shape_and_projects_source_reason() {
+        let error = ApplicationError::state("Session is stopping: session-1")
+            .with_reason(chatspeed_contracts::ErrorReason::SessionStopping);
+
+        assert_eq!(error.kind, ApplicationErrorKind::State);
+        assert_eq!(error.message, "Session is stopping: session-1");
+        assert_eq!(
+            error.user_error().reason,
+            Some(chatspeed_contracts::ErrorReason::SessionStopping)
+        );
     }
 }

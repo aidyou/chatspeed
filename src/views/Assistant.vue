@@ -337,6 +337,7 @@ import {
   handleChatMessage as handleChatMessageCommon
 } from '@/libs/chat'
 import { csSetStorage, csGetStorage, isEmpty, showMessage, Uuid } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { parseFileContent } from '@/libs/file-parser'
 import { sendSyncState } from '@/libs/sync'
 import { csStorageKey } from '@/config/config'
@@ -811,7 +812,9 @@ const dispatchChatCompletion = async () => {
         // Rollback
         inputMessage.value = backupMessage
         attachments.value = backupAttachments
-        chatErrorMessage.value = t('chat.errorOnAddAttachment', { error: error.message })
+        chatErrorMessage.value = t('chat.errorOnAddAttachment', {
+          error: formatUserError(error, t('common.errorFallback'))
+        })
         isChatting.value = false
         isPreparingSubmission.value = false
         return
@@ -883,7 +886,9 @@ const dispatchChatCompletion = async () => {
       }
     })
   } catch (error) {
-    chatErrorMessage.value = t('chat.errorOnSendMessage', { error: String(error) })
+    chatErrorMessage.value = t('chat.errorOnSendMessage', {
+      error: formatUserError(error, t('common.errorFallback'))
+    })
     isChatting.value = false
     isPreparingSubmission.value = false
   }
@@ -923,6 +928,14 @@ const handleChatMessage = async payload => {
       nextTick(scrollToBottomIfNeeded)
     }
   )
+
+  // Only the displayed copy is normalized; the stream payload and tool metadata stay as sent.
+  if (payload?.type === 'error' && payload?.chunk) {
+    chatErrorMessage.value = formatUserError(
+      { presentation: payload.metadata?.user_error, message: payload.chunk },
+      t('common.errorFallback')
+    )
+  }
 
   // Handle scroll behavior
   nextTick(() => {
@@ -1109,15 +1122,16 @@ const onGoToChat = async () => {
     } catch (error) {
       if (error instanceof FrontendAppError) {
         console.error(`error on go to chat: ` + error.toFormattedString(), error.originalError)
-        showMessage(t('chat.errorOnGoToChat', { error: error.toFormattedString() }), 'error', 3000)
       } else {
         console.error('error on go to chat:', error)
-        showMessage(
-          t('chat.errorOnGoToChat', { error: error.message || String(error) }),
-          'error',
-          3000
-        )
       }
+      showMessage(
+        t('chat.errorOnGoToChat', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
+        'error',
+        3000
+      )
     }
   })
 }
@@ -1133,7 +1147,13 @@ const onCopyMessage = () => {
     navigator.clipboard.writeText(chatState.value.message.trim())
     showMessage(t('chat.messageCopied'), 'success', 1000)
   } catch (error) {
-    showMessage(t('chat.errorOnCopyMessage', { error }), 'error', 3000)
+    showMessage(
+      t('chat.errorOnCopyMessage', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error',
+      3000
+    )
   }
 }
 
@@ -1258,14 +1278,24 @@ const handleImageFile = async file => {
       }
       reader.onerror = error => {
         console.error('FileReader error:', error)
-        showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read image' }), 'error')
+        showMessage(
+          t('chat.errorOnAddAttachment', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
+          'error'
+        )
         reject(error)
       }
       reader.readAsDataURL(rawFile)
     })
   } catch (error) {
     console.error('Error handling image file:', error)
-    showMessage(t('chat.errorOnAddAttachment', { error: error.message }), 'error')
+    showMessage(
+      t('chat.errorOnAddAttachment', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
   }
 }
 
@@ -1290,7 +1320,12 @@ const handleTextFile = async file => {
       }
       reader.onerror = error => {
         console.error('FileReader error:', error)
-        showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read text file' }), 'error')
+        showMessage(
+          t('chat.errorOnAddAttachment', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
+          'error'
+        )
         reject(error)
       }
       reader.readAsText(rawFile)
@@ -1298,7 +1333,9 @@ const handleTextFile = async file => {
   } catch (error) {
     console.error('Error handling text file:', error)
     showMessage(
-      t('chat.errorOnAddAttachment', { error: error.message || 'Failed to read file' }),
+      t('chat.errorOnAddAttachment', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
       'error'
     )
   }
@@ -1417,7 +1454,9 @@ const onFileSelect = async file => {
     } catch (error) {
       console.error('Error parsing file:', error)
       showMessage(
-        t('chat.errorOnAddAttachment', { error: error.message || 'Parse failed' }),
+        t('chat.errorOnAddAttachment', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
         'error'
       )
     }
@@ -1491,21 +1530,16 @@ const onAddModel = async () => {
         `Error opening setting window: ` + error.toFormattedString(),
         error.originalError
       )
-      showMessage(
-        t('chat.errorOnOpenSettingWindow', {
-          error: error.toFormattedString()
-        }),
-        'error',
-        3000
-      )
     } else {
       console.error('Error opening setting window:', error)
-      showMessage(
-        t('chat.errorOnOpenSettingWindow', { error: error.message || String(error) }),
-        'error',
-        3000
-      )
     }
+    showMessage(
+      t('chat.errorOnOpenSettingWindow', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error',
+      3000
+    )
   }
 }
 </script>

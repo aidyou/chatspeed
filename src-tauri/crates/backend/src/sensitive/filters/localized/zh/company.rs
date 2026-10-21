@@ -10,13 +10,13 @@ pub struct CompanyFilter {
 
 impl CompanyFilter {
     pub fn new() -> Result<Self, SensitiveError> {
-        let context_regex = Regex::new(r#"(?:甲方|乙方|丙方|丁方|委托方|受托方|承揽方|定作方|发包方|承包方|出租方|承租方|转让方|受让方|出卖方|买受方|贷款方|借款方|保证人|抵押人|质押人|开户企业|收款方|受票方|付款方)[:：]\s*([\p{Han}a-zA-Z0-9()（）]{4,})"#).map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "zh_company_context".to_string(), message: e.to_string() })?;
+        let context_regex = Regex::new(r#"(?:甲方|乙方|丙方|丁方|委托方|受托方|承揽方|定作方|发包方|承包方|出租方|承租方|转让方|受让方|出卖方|买受方|贷款方|借款方|保证人|抵押人|质押人|开户企业|收款方|受票方|付款方)[:：]\s*([\p{Han}a-zA-Z0-9()（）]{4,})"#).map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "zh_company_context".to_string(), message: crate::error_diagnostics::FailureMessage::from_error(&e) })?;
         let suffix_regex = Regex::new(
             r#"[\p{Han}()（）]{2,20}(?:有限公司|责任公司|集团|总厂|分公司)"#,
         )
         .map_err(|e| SensitiveError::RegexCompilationFailed {
             pattern: "zh_company_suffix".to_string(),
-            message: e.to_string(),
+            message: crate::error_diagnostics::FailureMessage::from_error(&e),
         })?;
         Ok(Self {
             context_regex,

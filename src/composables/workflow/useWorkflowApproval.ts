@@ -4,6 +4,8 @@ import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
 import { useWorkflowStore } from '@/stores/workflow'
 import { SIGNAL_TYPES } from '@/composables/workflow/signalTypes'
+import { USER_ERROR_REASONS } from '@/constants/errorReasons'
+import { formatUserError, normalizeUserError } from '@/libs/error'
 
 /**
  * Composable for managing workflow approval actions.
@@ -81,11 +83,8 @@ export function useWorkflowApproval({
         })
       }
       console.error('Failed to resolve approval action:', error)
-      if (
-        String(error).includes('No sender') ||
-        String(error).includes('No active session') ||
-        String(error).includes('Session interrupted')
-      ) {
+      const normalizedError = normalizeUserError(error)
+      if (normalizedError.reason === USER_ERROR_REASONS.NO_ACTIVE_SESSION) {
         showMessage(
           t('workflow.sessionLost') ||
             'Session disconnected. Please refresh the page to restore the task.',
@@ -93,7 +92,7 @@ export function useWorkflowApproval({
         )
         if (trackToolState) workflowStore.setRunning(false)
       } else {
-        showMessage(String(error), 'error')
+        showMessage(formatUserError(error), 'error')
       }
     } finally {
       approvalLoading.value = false

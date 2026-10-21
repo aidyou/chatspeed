@@ -106,6 +106,7 @@ import { csStorageKey } from '@/config/config'
 import { formatTime } from '@/libs/util'
 import { useNoteStore } from '@/stores/note'
 import { csGetStorage, csSetStorage, showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 
 const { t } = useI18n()
 
@@ -248,15 +249,16 @@ const onHandleNodeClick = async data => {
           `Error getting notes by tag: ` + error.toFormattedString(),
           error.originalError
         )
-        showMessage(t('chat.errorOnGetNotes', { error: error.toFormattedString() }), 'error', 3000)
       } else {
         console.error('Error getting notes by tag:', error)
-        showMessage(
-          t('chat.errorOnGetNotes', { error: error.message || String(error) }),
-          'error',
-          3000
-        )
       }
+      showMessage(
+        t('chat.errorOnGetNotes', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
+        'error',
+        3000
+      )
     }
   } else {
     try {
@@ -271,15 +273,16 @@ const onHandleNodeClick = async data => {
     } catch (error) {
       if (error instanceof FrontendAppError) {
         console.error(`Error getting note: ` + error.toFormattedString(), error.originalError)
-        showMessage(t('chat.errorOnGetNote', { error: error.toFormattedString() }), 'error', 3000)
       } else {
         console.error('Error getting note:', error)
-        showMessage(
-          t('chat.errorOnGetNote', { error: error.message || String(error) }),
-          'error',
-          3000
-        )
       }
+      showMessage(
+        t('chat.errorOnGetNote', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
+        'error',
+        3000
+      )
     }
   }
 }
@@ -324,22 +327,17 @@ const onNoteTrash = () => {
       }
     } catch (error) {
       if (error instanceof FrontendAppError) {
-        showMessage(
-          t('chat.errorOnDeleteNote', {
-            error: error.toFormattedString()
-          }),
-          'error',
-          5000
-        )
         console.error('Error deleting note:', error.originalError)
       } else {
-        showMessage(
-          t('chat.errorOnDeleteNote', { error: error.message || String(error) }),
-          'error',
-          5000
-        )
         console.error('Error deleting note:', error)
       }
+      showMessage(
+        t('chat.errorOnDeleteNote', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
+        'error',
+        5000
+      )
     }
   })
 }
@@ -355,15 +353,16 @@ const onSearchNote = async () => {
   } catch (error) {
     if (error instanceof FrontendAppError) {
       console.error(`Error searching notes: ` + error.toFormattedString(), error.originalError)
-      showMessage(t('chat.errorOnSearchNotes', { error: error.toFormattedString() }), 'error', 3000)
     } else {
       console.error('Error searching notes:', error)
-      showMessage(
-        t('chat.errorOnSearchNotes', { error: error.message || String(error) }),
-        'error',
-        3000
-      )
     }
+    showMessage(
+      t('chat.errorOnSearchNotes', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error',
+      3000
+    )
   }
 }
 

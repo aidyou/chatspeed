@@ -15,7 +15,11 @@ import 'element-plus/es/components/message-box/style/css'
 import 'element-plus/es/components/overlay/style/css'
 
 import { registerDirective } from '@/libs/directive'
+import { setUserErrorFallback } from '@/libs/error'
 
+// Store error fields are rendered outside a component, so they need the same
+// locale-aware fallback the Tauri wrapper uses for command errors.
+setUserErrorFallback(() => i18n.global.t('common.errorFallback'))
 
 const app = createApp(App)
 app.use(createPinia())

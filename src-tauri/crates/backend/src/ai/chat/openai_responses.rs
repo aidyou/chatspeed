@@ -12,6 +12,8 @@ use crate::ai::traits::chat::{
 };
 use crate::ccproxy::adapter::input::helper::thinking_adapter::build_openai_compat_thinking_fields;
 use crate::ccproxy::{StreamFormat, StreamProcessor};
+use crate::error_diagnostics::{ErrorOrigin, ErrorProjection, FailureMessage};
+use chatspeed_contracts::UserErrorPresentation;
 
 use super::openai::OpenAIChat;
 
@@ -479,9 +481,16 @@ pub(crate) async fn handle_response(
                 let err = AiError::ApiRequestFailed {
                     status_code: 500,
                     provider: provider_name.clone(),
-                    details: format!("Failed to read response body: {}", e),
+                    details: FailureMessage::leaf(format!("Failed to read response body: {}", e))
+                        .with_origin(ErrorOrigin::from_error(&e)),
                 };
-                emit_error_response(&chat_id, &err.to_string(), &metadata_option, &callback);
+                emit_error_response(
+                    &chat_id,
+                    &err.to_string(),
+                    err.user_error(),
+                    &metadata_option,
+                    &callback,
+                );
                 return Err(err);
             }
         };
@@ -542,9 +551,16 @@ pub(crate) fn handle_non_stream_response_text(
             let err = AiError::ApiRequestFailed {
                 status_code: 500,
                 provider: provider_name.clone(),
-                details: format!("Failed to parse response: {}", e),
+                details: FailureMessage::leaf(format!("Failed to parse response: {}", e))
+                    .with_origin(ErrorOrigin::from_error(&e)),
             };
-            emit_error_response(&chat_id, &err.to_string(), &metadata_option, &callback);
+            emit_error_response(
+                &chat_id,
+                &err.to_string(),
+                err.user_error(),
+                &metadata_option,
+                &callback,
+            );
             return Err(err);
         }
     };
@@ -554,13 +570,13 @@ pub(crate) fn handle_non_stream_response_text(
         let err = AiError::ApiRequestFailed {
             status_code: 500,
             provider: provider_name,
-            details: details.clone(),
+            details: details.clone().into(),
         };
         callback(ChatResponse::new_with_arc(
             chat_id,
             details,
             MessageType::Error,
-            metadata_option.as_ref().and_then(|m| m.to_value()),
+            error_metadata(&metadata_option, err.user_error()),
             Some(FinishReason::Error),
         ));
         return Err(err);
@@ -572,9 +588,15 @@ pub(crate) fn handle_non_stream_response_text(
             let err = AiError::ApiRequestFailed {
                 status_code: 500,
                 provider: provider_name,
-                details: details.clone(),
+                details: details.clone().into(),
             };
-            emit_error_response(&chat_id, &details, &metadata_option, &callback);
+            emit_error_response(
+                &chat_id,
+                &details,
+                err.user_error(),
+                &metadata_option,
+                &callback,
+            );
             return Err(err);
         }
     }
@@ -635,9 +657,15 @@ async fn handle_stream_response(
             Err(e) => {
                 let err = AiError::StreamProcessingFailed {
                     provider: provider_name.clone(),
-                    details: e,
+                    details: e.into(),
                 };
-                emit_error_response(&chat_id, &err.to_string(), &metadata_option, &callback);
+                emit_error_response(
+                    &chat_id,
+                    &err.to_string(),
+                    err.user_error(),
+                    &metadata_option,
+                    &callback,
+                );
                 return Err(err);
             }
         };
@@ -660,12 +688,18 @@ async fn handle_stream_response(
             Ok(StreamEventOutcome::Failed(details)) => {
                 let err = AiError::StreamProcessingFailed {
                     provider: provider_name.clone(),
-                    details,
+                    details: details.into(),
                 };
                 return Err(err);
             }
             Err(err) => {
-                emit_error_response(&chat_id, &err.to_string(), &metadata_option, &callback);
+                emit_error_response(
+                    &chat_id,
+                    &err.to_string(),
+                    err.user_error(),
+                    &metadata_option,
+                    &callback,
+                );
                 return Err(err);
             }
         }
@@ -685,10 +719,16 @@ async fn handle_stream_response(
 
     if !completed {
         let details = "Responses stream ended before response.completed".to_string();
-        emit_error_response(&chat_id, &details, &metadata_option, &callback);
+        emit_error_response(
+            &chat_id,
+            &details,
+            leaf_user_error(&details),
+            &metadata_option,
+            &callback,
+        );
         return Err(AiError::StreamProcessingFailed {
             provider: provider_name.clone(),
-            details,
+            details: details.into(),
         });
     }
 
@@ -759,7 +799,11 @@ fn process_stream_event_text<F: Fn(Arc<ChatResponse>) + Send + 'static>(
         let value: Value =
             serde_json::from_str(data).map_err(|e| AiError::StreamProcessingFailed {
                 provider: provider_name.to_string(),
-                details: format!("Failed to parse Responses stream event: {}", e),
+                details: FailureMessage::leaf(format!(
+                    "Failed to parse Responses stream event: {}",
+                    e
+                ))
+                .with_origin(ErrorOrigin::from_error(&e)),
             })?;
         match process_stream_event(
             &value,
@@ -862,12 +906,24 @@ fn process_stream_event<F: Fn(Arc<ChatResponse>) + Send + 'static>(
         }
         "response.incomplete" => {
             let details = response_terminal_details(value, "Responses stream incomplete");
-            emit_error_response(chat_id, &details, metadata_option, callback);
+            emit_error_response(
+                chat_id,
+                &details,
+                leaf_user_error(&details),
+                metadata_option,
+                callback,
+            );
             return Ok(StreamEventOutcome::Failed(details));
         }
         "response.failed" => {
             let details = response_terminal_details(value, "Responses stream failed");
-            emit_error_response(chat_id, &details, metadata_option, callback);
+            emit_error_response(
+                chat_id,
+                &details,
+                leaf_user_error(&details),
+                metadata_option,
+                callback,
+            );
             return Ok(StreamEventOutcome::Failed(details));
         }
         _ => {}
@@ -932,9 +988,33 @@ fn register_stream_tool_item(
     }
 }
 
+fn error_metadata(
+    metadata_option: &Option<ChatMetadata>,
+    user_error: UserErrorPresentation,
+) -> Option<Value> {
+    let mut metadata = metadata_option
+        .as_ref()
+        .and_then(ChatMetadata::to_value)
+        .unwrap_or_else(|| json!({}));
+    if !metadata.is_object() {
+        metadata = json!({});
+    }
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("user_error".to_string(), json!(user_error));
+    }
+    Some(metadata)
+}
+
+/// Synthetic details have no typed error behind them, so project the leaf text
+/// directly instead of deriving a user message from a localized display string.
+fn leaf_user_error(details: &str) -> UserErrorPresentation {
+    FailureMessage::leaf(details).user_error()
+}
+
 fn emit_error_response<F: Fn(Arc<ChatResponse>) + Send + 'static>(
     chat_id: &str,
     details: &str,
+    user_error: UserErrorPresentation,
     metadata_option: &Option<ChatMetadata>,
     callback: &F,
 ) {
@@ -942,7 +1022,7 @@ fn emit_error_response<F: Fn(Arc<ChatResponse>) + Send + 'static>(
         chat_id.to_string(),
         details.to_string(),
         MessageType::Error,
-        metadata_option.as_ref().and_then(|m| m.to_value()),
+        error_metadata(metadata_option, user_error),
         Some(FinishReason::Error),
     ));
 }
@@ -1669,6 +1749,16 @@ mod tests {
         assert_eq!(emitted[0].r#type, MessageType::Error);
         assert_eq!(emitted[0].chunk, "Responses failed");
         assert_eq!(emitted[0].finish_reason, Some(FinishReason::Error));
+        let metadata = emitted[0]
+            .metadata
+            .as_ref()
+            .expect("error metadata even without request metadata");
+        let user_error = &metadata["user_error"];
+        assert_eq!(user_error["schema_version"], 1);
+        assert!(user_error["message"]
+            .as_str()
+            .expect("safe user message")
+            .contains("Responses failed"));
     }
 
     #[test]
@@ -2084,6 +2174,12 @@ mod tests {
         assert_eq!(emitted.len(), 1);
         assert_eq!(emitted[0].r#type, MessageType::Error);
         assert_eq!(emitted[0].finish_reason, Some(FinishReason::Error));
+        let user_error = &emitted[0].metadata.as_ref().expect("error metadata")["user_error"];
+        assert!(user_error["message"]
+            .as_str()
+            .expect("safe user message")
+            .contains("max_output_tokens"));
+        assert!(emitted.iter().all(|r| r.r#type != MessageType::Finished));
     }
 
     #[test]
@@ -2121,5 +2217,54 @@ mod tests {
         assert_eq!(emitted.len(), 1);
         assert_eq!(emitted[0].r#type, MessageType::Error);
         assert_eq!(emitted[0].finish_reason, Some(FinishReason::Error));
+        let user_error = &emitted[0].metadata.as_ref().expect("error metadata")["user_error"];
+        assert_eq!(user_error["message"], "boom");
+        assert!(emitted.iter().all(|r| r.r#type != MessageType::Finished));
+    }
+
+    #[test]
+    fn error_emitter_keeps_typed_and_synthetic_user_error_without_request_metadata() {
+        let emitted = Arc::new(StdMutex::new(Vec::<Arc<ChatResponse>>::new()));
+        let emitted_for_callback = emitted.clone();
+        let callback = move |response: Arc<ChatResponse>| {
+            emitted_for_callback
+                .lock()
+                .expect("test mutex")
+                .push(response);
+        };
+
+        let typed = AiError::StreamProcessingFailed {
+            provider: "test".to_string(),
+            details: "upstream closed".into(),
+        };
+        emit_error_response(
+            "chat_1",
+            &typed.to_string(),
+            typed.user_error(),
+            &None,
+            &callback,
+        );
+        emit_error_response(
+            "chat_1",
+            "raw stream detail",
+            leaf_user_error("raw stream detail"),
+            &None,
+            &callback,
+        );
+
+        let emitted = emitted.lock().expect("test mutex");
+        assert_eq!(emitted.len(), 2);
+        for response in emitted.iter() {
+            assert_eq!(response.r#type, MessageType::Error);
+            assert!(response.metadata.is_some());
+            assert!(
+                response.metadata.as_ref().unwrap()["user_error"]["schema_version"].is_number()
+            );
+        }
+        assert_eq!(
+            emitted[1].metadata.as_ref().unwrap()["user_error"]["message"],
+            "raw stream detail"
+        );
+        assert_eq!(emitted[1].chunk, "raw stream detail");
     }
 }

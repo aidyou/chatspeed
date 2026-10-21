@@ -15,7 +15,10 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { formatWorkflowRetryMessage } from '@/composables/workflow/messageProjectionRules'
+import {
+  formatWorkflowRetryMessage,
+  resolveWorkflowErrorDisplay
+} from '@/composables/workflow/messageProjectionRules'
 import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
 import { normalizeShellCommandForDisplay, formatDisplayPath } from '@/composables/workflow/toolDisplay'
 import { TERMINAL_STATUSES } from '@/composables/workflow/signalTypes'
@@ -290,12 +293,7 @@ const latestTerminalError = computed(() => {
     const isError = !!(message?.isError || message?.is_error || message?.metadata?.is_error)
     if (!isError) return ''
 
-    const toolError =
-      sanitizePreviewText(message?.toolDisplay?.summary || '') ||
-      sanitizePreviewText(message?.toolDisplay?.title || '')
-    if (toolError) return toolError
-
-    return sanitizePreviewText(message?.message || message?.reasoning || '')
+    return resolveWorkflowErrorDisplay(message, message?.message).display
   }
 
   return ''

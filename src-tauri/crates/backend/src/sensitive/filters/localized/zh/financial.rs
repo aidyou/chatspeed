@@ -18,21 +18,21 @@ impl FinancialFilter {
         )
         .map_err(|e| SensitiveError::RegexCompilationFailed {
             pattern: "zh_financial_money".to_string(),
-            message: e.to_string(),
+            message: crate::error_diagnostics::FailureMessage::from_error(&e),
         })?;
 
         let bank_account_regex =
             Regex::new(r#"(?:账号|卡号|银行账号|账户)[:：]\s*([0-9\s-]{12,25})"#).map_err(|e| {
                 SensitiveError::RegexCompilationFailed {
                     pattern: "zh_financial_bank_account".to_string(),
-                    message: e.to_string(),
+                    message: crate::error_diagnostics::FailureMessage::from_error(&e),
                 }
             })?;
 
         let bank_name_regex = Regex::new(r#"(?:开户行|开户银行|收款行)[:：]\s*([\p{Han}]{4,25})"#)
             .map_err(|e| SensitiveError::RegexCompilationFailed {
                 pattern: "zh_financial_bank_name".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             })?;
 
         Ok(Self {

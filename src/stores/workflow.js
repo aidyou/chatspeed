@@ -1,4 +1,5 @@
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
+import { formatUserError } from '@/libs/error';
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { useSettingStore } from '@/stores/setting';
@@ -15,6 +16,8 @@ import { deriveToolViewState } from '@/composables/workflow/useToolStateMapper';
 import { isAutoExecuteWorkflowTool } from '@/composables/workflow/toolApproval';
 import { getToolStatusSummary } from '@/composables/workflow/toolDisplay';
 import {
+  resolveWorkflowErrorDisplay,
+  resolveWorkflowUserError,
   getWorkflowPersistedMessageId,
   hasIncompleteWorkflowToolCallChain,
   inferWorkflowToolExecutionStatus,
@@ -836,6 +839,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
       arguments: toolState.arguments || existing?.arguments,
       result: toolState.result ?? existing?.result,
       errorType: toolState.errorType ?? existing?.errorType,
+      errorDisplay: toolState.errorDisplay ?? existing?.errorDisplay,
+      errorDisplayCopy: toolState.errorDisplayCopy ?? existing?.errorDisplayCopy,
       approvalStatus: toolState.approvalStatus || existing?.approvalStatus || 'pending',
       createdAt: existing?.createdAt || now,
       startedAt,
@@ -1020,12 +1025,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
     }));
   };
 
-  const finalizeToolExecution = (toolId, success, result, errorType) => {
+  const finalizeToolExecution = (toolId, success, result, errorType, errorDetails) => {
     if (!toolId) return;
     const existing = currentTaskLedger.value?.tools.get(toolId);
+    const userError = success ? null : resolveWorkflowUserError(errorDetails);
+    const errorDisplay = success
+      ? ''
+      : userError?.display || formatUserError(existing?.errorDisplay || result);
     const statusSummary = success
       ? getToolStatusSummary(existing?.toolName, 'success', result || 'Completed')
-      : getToolStatusSummary(existing?.toolName, 'failed', errorType || result || 'Failed');
+      : errorDisplay || getToolStatusSummary(existing?.toolName, 'failed', errorType || result || 'Failed');
 
     if (taskLedgerEnabled.value) {
       upsertToolViewState({
@@ -1034,6 +1043,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
         approvalStatus: 'approved',
         result,
         errorType,
+        errorDisplay,
+        errorDisplayCopy: errorDisplay,
         summary: statusSummary
       });
     }
@@ -1045,6 +1056,12 @@ export const useWorkflowStore = defineStore('workflow', () => {
         approval_status: 'approved',
         execution_status: success ? 'completed' : 'failed',
         error_type: success ? meta.error_type : (errorType || meta.error_type),
+        ...(userError ? { user_error: {
+          schema_version: 1,
+          message: userError.message,
+          reason: userError.reason,
+          upstream_status: userError.upstream_status
+        } } : {}),
         summary: statusSummary
       }
     }));
@@ -1214,10 +1231,10 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const _handleError = async (err) => {
     if (err instanceof FrontendAppError) {
-      error.value = err.toFormattedString();
+      error.value = formatUserError(err);
       console.error('Workflow Store Error:', error.value, err.originalError);
     } else {
-      error.value = err.message || String(err);
+      error.value = formatUserError(err);
       console.error('Workflow Store Error:', error.value);
     }
     throw err;
@@ -1648,6 +1665,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
       if (message.role === 'tool' && incomingToolCallId) {
         const toolStatus = inferLedgerToolStatus(message);
         const toolName = message.metadata?.tool_name || message.metadata?.tool_call?.name;
+        const errorDisplay = toolStatus === 'final_error'
+          ? resolveWorkflowErrorDisplay(message, message.message)
+          : null;
 
         // 工具执行结果 - 终态
         upsertToolViewState({
@@ -1655,7 +1675,9 @@ export const useWorkflowStore = defineStore('workflow', () => {
           toolName,
           status: toolStatus,
           title: message.metadata?.title,
-          summary: getLedgerStatusSummary(toolName, toolStatus, message.metadata?.summary),
+          summary: errorDisplay?.display || getLedgerStatusSummary(toolName, toolStatus, message.metadata?.summary),
+          errorDisplay: errorDisplay?.display,
+          errorDisplayCopy: errorDisplay?.displayCopy,
           result: message.message,
           errorType: isError ? 'execution_error' : undefined,
           approvalStatus:

@@ -1,7 +1,8 @@
 import { computed, ref } from 'vue'
 
-import { invokeWrapper } from '../../libs/tauri.js'
 import { resolveEditorLanguage } from './codeEditorLanguages.js'
+import { USER_ERROR_REASONS } from '../../constants/errorReasons.js'
+import { formatUserError, normalizeUserError } from '../../libs/error.js'
 
 export const WORKFLOW_EDITOR_MAX_BYTES = 5 * 1024 * 1024
 
@@ -15,9 +16,7 @@ function getFileName(path = '') {
 }
 
 function toErrorText(error) {
-  if (!error) return ''
-  if (typeof error.toFormattedString === 'function') return error.toFormattedString()
-  return error.message || String(error)
+  return formatUserError(error)
 }
 
 function createTabFromReadResult(path, result) {
@@ -58,16 +57,15 @@ async function defaultSaveError(message, title, alertOptions) {
 }
 
 export function isEditorConflictError(error) {
-  const text = toErrorText(error).toLowerCase()
-  return text.includes('changed on disk')
-    || text.includes('磁盘')
-    || text.includes('磁碟')
-    || text.includes('reload before saving')
+  return normalizeUserError(error).reason === USER_ERROR_REASONS.FILE_CHANGED_ON_DISK
 }
 
 export function useWorkflowCodeEditor(options = {}) {
   const t = options.t || noopTranslate
-  const invoke = options.invoke || invokeWrapper
+  const invoke = options.invoke || (async (...args) => {
+    const { invokeWrapper } = await import('../../libs/tauri.js')
+    return invokeWrapper(...args)
+  })
   const notify = options.notify || defaultNotify
   const confirm = options.confirm || defaultConfirm
   const saveError = options.saveError || defaultSaveError
@@ -107,8 +105,9 @@ export function useWorkflowCodeEditor(options = {}) {
       activePath.value = path
       return tab
     } catch (error) {
-      const message = toErrorText(error)
-      const isTooLarge = message.toLowerCase().includes('too large') || message.includes('太大')
+      const normalizedError = normalizeUserError(error)
+      const message = normalizedError.message
+      const isTooLarge = normalizedError.reason === USER_ERROR_REASONS.FILE_TOO_LARGE
       notify(
         isTooLarge
           ? t('workflow.codeEditor.fileTooLarge', { max: '5 MiB' })

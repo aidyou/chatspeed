@@ -10,8 +10,11 @@ use tokio::sync::{
 
 use crate::ccproxy::CCProxyError;
 use crate::ccproxy::{decision, ChatProtocol};
+use crate::error_diagnostics::{
+    log_error_diagnostic, ErrorDiagnostic, ErrorFrame, ErrorProjection, FailureMessage,
+};
 use crate::libs::window_channels::WindowChannels;
-use crate::tools::ToolManager;
+use crate::tools::{ToolError, ToolManager};
 use crate::{
     ai::{
         chat::openai::OpenAIChat,
@@ -29,6 +32,7 @@ use crate::{
     db::MainStore,
     error::AppError,
 };
+use chatspeed_contracts::error::UserErrorPresentation;
 
 macro_rules! init_chats {
     () => {{
@@ -365,7 +369,11 @@ pub async fn list_models_async(
             metadata,
         )
         .await
-        .map_err(|error| AppError::Ai(AiError::InitFailed(error.to_string())))?;
+        .map_err(|error| {
+            AppError::Ai(AiError::InitFailed(
+                crate::error_diagnostics::FailureMessage::from_error(&error),
+            ))
+        })?;
         return Ok(models
             .into_iter()
             .map(|(id, name)| ModelDetails {
@@ -564,10 +572,27 @@ fn add_loaded_mcp_tool_to_turn_tools(
     }
 }
 
+/// Response metadata key that carries the typed execution status from the tool
+/// task to the message processor. Values are booleans keyed by tool-call id and
+/// stay out of the model-facing message. A missing entry means the result did
+/// not expose a typed status, so the UI keeps it unknown instead of guessing
+/// from the text.
+const TOOL_RESULT_IS_ERROR_METADATA_KEY: &str = "tool_result_is_error";
+
+/// Response metadata key carrying the UI-only safe error projection per
+/// tool-call id. Like the status map it never enters the model-facing message.
+const TOOL_RESULT_USER_ERROR_METADATA_KEY: &str = "tool_result_user_error";
+
 #[derive(Debug)]
 struct PendingToolCalls {
     requested_count: usize,
     results: HashMap<String, Value>,
+    /// UI-only execution status per tool-call id. Kept separate from `results`
+    /// so consolidating the frontend payload never rewrites the model history.
+    result_status: HashMap<String, bool>,
+    /// UI-only safe error projection per tool-call id, captured while the typed
+    /// tool result was still available. Absent for success and unknown output.
+    result_user_error: HashMap<String, UserErrorPresentation>,
     assistant_message_with_tool_requests: Option<Value>,
 }
 
@@ -576,6 +601,8 @@ impl PendingToolCalls {
         PendingToolCalls {
             requested_count: 0,
             results: HashMap::new(),
+            result_status: HashMap::new(),
+            result_user_error: HashMap::new(),
             assistant_message_with_tool_requests: None,
         }
     }
@@ -584,9 +611,250 @@ impl PendingToolCalls {
         self.results.insert(tool_call_id, result);
     }
 
+    fn add_result_status(&mut self, tool_call_id: String, is_error: bool) {
+        self.result_status.insert(tool_call_id, is_error);
+    }
+
+    fn add_result_user_error(&mut self, tool_call_id: String, user_error: UserErrorPresentation) {
+        self.result_user_error.insert(tool_call_id, user_error);
+    }
+
     fn is_complete(&self) -> bool {
         self.requested_count > 0 && self.results.len() >= self.requested_count
     }
+}
+
+/// Captures the typed failure state of a tool call without reading the result
+/// text. `Err` is always a failure; an `Ok` payload only reports what its
+/// serialized `ToolCallResult` exposed, and stays unknown when absent.
+fn capture_tool_result_is_error(result: &Result<Value, ToolError>) -> Option<bool> {
+    match result {
+        Ok(value) => value.get("is_error").and_then(Value::as_bool),
+        Err(_) => Some(true),
+    }
+}
+
+/// Projects the typed failure onto the UI-only contract. A source error is
+/// projected from its root origin; a typed `Ok` payload only contributes when
+/// it declares `is_error` and one of the known message fields is present.
+/// Free-form output is never treated as an error by inspection.
+fn capture_tool_result_user_error(
+    result: &Result<Value, ToolError>,
+) -> Option<UserErrorPresentation> {
+    match result {
+        Ok(value) => structured_tool_result_user_error(value),
+        Err(error) => Some(error.user_error()),
+    }
+}
+
+fn structured_tool_result_user_error(value: &Value) -> Option<UserErrorPresentation> {
+    if !value
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let message = value
+        .get("structured_content")
+        .and_then(|structured| structured.get("message"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| value.get("content").and_then(Value::as_str))?;
+    Some(FailureMessage::leaf(message).user_error())
+}
+
+/// Adds one typed status to the per-call metadata map while preserving every
+/// other field of the response metadata.
+fn record_tool_result_status(metadata: &mut Value, tool_call_id: &str, is_error: Option<bool>) {
+    let Some(is_error) = is_error else {
+        return;
+    };
+    if !metadata.is_object() {
+        *metadata = json!({});
+    }
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    let statuses = object
+        .entry(TOOL_RESULT_IS_ERROR_METADATA_KEY.to_string())
+        .or_insert_with(|| json!({}));
+    if !statuses.is_object() {
+        *statuses = json!({});
+    }
+    if let Some(statuses) = statuses.as_object_mut() {
+        statuses.insert(tool_call_id.to_string(), Value::Bool(is_error));
+    }
+}
+
+fn tool_result_status_from_metadata(metadata: Option<&Value>, tool_call_id: &str) -> Option<bool> {
+    metadata
+        .and_then(|value| value.get(TOOL_RESULT_IS_ERROR_METADATA_KEY))
+        .and_then(|statuses| statuses.get(tool_call_id))
+        .and_then(Value::as_bool)
+}
+
+/// Adds the per-call safe projection next to the typed status, leaving every
+/// other metadata field untouched.
+fn record_tool_result_user_error(
+    metadata: &mut Value,
+    tool_call_id: &str,
+    user_error: Option<&UserErrorPresentation>,
+) {
+    let Some(user_error) = user_error else {
+        return;
+    };
+    if !metadata.is_object() {
+        *metadata = json!({});
+    }
+    let Some(object) = metadata.as_object_mut() else {
+        return;
+    };
+    let entries = object
+        .entry(TOOL_RESULT_USER_ERROR_METADATA_KEY.to_string())
+        .or_insert_with(|| json!({}));
+    if !entries.is_object() {
+        *entries = json!({});
+    }
+    if let Some(entries) = entries.as_object_mut() {
+        entries.insert(tool_call_id.to_string(), json!(user_error));
+    }
+}
+
+fn tool_result_user_error_from_metadata(
+    metadata: Option<&Value>,
+    tool_call_id: &str,
+) -> Option<UserErrorPresentation> {
+    metadata
+        .and_then(|value| value.get(TOOL_RESULT_USER_ERROR_METADATA_KEY))
+        .and_then(|entries| entries.get(tool_call_id))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+/// Builds the model-facing tool message. Its content and keys are the exact
+/// contract the provider receives, so UI status never enters this value.
+fn build_tool_result_message(
+    tool_call_id: &str,
+    tool_name: &str,
+    tool_execution_actual_result: &Value,
+) -> Value {
+    json!({
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "name": tool_name,
+        "content": tool_execution_actual_result.get("content").and_then(|c| c.as_str()).map(String::from).unwrap_or_else(||
+            tool_execution_actual_result.as_str().map(String::from).unwrap_or_else(||
+                serde_json::to_string(tool_execution_actual_result).unwrap_or_else(|_| {
+                    "Failed to serialize tool result".to_string()
+                })
+            )
+        ),
+    })
+}
+
+/// Consolidates requested tool calls, their results and the UI-only status and
+/// safe projection. Only the frontend payload gets `is_error` and `user_error`;
+/// the assistant request and the model-facing tool messages are never mutated.
+fn merge_tool_calls_with_results(
+    tool_calls: &[Value],
+    results: &HashMap<String, Value>,
+    result_status: &HashMap<String, bool>,
+    result_user_error: &HashMap<String, UserErrorPresentation>,
+) -> Vec<Value> {
+    tool_calls
+        .iter()
+        .map(|call| {
+            let mut call_obj = call.as_object().cloned().unwrap_or_default();
+            let call_id = call_obj
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if let Some(call_id) = call_id {
+                if let Some(result) = results.get(&call_id) {
+                    // The result from tool execution is often a JSON string.
+                    // To avoid double-escaped JSON, we attempt to parse it.
+                    // If it's not a valid JSON string, we keep it as a string.
+                    let result_value = serde_json::from_str(result.as_str().unwrap_or(""))
+                        .unwrap_or_else(|_| result.clone());
+                    call_obj.insert("result".to_string(), result_value);
+                }
+                if let Some(is_error) = result_status.get(&call_id) {
+                    call_obj.insert("is_error".to_string(), Value::Bool(*is_error));
+                }
+                if let Some(user_error) = result_user_error.get(&call_id) {
+                    call_obj.insert("user_error".to_string(), json!(user_error));
+                }
+            }
+            json!(call_obj)
+        })
+        .collect()
+}
+
+/// Adds the UI-only safe projection to error metadata while keeping every
+/// routing field already present. The chunk text stays the legacy diagnostic.
+fn attach_user_error(metadata: Option<Value>, user_error: UserErrorPresentation) -> Option<Value> {
+    let mut value = metadata.unwrap_or_else(|| json!({}));
+    if !value.is_object() {
+        value = json!({});
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.insert("user_error".to_string(), json!(user_error));
+    }
+    Some(value)
+}
+
+/// Captures the live serde failure instead of echoing the complete tool instruction.
+fn tool_call_parse_failure_error(parse_error: &serde_json::Error) -> AiError {
+    AiError::ResponseParseFailed {
+        provider: "OpenAI".to_string(),
+        details: FailureMessage::from_error(parse_error),
+    }
+}
+
+/// Keeps the legacy error text byte-for-byte identical for existing consumers.
+fn tool_call_parse_failure_chunk(chunk: &str) -> String {
+    format!("Failed to parse tool call instruction: {}", chunk)
+}
+
+fn tool_call_parse_failure_diagnostic(chat_id: &str, error: &AiError) -> ErrorDiagnostic {
+    let mut diagnostic = error.diagnostic();
+    diagnostic.module = "ai".into();
+    diagnostic.operation = "parse_tool_call".into();
+    diagnostic.session_id = Some(chat_id.to_string());
+    diagnostic
+        .context_chain
+        .push(ErrorFrame::new("ai", "parse_tool_call", None));
+    diagnostic
+}
+
+/// Keeps the model-facing failure payload unchanged while the logged event is a
+/// redacted diagnostic carrying the typed tool error and its correlation.
+fn tool_execution_failure_result(tool_error: &ToolError) -> Value {
+    json!({"error": format!("Tool execution failed: {}", tool_error)})
+}
+
+fn tool_execution_failure_diagnostic(
+    chat_id: &str,
+    tool_name: &str,
+    tool_call_id: &str,
+    tool_error: &ToolError,
+) -> ErrorDiagnostic {
+    let mut diagnostic = tool_error.diagnostic();
+    diagnostic.operation = "execute_tool".into();
+    diagnostic.session_id = Some(chat_id.to_string());
+    diagnostic.context_chain.push(ErrorFrame::new(
+        "tools",
+        "execute_tool",
+        Some(format!("tool={} call_id={}", tool_name, tool_call_id)),
+    ));
+    diagnostic
 }
 
 /// Global message processor loop that handles incoming chat responses and manages tool calls
@@ -742,6 +1010,18 @@ async fn global_message_processor_loop(
                                     Value::String(result_content_str.to_string())
                                 });
                             pending.add_result(tool_call_id.clone(), result_value_for_pending);
+                            if let Some(is_error) = tool_result_status_from_metadata(
+                                response_chunk.metadata.as_ref(),
+                                &tool_call_id,
+                            ) {
+                                pending.add_result_status(tool_call_id.clone(), is_error);
+                            }
+                            if let Some(user_error) = tool_result_user_error_from_metadata(
+                                response_chunk.metadata.as_ref(),
+                                &tool_call_id,
+                            ) {
+                                pending.add_result_user_error(tool_call_id.clone(), user_error);
+                            }
 
                             if pending.is_complete() {
                                 all_tools_done = true;
@@ -770,29 +1050,12 @@ async fn global_message_processor_loop(
                                 let tool_calls_array =
                                     tool_calls_value.as_array().unwrap_or(&vec![]).to_vec();
 
-                                let merged_tool_info: Vec<Value> = tool_calls_array
-                                    .iter()
-                                    .map(|call| {
-                                        let mut call_obj =
-                                            call.as_object().cloned().unwrap_or_default();
-                                        if let Some(id_val) = call_obj.get("id") {
-                                            if let Some(id_str) = id_val.as_str() {
-                                                if let Some(result) = pending.results.get(id_str) {
-                                                    // The result from tool execution is often a JSON string.
-                                                    // To avoid double-escaped JSON, we attempt to parse it.
-                                                    // If it's not a valid JSON string, we keep it as a string.
-                                                    let result_value = serde_json::from_str(
-                                                        result.as_str().unwrap_or(""),
-                                                    )
-                                                    .unwrap_or_else(|_| result.clone());
-                                                    call_obj
-                                                        .insert("result".to_string(), result_value);
-                                                }
-                                            }
-                                        }
-                                        json!(call_obj)
-                                    })
-                                    .collect();
+                                let merged_tool_info = merge_tool_calls_with_results(
+                                    &tool_calls_array,
+                                    &pending.results,
+                                    &pending.result_status,
+                                    &pending.result_user_error,
+                                );
 
                                 // Send tool call information to the frontend
                                 let consolidated_chunk = ChatResponse::new_with_arc(
@@ -911,9 +1174,27 @@ async fn global_message_processor_loop(
                     }
                 } else {
                     // This is the AI's initial request to execute a tool
-                    if let Ok(tool_decl_to_execute) =
-                        serde_json::from_str::<ToolCallDeclaration>(&response_chunk.chunk)
-                    {
+                    let tool_decl_parse_result =
+                        serde_json::from_str::<ToolCallDeclaration>(&response_chunk.chunk);
+                    if let Err(parse_error) = &tool_decl_parse_result {
+                        let error = tool_call_parse_failure_error(parse_error);
+                        log_error_diagnostic(&tool_call_parse_failure_diagnostic(&chat_id, &error));
+                        if let Some(tx) = chat_state_arc.channels.get_sender(&window_label).await {
+                            let error_response = ChatResponse::new_with_arc(
+                                chat_id.clone(),
+                                tool_call_parse_failure_chunk(&response_chunk.chunk),
+                                MessageType::Error,
+                                attach_user_error(
+                                    response_chunk.metadata.clone(),
+                                    error.user_error(),
+                                ),
+                                Some(FinishReason::Error),
+                            );
+                            if let Err(e_send) = tx.try_send(error_response) {
+                                log::error!("Failed to send parse error (ToolCallDeclaration) to window '{}' (chat_id {}) channel: {}", window_label, chat_id, e_send);
+                            }
+                        }
+                    } else if let Ok(tool_decl_to_execute) = tool_decl_parse_result {
                         let tool_call_id = tool_decl_to_execute.id.clone();
                         let tool_name = tool_decl_to_execute.name.clone();
                         let arguments_str_opt = tool_decl_to_execute.arguments.clone();
@@ -943,20 +1224,24 @@ async fn global_message_processor_loop(
                                 cid_clone
                             );
 
-                            let tool_execution_actual_result = match cs_arc_clone
+                            let tool_call_result = cs_arc_clone
                                 .tool_manager
                                 .tool_call(&t_name_clone, args_value)
-                                .await
-                            {
+                                .await;
+                            let tool_result_is_error =
+                                capture_tool_result_is_error(&tool_call_result);
+                            let tool_result_user_error =
+                                capture_tool_result_user_error(&tool_call_result);
+                            let tool_execution_actual_result = match tool_call_result {
                                 Ok(result) => result,
                                 Err(e) => {
-                                    log::error!(
-                                        "Tool execution failed for '{}' (ID: {}): {}",
-                                        t_name_clone,
-                                        tc_id_clone,
-                                        e
-                                    );
-                                    json!({"error": format!("Tool execution failed: {}", e)})
+                                    log_error_diagnostic(&tool_execution_failure_diagnostic(
+                                        &cid_clone,
+                                        &t_name_clone,
+                                        &tc_id_clone,
+                                        &e,
+                                    ));
+                                    tool_execution_failure_result(&e)
                                 }
                             };
 
@@ -965,18 +1250,11 @@ async fn global_message_processor_loop(
                             // there is no search reference to extract here.
                             let reference_data: Option<Vec<Value>> = None;
 
-                            let mut tool_result_msg_for_history = json!({
-                                "role": "tool",
-                                "tool_call_id": tc_id_clone.clone(),
-                                "name": t_name_clone.clone(),
-                                "content": tool_execution_actual_result.get("content").and_then(|c| c.as_str()).map(String::from).unwrap_or_else(||
-                                    tool_execution_actual_result.as_str().map(String::from).unwrap_or_else(||
-                                        serde_json::to_string(&tool_execution_actual_result).unwrap_or_else(|_| {
-                                            "Failed to serialize tool result".to_string()
-                                        })
-                                    )
-                                ),
-                            });
+                            let mut tool_result_msg_for_history = build_tool_result_message(
+                                &tc_id_clone,
+                                &t_name_clone,
+                                &tool_execution_actual_result,
+                            );
                             if crate::tools::is_mcp_tool_expand_tool(&t_name_clone) {
                                 if let Some(structured_content) = tool_execution_actual_result
                                     .get("structured_content")
@@ -1014,6 +1292,16 @@ async fn global_message_processor_loop(
                             } else {
                                 new_metadata = json!({"is_internal_tool_result": true});
                             }
+                            record_tool_result_status(
+                                &mut new_metadata,
+                                &tc_id_clone,
+                                tool_result_is_error,
+                            );
+                            record_tool_result_user_error(
+                                &mut new_metadata,
+                                &tc_id_clone,
+                                tool_result_user_error.as_ref(),
+                            );
 
                             let result_response_chunk = ChatResponse::new_with_arc(
                                 cid_clone.clone(),
@@ -1051,27 +1339,6 @@ async fn global_message_processor_loop(
                                 log::error!("Failed to send processed tool result back to dispatcher for chat_id {}: {}", cid_clone, e);
                             }
                         });
-                    } else {
-                        log::error!(
-                            "Global processor: Failed to parse ToolCallDeclaration for chat_id {}: {}",
-                            chat_id, response_chunk.chunk
-                        );
-                        // （可选）如果解析 ToolCallDeclaration 失败，则向UI发送错误
-                        if let Some(tx) = chat_state_arc.channels.get_sender(&window_label).await {
-                            let error_response = ChatResponse::new_with_arc(
-                                chat_id.clone(),
-                                format!(
-                                    "Failed to parse tool call instruction: {}",
-                                    response_chunk.chunk
-                                ),
-                                MessageType::Error,
-                                response_chunk.metadata.clone(),
-                                Some(FinishReason::Error),
-                            );
-                            if let Err(e_send) = tx.try_send(error_response) {
-                                log::error!("Failed to send parse error (ToolCallDeclaration) to window '{}' (chat_id {}) channel: {}", window_label, chat_id, e_send);
-                            }
-                        }
                     }
                 }
             }
@@ -1288,6 +1555,494 @@ async fn global_message_processor_loop(
 //         finish_reason,
 //     })
 // }
+
+#[cfg(test)]
+mod tool_result_status_tests {
+    use super::{
+        build_tool_result_message, capture_tool_result_is_error, capture_tool_result_user_error,
+        merge_tool_calls_with_results, record_tool_result_status, record_tool_result_user_error,
+        tool_result_status_from_metadata, tool_result_user_error_from_metadata, PendingToolCalls,
+        TOOL_RESULT_IS_ERROR_METADATA_KEY, TOOL_RESULT_USER_ERROR_METADATA_KEY,
+    };
+    use crate::error_diagnostics::{ErrorProjection, FailureMessage};
+    use crate::tools::ToolError;
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+
+    #[test]
+    fn model_history_content_and_keys_are_unchanged() {
+        let actual = json!({
+            "content": "Error: this is ordinary output",
+            "structured_content": {"nested": true},
+            "is_error": false
+        });
+
+        let message = build_tool_result_message("call-1", "demo", &actual);
+
+        assert_eq!(
+            message,
+            json!({
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "name": "demo",
+                "content": "Error: this is ordinary output"
+            })
+        );
+        assert_eq!(message.get("is_error"), None);
+        assert_eq!(message.get("result"), None);
+        assert_eq!(
+            serde_json::to_string(&message).expect("serialize tool message"),
+            r#"{"content":"Error: this is ordinary output","name":"demo","role":"tool","tool_call_id":"call-1"}"#
+        );
+
+        let raw = json!("  raw bytes \n");
+        let raw_message = build_tool_result_message("call-2", "demo", &raw);
+        assert_eq!(raw_message["content"], json!("  raw bytes \n"));
+    }
+
+    #[test]
+    fn typed_status_ignores_error_wording_and_keeps_missing_unknown() {
+        let success = Ok(json!({
+            "content": "Error: ordinary output",
+            "is_error": false
+        }));
+        assert_eq!(capture_tool_result_is_error(&success), Some(false));
+
+        let typed_failure = Ok(json!({
+            "content": "completed successfully",
+            "is_error": true
+        }));
+        assert_eq!(capture_tool_result_is_error(&typed_failure), Some(true));
+
+        let failed: Result<Value, ToolError> = Err(ToolError::ExecutionFailed(
+            "failed without an Error: prefix".to_string().into(),
+        ));
+        assert_eq!(capture_tool_result_is_error(&failed), Some(true));
+
+        let unknown: Result<Value, ToolError> = Ok(json!({"content": "done"}));
+        assert_eq!(capture_tool_result_is_error(&unknown), None);
+    }
+
+    #[test]
+    fn consolidated_ui_payload_carries_status_without_mutating_model_data() {
+        let requests = vec![json!({
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "demo", "arguments": "{}"}
+        })];
+        let original_requests = requests.clone();
+        let mut results = HashMap::new();
+        results.insert("call-1".to_string(), json!("plain output"));
+        let mut statuses = HashMap::new();
+        statuses.insert("call-1".to_string(), true);
+
+        let merged = merge_tool_calls_with_results(&requests, &results, &statuses, &HashMap::new());
+
+        assert_eq!(merged[0]["result"], json!("plain output"));
+        assert_eq!(merged[0]["is_error"], json!(true));
+        assert_eq!(
+            merged[0].get("user_error"),
+            None,
+            "no projection without a captured error"
+        );
+        assert_eq!(
+            requests, original_requests,
+            "assistant request is untouched"
+        );
+
+        let mut pending = PendingToolCalls::new();
+        pending.add_result("call-1".to_string(), json!("plain output"));
+        pending.add_result_status("call-1".to_string(), true);
+        assert_eq!(pending.results["call-1"], json!("plain output"));
+        assert_eq!(pending.result_status["call-1"], true);
+    }
+
+    #[test]
+    fn missing_status_stays_unknown_for_empty_zero_and_false_results() {
+        let requests = vec![
+            json!({"id": "empty", "function": {"name": "demo"}}),
+            json!({"id": "zero", "function": {"name": "demo"}}),
+            json!({"id": "false", "function": {"name": "demo"}}),
+            json!({"id": "pending", "function": {"name": "demo"}}),
+        ];
+        let mut results = HashMap::new();
+        results.insert("empty".to_string(), json!(""));
+        results.insert("zero".to_string(), json!("0"));
+        results.insert("false".to_string(), json!("false"));
+
+        let merged =
+            merge_tool_calls_with_results(&requests, &results, &HashMap::new(), &HashMap::new());
+
+        for call in &merged {
+            assert_eq!(call.get("is_error"), None, "absent status stays unknown");
+            assert_eq!(
+                call.get("user_error"),
+                None,
+                "absent projection stays unknown"
+            );
+        }
+        assert_eq!(merged[0]["result"], json!(""));
+        assert_eq!(merged[1]["result"], json!(0));
+        assert_eq!(merged[2]["result"], json!(false));
+        assert_eq!(
+            merged[3].get("result"),
+            None,
+            "unfinished call has no result"
+        );
+
+        let pending = PendingToolCalls::new();
+        assert!(!pending.is_complete());
+        assert!(pending.result_status.is_empty());
+    }
+
+    #[test]
+    fn status_metadata_is_keyed_by_tool_id_and_preserves_other_fields() {
+        let mut metadata = json!({
+            "is_internal_tool_result": true,
+            "chat_param": {"model": "test"}
+        });
+
+        record_tool_result_status(&mut metadata, "call-1", Some(true));
+        record_tool_result_status(&mut metadata, "call-2", Some(false));
+        record_tool_result_status(&mut metadata, "call-3", None);
+
+        assert_eq!(
+            metadata[TOOL_RESULT_IS_ERROR_METADATA_KEY]["call-1"],
+            json!(true)
+        );
+        assert_eq!(
+            metadata[TOOL_RESULT_IS_ERROR_METADATA_KEY]["call-2"],
+            json!(false)
+        );
+        assert_eq!(
+            metadata[TOOL_RESULT_IS_ERROR_METADATA_KEY].get("call-3"),
+            None
+        );
+        assert_eq!(metadata["is_internal_tool_result"], json!(true));
+        assert_eq!(metadata["chat_param"]["model"], json!("test"));
+        assert_eq!(
+            tool_result_status_from_metadata(Some(&metadata), "call-1"),
+            Some(true)
+        );
+        assert_eq!(
+            tool_result_status_from_metadata(Some(&metadata), "call-3"),
+            None
+        );
+        assert_eq!(tool_result_status_from_metadata(None, "call-1"), None);
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("tool call wrapper")]
+    struct WrappedToolFailure {
+        #[source]
+        source: std::io::Error,
+    }
+
+    #[test]
+    fn source_error_projects_root_safe_cause() {
+        let wrapped = WrappedToolFailure {
+            source: std::io::Error::other("token=CANARY at /private/secret.txt"),
+        };
+        let tool_error = ToolError::ExecutionFailed(FailureMessage::from_error(&wrapped));
+        let result: Result<Value, ToolError> = Err(tool_error);
+
+        let user_error = capture_tool_result_user_error(&result).expect("source error projects");
+        assert_eq!(user_error.schema_version, 1);
+        assert_eq!(user_error.message, "token=\"[redacted]\"");
+        assert!(!user_error.message.contains("CANARY"));
+        assert!(!user_error.message.contains("/private/secret.txt"));
+        assert!(
+            !user_error.message.contains("tool call wrapper"),
+            "the safe projection carries the root cause, not the wrapper"
+        );
+        assert_eq!(capture_tool_result_is_error(&result), Some(true));
+    }
+
+    #[test]
+    fn typed_error_projects_known_structured_message_and_redacts_it() {
+        let structured: Result<Value, ToolError> = Ok(json!({
+            "is_error": true,
+            "structured_content": {"message": "token=CANARY at /private/secret.txt"},
+            "error": {"message": "fallback message"},
+            "content": "fallback content"
+        }));
+        let user_error = capture_tool_result_user_error(&structured).expect("structured message");
+        assert_eq!(user_error.schema_version, 1);
+        assert_eq!(user_error.message, "token=\"[redacted]\"");
+        assert!(!user_error.message.contains("CANARY"));
+        assert!(!user_error.message.contains("/private/secret.txt"));
+
+        let error_message: Result<Value, ToolError> = Ok(json!({
+            "is_error": true,
+            "error": {"message": "api_key=CANARY"},
+            "content": "fallback content"
+        }));
+        let projected = capture_tool_result_user_error(&error_message).expect("error message");
+        assert_eq!(projected.message, "api_key=\"[redacted]\"");
+
+        let content_only: Result<Value, ToolError> = Ok(json!({
+            "is_error": true,
+            "content": "token=CANARY"
+        }));
+        let projected = capture_tool_result_user_error(&content_only).expect("content message");
+        assert_eq!(projected.message, "token=\"[redacted]\"");
+    }
+
+    #[test]
+    fn success_and_unknown_typed_results_have_no_projection() {
+        let success: Result<Value, ToolError> = Ok(json!({
+            "is_error": false,
+            "content": "token=CANARY"
+        }));
+        assert_eq!(capture_tool_result_user_error(&success), None);
+
+        let missing_flag: Result<Value, ToolError> = Ok(json!({"content": "token=CANARY"}));
+        assert_eq!(capture_tool_result_user_error(&missing_flag), None);
+
+        let no_known_message: Result<Value, ToolError> = Ok(json!({
+            "is_error": true,
+            "content_blocks": [{"message": "token=CANARY"}]
+        }));
+        assert_eq!(capture_tool_result_user_error(&no_known_message), None);
+
+        let non_string_message: Result<Value, ToolError> = Ok(json!({
+            "is_error": true,
+            "error": {"message": {"nested": "token=CANARY"}}
+        }));
+        assert_eq!(capture_tool_result_user_error(&non_string_message), None);
+    }
+
+    #[test]
+    fn consolidated_ui_payload_adds_user_error_without_mutating_model_results() {
+        let requests = vec![json!({
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "demo", "arguments": "{}"}
+        })];
+        let original_requests = requests.clone();
+        let mut results = HashMap::new();
+        results.insert("call-1".to_string(), json!("Tool execution failed: legacy"));
+        let mut statuses = HashMap::new();
+        statuses.insert("call-1".to_string(), true);
+        let mut errors = HashMap::new();
+        errors.insert(
+            "call-1".to_string(),
+            FailureMessage::leaf("token=CANARY").user_error(),
+        );
+
+        let merged = merge_tool_calls_with_results(&requests, &results, &statuses, &errors);
+
+        assert_eq!(merged[0]["result"], json!("Tool execution failed: legacy"));
+        assert_eq!(merged[0]["is_error"], json!(true));
+        assert_eq!(merged[0]["user_error"]["schema_version"], json!(1));
+        assert_eq!(
+            merged[0]["user_error"]["message"],
+            json!("token=\"[redacted]\"")
+        );
+        assert_eq!(merged[0]["user_error"].get("reason"), None);
+        assert_eq!(requests, original_requests);
+
+        let model_message = build_tool_result_message(
+            "call-1",
+            "demo",
+            &json!({"content": "Tool execution failed: legacy", "is_error": true}),
+        );
+        assert_eq!(model_message.get("user_error"), None);
+        assert_eq!(model_message.get("is_error"), None);
+        assert_eq!(
+            model_message["content"],
+            json!("Tool execution failed: legacy")
+        );
+    }
+
+    #[test]
+    fn user_error_metadata_is_separate_from_status_metadata() {
+        let mut metadata = json!({
+            "is_internal_tool_result": true,
+            "chat_param": {"model": "test"}
+        });
+        let user_error = FailureMessage::leaf("token=CANARY").user_error();
+
+        record_tool_result_status(&mut metadata, "call-1", Some(true));
+        record_tool_result_user_error(&mut metadata, "call-1", Some(&user_error));
+
+        assert_eq!(metadata["is_internal_tool_result"], json!(true));
+        assert_eq!(metadata["chat_param"]["model"], json!("test"));
+        assert_eq!(
+            metadata[TOOL_RESULT_IS_ERROR_METADATA_KEY]["call-1"],
+            json!(true)
+        );
+        assert_eq!(
+            metadata[TOOL_RESULT_USER_ERROR_METADATA_KEY]["call-1"]["schema_version"],
+            json!(1)
+        );
+        assert_eq!(
+            metadata[TOOL_RESULT_USER_ERROR_METADATA_KEY]["call-1"]["message"],
+            json!("token=\"[redacted]\"")
+        );
+        assert!(!metadata.to_string().contains("CANARY"));
+        assert_eq!(
+            tool_result_status_from_metadata(Some(&metadata), "call-1"),
+            Some(true)
+        );
+        assert_eq!(
+            tool_result_user_error_from_metadata(Some(&metadata), "call-1"),
+            Some(user_error)
+        );
+        assert_eq!(
+            tool_result_user_error_from_metadata(Some(&metadata), "call-2"),
+            None
+        );
+
+        let mut pending = PendingToolCalls::new();
+        pending.add_result_status("call-1".to_string(), true);
+        pending.add_result_user_error(
+            "call-1".to_string(),
+            FailureMessage::leaf("plain failure").user_error(),
+        );
+        assert_eq!(pending.result_status["call-1"], true);
+        assert_eq!(pending.results.get("call-1"), None);
+        assert!(pending.result_user_error.contains_key("call-1"));
+    }
+}
+
+#[cfg(test)]
+mod error_feedback_tests {
+    use super::{
+        attach_user_error, tool_call_parse_failure_chunk, tool_call_parse_failure_diagnostic,
+        tool_call_parse_failure_error, tool_execution_failure_diagnostic,
+        tool_execution_failure_result,
+    };
+    use crate::ai::error::AiError;
+    use crate::ai::traits::chat::ToolCallDeclaration;
+    use crate::error_diagnostics::{ErrorProjection, FailureMessage};
+    use crate::tools::ToolError;
+    use serde_json::{json, Value};
+
+    fn malformed_tool_call_with_canary() -> String {
+        // Truncated JSON keeps the call arguments in the legacy chunk while the
+        // live serde failure itself never echoes the input.
+        r#"{"id":"call-1","name":"demo","arguments":"{\"token\":\"CANARY\",\"path\":\"/private/secret.txt\"}"#
+            .to_string()
+    }
+
+    #[test]
+    fn parse_failure_projects_typed_safe_user_error_without_raw_chunk() {
+        let raw = malformed_tool_call_with_canary();
+        let parse_error = serde_json::from_str::<ToolCallDeclaration>(&raw)
+            .expect_err("truncated tool call must fail to parse");
+        let error = tool_call_parse_failure_error(&parse_error);
+
+        assert!(matches!(&error, AiError::ResponseParseFailed { .. }));
+        let user_error = error.user_error();
+        assert_eq!(user_error.schema_version, 1);
+        assert_eq!(user_error.message, parse_error.to_string());
+        assert!(!user_error.message.contains("CANARY"));
+        assert!(!user_error.message.contains("arguments"));
+        assert!(!user_error.message.contains("/private/secret.txt"));
+
+        let metadata = attach_user_error(
+            Some(json!({"windowLabel": "main", "chat_param": {"model": "test"}})),
+            user_error.clone(),
+        )
+        .expect("error metadata");
+        assert_eq!(metadata["windowLabel"], json!("main"));
+        assert_eq!(metadata["chat_param"]["model"], json!("test"));
+        assert_eq!(metadata["user_error"], json!(user_error));
+        assert!(!metadata.to_string().contains("CANARY"));
+
+        // The legacy chunk intentionally keeps the raw instruction for existing
+        // consumers; only the new user projection and diagnostic are safe.
+        assert_eq!(
+            tool_call_parse_failure_chunk(&raw),
+            format!("Failed to parse tool call instruction: {}", raw)
+        );
+
+        let diagnostic = tool_call_parse_failure_diagnostic("chat-1", &error);
+        assert_eq!(diagnostic.module, "ai");
+        assert_eq!(diagnostic.operation, "parse_tool_call");
+        assert_eq!(diagnostic.session_id.as_deref(), Some("chat-1"));
+        assert!(diagnostic
+            .context_chain
+            .iter()
+            .any(|frame| frame.operation == "parse_tool_call"));
+        let line = diagnostic.to_json_line();
+        assert_eq!(line.matches("error_diagnostic").count(), 1);
+        assert!(!line.contains('\n'));
+        assert!(!line.contains("CANARY"));
+        assert!(!line.contains("/private/secret.txt"));
+    }
+
+    #[test]
+    fn parse_failure_metadata_stays_safe_without_usable_metadata() {
+        let parse_error = serde_json::from_str::<ToolCallDeclaration>("{")
+            .expect_err("incomplete object must fail to parse");
+        let error = tool_call_parse_failure_error(&parse_error);
+        let user_error = error.user_error();
+
+        assert_eq!(
+            attach_user_error(None, user_error.clone()),
+            Some(json!({"user_error": user_error.clone()}))
+        );
+        assert_eq!(
+            attach_user_error(Some(json!("not-an-object")), user_error.clone()),
+            Some(json!({"user_error": user_error}))
+        );
+    }
+
+    #[test]
+    fn tool_execution_diagnostic_is_redacted_and_keeps_legacy_model_result() {
+        let tool_error =
+            ToolError::ExecutionFailed(FailureMessage::leaf("token=CANARY at /private/secret.txt"));
+        let model_result = tool_execution_failure_result(&tool_error);
+        assert_eq!(
+            model_result,
+            json!({"error": format!("Tool execution failed: {}", tool_error)})
+        );
+        assert!(model_result["error"]
+            .as_str()
+            .expect("error string")
+            .contains("CANARY"));
+
+        let diagnostic = tool_execution_failure_diagnostic("chat-1", "demo", "call-1", &tool_error);
+        assert_eq!(diagnostic.module, "tools");
+        assert_eq!(diagnostic.operation, "execute_tool");
+        assert_eq!(diagnostic.session_id.as_deref(), Some("chat-1"));
+        assert!(diagnostic.context_chain.iter().any(|frame| {
+            frame.operation == "execute_tool"
+                && frame.context.as_deref() == Some("tool=demo call_id=call-1")
+        }));
+        let line = diagnostic.to_json_line();
+        assert_eq!(line.matches("error_diagnostic").count(), 1);
+        assert!(!line.contains('\n'));
+        assert!(!line.contains("CANARY"));
+        let value: Value = serde_json::from_str(&line).expect("single diagnostic line");
+        assert_eq!(value["module"], json!("tools"));
+        assert_eq!(value["session_id"], json!("chat-1"));
+        assert_eq!(value["error"], json!("token=\"[redacted]\""));
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("tool call wrapper")]
+    struct WrappedToolFailure {
+        #[source]
+        source: std::io::Error,
+    }
+
+    #[test]
+    fn tool_execution_diagnostic_keeps_the_typed_source_chain() {
+        let wrapped = WrappedToolFailure {
+            source: std::io::Error::other("socket closed"),
+        };
+        let tool_error = ToolError::ExecutionFailed(FailureMessage::from_error(&wrapped));
+        let diagnostic = tool_execution_failure_diagnostic("chat-1", "demo", "call-1", &tool_error);
+        assert_eq!(diagnostic.error, "socket closed");
+        assert_eq!(
+            diagnostic.source_chain,
+            vec!["tool call wrapper".to_string()]
+        );
+    }
+}
 
 #[cfg(test)]
 mod admission_tests {

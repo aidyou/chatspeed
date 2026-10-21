@@ -137,6 +137,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
+import { formatUserError } from '@/libs/error'
+import { useI18n } from 'vue-i18n'
 import { showMessage } from '@/libs/util'
 
 // import { openPath } from '@tauri-apps/plugin-opener'
@@ -144,6 +146,8 @@ import { showMessage } from '@/libs/util'
 // import { storeToRefs } from 'pinia'
 // const settingStore = useSettingStore()
 // const { env } = storeToRefs(settingStore)
+
+const { t } = useI18n()
 
 const requestType = ref('search')
 const url = ref('https://chatspeed.aidyou.ai/')
@@ -167,12 +171,6 @@ const displayValue = value => {
   } catch {
     return String(value)
   }
-}
-
-const displayError = value => {
-  if (value instanceof FrontendAppError) return value.toFormattedString()
-  if (value instanceof Error) return value.message
-  return displayValue(value)
 }
 
 const content = computed(() => {
@@ -202,7 +200,7 @@ const runTest = async () => {
   let params
   if (requestType.value !== 'search') {
     if (!url.value) {
-      showMessage('Url Required', 'error')
+      showMessage(t('common.urlRequired'), 'error')
       loading.value = false
       return
     }
@@ -215,7 +213,7 @@ const runTest = async () => {
     }
   } else if (requestType.value === 'search') {
     if (!provider.value || !keyword.value) {
-      showMessage('Provider and Keyword Required', 'error')
+      showMessage(t('common.providerKeywordRequired'), 'error')
       loading.value = false
       return
     }
@@ -233,12 +231,12 @@ const runTest = async () => {
     const response = await invokeWrapper('test_scrape', { requestData: params })
     result.value = requestType.value === 'search' ? displayValue(response) : JSON.parse(response)
   } catch (e) {
-    error.value = displayError(e)
+    error.value = formatUserError(e, t('common.errorFallback'))
     if (e instanceof FrontendAppError) {
-      showMessage('Test Failed: ' + e.toFormattedString(), 'error')
+      showMessage(formatUserError(e, t('common.errorFallback')), 'error')
       console.error('Scraper test failed:', e.originalError)
     } else {
-      showMessage('Test Failed: ' + (e.message || String(e)), 'error')
+      showMessage(formatUserError(e, t('common.errorFallback')), 'error')
       console.error('Scraper test failed:', e)
     }
   } finally {
@@ -254,7 +252,7 @@ const runWebFetchTest = async () => {
   error.value = null
 
   if (!url.value) {
-    showMessage('Url Required', 'error')
+    showMessage(t('common.urlRequired'), 'error')
     loading.value = false
     return
   }
@@ -271,12 +269,12 @@ const runWebFetchTest = async () => {
     const response = await invokeWrapper('test_scrape', { requestData: params })
     result.value = JSON.parse(response)
   } catch (e) {
-    error.value = displayError(e)
+    error.value = formatUserError(e, t('common.errorFallback'))
     if (e instanceof FrontendAppError) {
-      showMessage('WebFetch Test Failed: ' + e.toFormattedString(), 'error')
+      showMessage(formatUserError(e, t('common.errorFallback')), 'error')
       console.error('WebFetch test failed:', e.originalError)
     } else {
-      showMessage('WebFetch Test Failed: ' + (e.message || String(e)), 'error')
+      showMessage(formatUserError(e, t('common.errorFallback')), 'error')
       console.error('WebFetch test failed:', e)
     }
   } finally {

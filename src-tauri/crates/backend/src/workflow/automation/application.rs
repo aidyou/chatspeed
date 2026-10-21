@@ -144,7 +144,7 @@ impl AutomationApplicationService {
         let rows = self
             .store()
             .list_workflow_automations()
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
         Ok(rows.iter().map(to_view).collect())
     }
 
@@ -152,7 +152,7 @@ impl AutomationApplicationService {
         let row = self
             .store()
             .get_workflow_automation(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
         Ok(row.as_ref().map(to_view))
     }
 
@@ -162,7 +162,7 @@ impl AutomationApplicationService {
     ) -> Result<Option<WorkflowAutomation>, AutomationError> {
         self.store()
             .get_workflow_automation(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))
+            .map_err(|e| AutomationError::internal_from(e))
     }
 
     /// Legacy camelCase run rows for the existing `workflow_automation_list_runs`
@@ -173,7 +173,7 @@ impl AutomationApplicationService {
     ) -> Result<Vec<WorkflowAutomationRun>, AutomationError> {
         self.store()
             .list_workflow_automation_runs(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))
+            .map_err(|e| AutomationError::internal_from(e))
     }
 
     /// Lists an automation's runs with a bounded, structured terminal projection
@@ -183,12 +183,12 @@ impl AutomationApplicationService {
         let automation = self
             .store()
             .get_workflow_automation(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
             .ok_or_else(|| AutomationError::not_found(format!("Automation {automation_id}")))?;
         let runs = self
             .store()
             .list_workflow_automation_runs(&automation.id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
         let mut views = Vec::with_capacity(runs.len());
         for run in &runs {
             let projected = self.project_run(run)?;
@@ -204,7 +204,7 @@ impl AutomationApplicationService {
         let runs = self
             .store()
             .list_unreconciled_automation_runs()
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
         for run in &runs {
             let _ = self.project_run(run)?;
         }
@@ -249,7 +249,7 @@ impl AutomationApplicationService {
         let automations = self
             .store()
             .list_workflow_automations()
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
         let mut report = AutomationStartupNormalizeReport::default();
         for automation in &automations {
             if !automation.enabled {
@@ -296,7 +296,7 @@ impl AutomationApplicationService {
                     recomputed.clone(),
                     automation.revision,
                 )
-                .map_err(|e| AutomationError::internal(e.to_string()))?
+                .map_err(|e| AutomationError::internal_from(e))?
             {
                 CasOutcome::Updated(_) => {
                     if recomputed.is_some() {
@@ -379,11 +379,11 @@ impl AutomationApplicationService {
         let automations = self
             .store()
             .list_enabled_workflow_automations()
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
         let active_runs = self
             .store()
             .list_active_automation_runs()
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
 
         let mut blocking_automations: HashSet<&str> = HashSet::new();
         let mut live_automation_runs = 0i64;
@@ -510,7 +510,7 @@ impl AutomationApplicationService {
         automation: &WorkflowAutomation,
     ) -> Result<Value, AutomationError> {
         serde_json::from_str(&automation.schedule_config)
-            .map_err(|e| AutomationError::internal(e.to_string()))
+            .map_err(|e| AutomationError::internal_from(e))
     }
 
     // --- draft / apply ----------------------------------------------------
@@ -556,7 +556,7 @@ impl AutomationApplicationService {
             .as_deref()
             .map(|id| self.store().get_workflow_automation(id))
             .transpose()
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
             .flatten();
 
         let permission_summary =
@@ -651,7 +651,7 @@ impl AutomationApplicationService {
             let existing = self
                 .store()
                 .get_workflow_automation(&automation_id)
-                .map_err(|e| AutomationError::internal(e.to_string()))?
+                .map_err(|e| AutomationError::internal_from(e))?
                 .ok_or_else(|| AutomationError::not_found(format!("Automation {automation_id}")))?;
             if existing.revision != plan.base_revision.unwrap_or(i64::MIN) {
                 return Err(AutomationError::revision_conflict(
@@ -691,7 +691,7 @@ impl AutomationApplicationService {
         let _ticket = self.admit(crate::lifecycle::WorkKind::AutomationConfigure)?;
         let request_hash = canonical_request_hash(&json!({
             "operation": "create",
-            "spec": serde_json::to_value(spec).map_err(|e| AutomationError::internal(e.to_string()))?,
+            "spec": serde_json::to_value(spec).map_err(|e| AutomationError::internal_from(e))?,
         }));
         self.apply_mutation_with_receipt(
             actor_scope,
@@ -716,7 +716,7 @@ impl AutomationApplicationService {
             "operation": "update",
             "automation_id": automation_id,
             "expected_revision": expected_revision,
-            "spec": serde_json::to_value(spec).map_err(|e| AutomationError::internal(e.to_string()))?,
+            "spec": serde_json::to_value(spec).map_err(|e| AutomationError::internal_from(e))?,
         }));
         let id = automation_id.to_string();
         self.apply_mutation_with_receipt(
@@ -803,7 +803,7 @@ impl AutomationApplicationService {
         match self
             .store()
             .reserve_automation_mutation(actor_scope, key, operation, request_hash)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
         {
             ReceiptOutcome::Conflict => Err(AutomationError::conflict(
                 "idempotency key was already used with a different request",
@@ -862,7 +862,7 @@ impl AutomationApplicationService {
         let id = self
             .tsid_generator
             .generate()
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal(e))?;
         self.insert_with_id(spec, id)
     }
 
@@ -894,7 +894,7 @@ impl AutomationApplicationService {
         let existing = self
             .store()
             .get_workflow_automation(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
             .ok_or_else(|| AutomationError::not_found(format!("Automation {automation_id}")))?;
         let upsert = self.build_upsert(
             spec,
@@ -927,12 +927,12 @@ impl AutomationApplicationService {
         let existing = self
             .store()
             .get_workflow_automation(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
             .ok_or_else(|| AutomationError::not_found(format!("Automation {automation_id}")))?;
         let expected = expected_revision.unwrap_or(existing.revision);
         let next_run_at = if enabled {
             let schedule_config: Value = serde_json::from_str(&existing.schedule_config)
-                .map_err(|e| AutomationError::internal(e.to_string()))?;
+                .map_err(|e| AutomationError::internal_from(e))?;
             crate::workflow::automation::service::compute_next_run_at(
                 &existing.schedule_kind,
                 &schedule_config,
@@ -966,7 +966,7 @@ impl AutomationApplicationService {
         if self
             .store()
             .get_workflow_automation(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
             .is_none()
         {
             return Err(AutomationError::not_found(format!(
@@ -981,7 +981,7 @@ impl AutomationApplicationService {
         match self
             .store()
             .delete_workflow_automation_if_idle(automation_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
         {
             DeleteAutomationOutcome::Deleted => Ok(AutomationMutationResult {
                 outcome: AutomationMutationOutcome::Deleted,
@@ -1008,7 +1008,7 @@ impl AutomationApplicationService {
                 let existing = self
                     .store()
                     .get_workflow_automation(id)
-                    .map_err(|e| AutomationError::internal(e.to_string()))?
+                    .map_err(|e| AutomationError::internal_from(e))?
                     .ok_or_else(|| AutomationError::not_found(format!("Automation {id}")))?;
                 Ok(Some(existing.revision))
             }
@@ -1138,7 +1138,7 @@ impl AutomationApplicationService {
         let snapshot_terminal = self
             .store()
             .workflow_snapshot_state(session_id)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
             .as_deref()
             .and_then(terminal_from_snapshot_state);
         let target = snapshot_terminal
@@ -1160,7 +1160,7 @@ impl AutomationApplicationService {
         }
         self.store()
             .update_workflow_automation_run_status(run_id_str(run), status, None)
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
         let mut updated = run.clone();
         updated.status = status.to_string();
         Ok(updated)
@@ -1178,7 +1178,7 @@ impl AutomationApplicationService {
             if let Some(state) = self
                 .store()
                 .workflow_snapshot_state(session_id)
-                .map_err(|e| AutomationError::internal(e.to_string()))?
+                .map_err(|e| AutomationError::internal_from(e))?
             {
                 workflow_status = Some(state.clone());
                 wait_reason = (state == "waiting")
@@ -1270,13 +1270,13 @@ impl WorkflowApplicationService {
             .automation()
             .store()
             .reserve_automation_mutation(actor_scope, key, "run", &request_hash)
-            .map_err(|e| AutomationError::internal(e.to_string()))?
+            .map_err(|e| AutomationError::internal_from(e))?
         {
             ReceiptOutcome::Conflict => Err(AutomationError::conflict(
                 "idempotency key was already used with a different request",
             )),
             ReceiptOutcome::Replay(Some(raw)) => {
-                serde_json::from_str(&raw).map_err(|e| AutomationError::internal(e.to_string()))
+                serde_json::from_str(&raw).map_err(|e| AutomationError::internal_from(e))
             }
             ReceiptOutcome::Replay(None) => Err(AutomationError::internal(
                 "idempotent run has no replay result",
@@ -1284,11 +1284,11 @@ impl WorkflowApplicationService {
             ReceiptOutcome::Proceed => {
                 let result = self.automation_run(automation_id).await?;
                 let stored = serde_json::to_string(&result)
-                    .map_err(|e| AutomationError::internal(e.to_string()))?;
+                    .map_err(|e| AutomationError::internal_from(e))?;
                 self.automation()
                     .store()
                     .complete_automation_mutation(actor_scope, key, Some(&stored))
-                    .map_err(|e| AutomationError::internal(e.to_string()))?;
+                    .map_err(|e| AutomationError::internal_from(e))?;
                 Ok(result)
             }
         }
@@ -1352,7 +1352,7 @@ impl WorkflowApplicationService {
         let due = self
             .main_store
             .list_due_workflow_automations(now)
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
         let mut results = Vec::new();
         for automation in due {
             // The due slot is the stored cursor; its successor is computed
@@ -1374,7 +1374,7 @@ impl WorkflowApplicationService {
             let run_id = self
                 .tsid_generator
                 .generate()
-                .map_err(|e| AutomationError::internal(e.to_string()))?;
+                .map_err(|e| AutomationError::internal(e))?;
             let scheduled_for = current_slot.clone();
             // Admit the run in this instance's short-lived evidence *before* the
             // claim. The claim commits the pending run and another worker thread
@@ -1394,7 +1394,7 @@ impl WorkflowApplicationService {
                     &run_id,
                     &scheduled_for,
                 )
-                .map_err(|e| AutomationError::internal(e.to_string()))?;
+                .map_err(|e| AutomationError::internal_from(e))?;
             let claimed_run = match claim {
                 ClaimOutcome::Claimed(run) => run,
                 ClaimOutcome::NotEligible
@@ -1420,7 +1420,7 @@ impl WorkflowApplicationService {
             let reloaded = self
                 .main_store
                 .get_workflow_automation_run(&claimed_run.id)
-                .map_err(|e| AutomationError::internal(e.to_string()))?
+                .map_err(|e| AutomationError::internal_from(e))?
                 .unwrap_or(claimed_run);
             let view = self.automation().run_view(&reloaded)?;
             results.push(AutomationDispatchResult {
@@ -1651,12 +1651,16 @@ fn redact_error(error: &str) -> String {
 
 fn map_store_write_error(error: crate::db::StoreError) -> AutomationError {
     // An agent foreign-key violation or an insert-on-existing id is a stable
-    // invalid/conflict, not an opaque internal error.
+    // invalid/conflict, not an opaque internal error. The typed origin is
+    // captured before the display text is inspected, so the classification
+    // decision never becomes the only surviving evidence.
+    let origin = error.error_origin();
     let text = error.to_string();
     if text.contains("FOREIGN KEY") || text.contains("constraint failed") {
-        return AutomationError::invalid_request(format!("automation write rejected: {text}"));
+        return AutomationError::invalid_request(format!("automation write rejected: {text}"))
+            .with_origin(origin);
     }
-    AutomationError::internal(text)
+    AutomationError::internal(text).with_origin(origin)
 }
 
 #[cfg(test)]

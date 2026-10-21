@@ -37,10 +37,16 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+#[cfg(test)]
+use chatspeed_contracts::UserErrorPresentation;
+#[cfg(test)]
+use chatspeed_runtime_client::ClientResponseError;
 use chatspeed_runtime_client::{ClientError, RuntimeClient};
 
 use crate::db::{WorkflowAutomation, WorkflowAutomationRun};
-use crate::runtime_client::{RuntimeSupervisor, RuntimeUnavailable};
+use crate::runtime_client::{
+    client_error_wire, runtime_error_wire, RuntimeSupervisor, RuntimeUnavailable,
+};
 use crate::workflow::automation::types::{
     AutomationApplyRequest, AutomationDispatchResult, AutomationDraftInput,
     AutomationMutationResult, AutomationPlanV1, AutomationRunView, AutomationSpec, AutomationView,
@@ -77,7 +83,7 @@ pub async fn automation_get(
     let client = control_plane_client(supervisor).await?;
     match client.get(&path).await {
         Ok(value) => Ok(Some(view_to_row(decode(value)?))),
-        Err(ClientError::Server { status, .. }) if status == 404 => Ok(None),
+        Err(ClientError::Server(response)) if response.status == 404 => Ok(None),
         Err(error) => Err(map_client_error(error)),
     }
 }
@@ -381,19 +387,16 @@ fn encode_path_segment(segment: &str) -> String {
 
 /// Maps a transport/domain client error to the Tauri string error.
 ///
-/// A structured runtime error keeps its bare message so the Tauri wire stays as
-/// close as possible to the previous `AutomationError::message` string; every
-/// other failure keeps the client's classified (redacted) description.
+/// Public runtime rejections keep their structured envelope so the frontend can
+/// still branch on code, status and the safe presentation; every other failure
+/// keeps the client's classified (redacted) description.
 fn map_client_error(error: ClientError) -> String {
-    match error {
-        ClientError::Server { message, .. } => message,
-        other => other.to_string(),
-    }
+    client_error_wire(error)
 }
 
 /// Maps a supervisor availability failure to the Tauri string error.
 fn map_runtime_error(error: RuntimeUnavailable) -> String {
-    error.to_string()
+    runtime_error_wire(error)
 }
 
 #[cfg(test)]
@@ -513,13 +516,49 @@ mod tests {
     }
 
     #[test]
-    fn a_server_error_keeps_its_bare_message() {
-        let error = map_client_error(ClientError::Server {
+    fn a_server_error_keeps_its_structured_envelope() {
+        let error = map_client_error(ClientError::Server(ClientResponseError {
+            legacy_display:
+                "server error 409: delete requires confirmation (confirmation_required)".to_string(),
             status: 409,
             code: "confirmation_required".to_string(),
             message: "delete requires confirmation".to_string(),
-        });
-        assert_eq!(error, "delete requires confirmation");
+            presentation: None,
+        }));
+        let wire: Value =
+            serde_json::from_str(&error).expect("public rejection is a JSON envelope");
+        assert_eq!(wire["error"]["code"], "confirmation_required");
+        assert_eq!(wire["error"]["message"], "delete requires confirmation");
+        assert_eq!(wire["status"], 409);
+        assert!(wire["error"].get("presentation").is_none());
+    }
+
+    #[test]
+    fn a_server_error_keeps_the_safe_presentation_flat() {
+        let error = map_client_error(ClientError::Server(ClientResponseError {
+            legacy_display:
+                "server error 409: delete requires confirmation (confirmation_required)".to_string(),
+            status: 409,
+            code: "confirmation_required".to_string(),
+            message: "delete requires confirmation".to_string(),
+            presentation: Some(UserErrorPresentation {
+                schema_version: 1,
+                message: "Confirm the automation deletion in the UI".to_string(),
+                reason: None,
+                upstream_status: None,
+            }),
+        }));
+        let wire: Value =
+            serde_json::from_str(&error).expect("public rejection is a JSON envelope");
+        // The legacy code/message pair and the HTTP status are preserved.
+        assert_eq!(wire["error"]["code"], "confirmation_required");
+        assert_eq!(wire["error"]["message"], "delete requires confirmation");
+        assert_eq!(wire["status"], 409);
+        // The safe projection is optional and never replaces the legacy pair.
+        assert_eq!(
+            wire["error"]["presentation"]["message"],
+            "Confirm the automation deletion in the UI"
+        );
     }
 
     #[test]

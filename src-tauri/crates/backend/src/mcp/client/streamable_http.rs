@@ -61,13 +61,14 @@ impl StreamableHttpClient {
                     client = "StreamableHttpClient",
                     protocol_type = config.protocol_type.to_string()
                 )
-                .to_string(),
+                .to_string()
+                .into(),
             ));
         }
 
         if config.url.as_deref().unwrap_or_default().is_empty() {
             return Err(McpError::ClientConfigError(
-                t!("mcp.client.http_url_cant_be_empty").to_string(),
+                t!("mcp.client.http_url_cant_be_empty").to_string().into(),
             ));
         }
 
@@ -95,8 +96,11 @@ impl StreamableHttpClient {
                 let mut headers = header::HeaderMap::new();
                 headers.insert(
                     header::AUTHORIZATION,
-                    header::HeaderValue::from_str(&format!("Bearer {}", token))
-                        .map_err(|e| McpError::ClientConfigError(e.to_string()))?,
+                    header::HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {
+                        McpError::ClientConfigError(
+                            crate::error_diagnostics::FailureMessage::from_error(&e),
+                        )
+                    })?,
                 );
 
                 client_builder = client_builder.default_headers(headers);
@@ -105,15 +109,18 @@ impl StreamableHttpClient {
 
         if let Some(proxy) = current_config.proxy.as_ref() {
             if !proxy.trim().is_empty() {
-                let proxy = reqwest::Proxy::all(proxy)
-                    .map_err(|e| McpError::ClientConfigError(e.to_string()))?;
+                let proxy = reqwest::Proxy::all(proxy).map_err(|e| {
+                    McpError::ClientConfigError(
+                        crate::error_diagnostics::FailureMessage::from_error(&e),
+                    )
+                })?;
                 client_builder = client_builder.proxy(proxy);
             }
         }
 
-        let http_client = client_builder
-            .build()
-            .map_err(|e| McpError::ClientConfigError(e.to_string()))?;
+        let http_client = client_builder.build().map_err(|e| {
+            McpError::ClientConfigError(crate::error_diagnostics::FailureMessage::from_error(&e))
+        })?;
         Ok(http_client)
     }
 }
@@ -141,7 +148,7 @@ impl McpClient for StreamableHttpClient {
             Some(u) => u,
             None => {
                 let err_msg = t!("mcp.client.http_url_cant_be_empty").to_string();
-                return Err(McpError::ClientConfigError(err_msg));
+                return Err(McpError::ClientConfigError(err_msg.into()));
             }
         };
 
@@ -173,12 +180,15 @@ impl McpClient for StreamableHttpClient {
                 let detailed_error = e.to_string();
                 log::error!("Start HttpClient error: {}", detailed_error);
                 return Err(McpError::ClientStartError(
-                    t!(
-                        "mcp.client.http_service_start_failed",
-                        url = url,
-                        error = detailed_error
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!(
+                            "mcp.client.http_service_start_failed",
+                            url = url,
+                            error = detailed_error
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 ));
             }
         };

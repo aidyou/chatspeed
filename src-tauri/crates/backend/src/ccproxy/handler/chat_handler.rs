@@ -6,6 +6,7 @@ use reqwest::header::HeaderMap;
 use rust_i18n::t;
 use std::sync::{Arc, RwLock};
 
+use crate::ccproxy::diagnostic::{self, RequestContext};
 use crate::ccproxy::handler::decision_is_not_a_chat_protocol;
 use crate::ccproxy::handler::request_preprocessor::{
     preprocess_client_request_body, preprocess_unified_request,
@@ -103,6 +104,19 @@ fn get_proxy_alias_from_body(
     }
 }
 
+fn log_request_decode_error(protocol: &str, error: &serde_json::Error, body: &[u8]) {
+    let diagnostic = diagnostic::from_error(
+        "ccproxy",
+        "decode_request",
+        error,
+        [
+            ("protocol", Some(format!("client={protocol}"))),
+            ("request", Some(format!("bytes={}", body.len()))),
+        ],
+    );
+    diagnostic::emit(log::Level::Error, &diagnostic);
+}
+
 /// build unified request from http post
 ///
 /// # Return
@@ -123,11 +137,7 @@ fn build_unified_request(
                 match serde_json::from_slice(&client_request_body) {
                     Ok(payload) => payload,
                     Err(e) => {
-                        log::error!(
-                            "Failed to deserialize OpenAiRequest: {}, the request: {}",
-                            e,
-                            String::from_utf8_lossy(&client_request_body)
-                        );
+                        log_request_decode_error("openai", &e, &client_request_body);
                         return Err(CCProxyError::InternalError(
                             t!("proxy.error.invalid_request_format", error = e.to_string())
                                 .to_string(),
@@ -152,11 +162,7 @@ fn build_unified_request(
                 match serde_json::from_slice(&client_request_body) {
                     Ok(payload) => payload,
                     Err(e) => {
-                        log::error!(
-                            "Failed to deserialize OllamaRequest: {}, the request: {}",
-                            e,
-                            String::from_utf8_lossy(&client_request_body)
-                        );
+                        log_request_decode_error("ollama", &e, &client_request_body);
                         return Err(CCProxyError::InternalError(
                             t!("proxy.error.invalid_request_format", error = e.to_string())
                                 .to_string(),
@@ -181,11 +187,7 @@ fn build_unified_request(
                 match serde_json::from_slice(&client_request_body) {
                     Ok(payload) => payload,
                     Err(e) => {
-                        log::error!(
-                            "Failed to deserialize ClaudeRequest: {}, the request: {}",
-                            e,
-                            String::from_utf8_lossy(&client_request_body)
-                        );
+                        log_request_decode_error("claude", &e, &client_request_body);
                         return Err(CCProxyError::InternalError(
                             t!("proxy.error.invalid_request_format", error = e.to_string())
                                 .to_string(),
@@ -211,11 +213,7 @@ fn build_unified_request(
                 match serde_json::from_slice(&client_request_body) {
                     Ok(payload) => payload,
                     Err(e) => {
-                        log::error!(
-                            "Failed to deserialize GeminiRequest: {}, the request: {}",
-                            e,
-                            String::from_utf8_lossy(&client_request_body)
-                        );
+                        log_request_decode_error("gemini", &e, &client_request_body);
                         return Err(CCProxyError::InternalError(
                             t!("proxy.error.invalid_request_format", error = e.to_string())
                                 .to_string(),
@@ -374,13 +372,26 @@ pub(crate) async fn execute_unified_chat_request(
     let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
         Ok(response) => response,
         Err(CCProxyError::BackendRequestError(message)) => {
-            log::warn!(
-                "Backend request failed before receiving a response (alias: '{}', model: '{}', provider: '{}'): error={}",
-                proxy_alias,
-                proxy_model.model,
-                proxy_model.provider,
-                message
+            let client_protocol_label = client_protocol.to_string();
+            let backend_protocol_label = proxy_model.chat_protocol.to_string();
+            let diagnostic = diagnostic::from_message(
+                "ccproxy",
+                "backend_request",
+                message.clone(),
+                diagnostic::request_frames(RequestContext {
+                    request_id: &message_id,
+                    client_protocol: &client_protocol_label,
+                    backend_protocol: &backend_protocol_label,
+                    client_model: &proxy_alias,
+                    backend_model: &proxy_model.model,
+                    provider_id: proxy_model.provider_id,
+                    provider: &proxy_model.provider,
+                    group: None,
+                    path: "unified",
+                    compat: final_tool_compat_mode,
+                }),
             );
+            diagnostic::emit(log::Level::Warn, &diagnostic);
 
             if log_proxy_to_file {
                 log::info!(target: "ccproxy_upstream_logger", "[ERROR] Backend request failed before receiving a response, protocol: {}, model: {}\n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, message);
@@ -437,7 +448,23 @@ pub(crate) async fn execute_unified_chat_request(
         let error_body_bytes = match target_response.bytes().await {
             Ok(bytes) => bytes,
             Err(e) => {
-                log::error!("Failed to read backend error response: {}", e);
+                let client_protocol_label = client_protocol.to_string();
+                let backend_protocol_label = proxy_model.chat_protocol.to_string();
+                let mut frames = diagnostic::request_frames(RequestContext {
+                    request_id: &message_id,
+                    client_protocol: &client_protocol_label,
+                    backend_protocol: &backend_protocol_label,
+                    client_model: &proxy_alias,
+                    backend_model: &proxy_model.model,
+                    provider_id: proxy_model.provider_id,
+                    provider: &proxy_model.provider,
+                    group: None,
+                    path: "unified",
+                    compat: final_tool_compat_mode,
+                });
+                frames.push(("response", Some(format!("status={status_code}"))));
+                let diagnostic = diagnostic::from_error("ccproxy", "response_read", &e, frames);
+                diagnostic::emit(log::Level::Error, &diagnostic);
                 let err_msg = t!("network.response_read_error", error = e.to_string()).to_string();
                 return Err(CCProxyError::InternalError(err_msg));
             }
@@ -448,15 +475,30 @@ pub(crate) async fn execute_unified_chat_request(
             log::info!(target: "ccproxy_upstream_logger", "[ERROR] {} Response Error, model: {}, Status: {}, Body: \n{}\n---", proxy_model.chat_protocol.to_string(), &proxy_model.model, status_code, error_body_str);
         }
 
-        log::warn!(
-            "Backend API error (alias: '{}', model: '{}', provider: '{}'): url={}, status_code={}, response={}",
-            proxy_alias,
-            proxy_model.model,
-            proxy_model.provider,
-            &full_url,
+        let client_protocol_label = client_protocol.to_string();
+        let backend_protocol_label = proxy_model.chat_protocol.to_string();
+        let mut frames = diagnostic::request_frames(RequestContext {
+            request_id: &message_id,
+            client_protocol: &client_protocol_label,
+            backend_protocol: &backend_protocol_label,
+            client_model: &proxy_alias,
+            backend_model: &proxy_model.model,
+            provider_id: proxy_model.provider_id,
+            provider: &proxy_model.provider,
+            group: None,
+            path: "unified",
+            compat: final_tool_compat_mode,
+        });
+        frames.push(("response", Some(format!("status={status_code}"))));
+        let diagnostic = diagnostic::from_upstream(
+            "backend_error",
+            &proxy_model.chat_protocol,
             status_code,
-            error_body_str
+            &headers_from_target,
+            &error_body_bytes,
+            frames,
         );
+        diagnostic::emit(log::Level::Warn, &diagnostic);
 
         crate::ccproxy::helper::stat_guard::record_error_stat(
             main_store_arc.as_ref(),
@@ -861,11 +903,174 @@ pub async fn handle_chat_completion(
 }
 
 #[cfg(test)]
-mod usage_attribution_tests {
+mod tests {
     use super::*;
     use axum::{extract::State, routing::post, Router};
+    use serde_json::{json, Value};
+    use std::sync::Mutex;
     use tempfile::tempdir;
     use tokio::sync::mpsc;
+
+    type UpstreamState = Arc<Mutex<(u16, Vec<u8>, &'static str)>>;
+
+    async fn spawn_error_upstream() -> (String, UpstreamState, tokio::task::JoinHandle<()>) {
+        let state: UpstreamState = Arc::new(Mutex::new((
+            http::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            Vec::new(),
+            "application/json",
+        )));
+        let app = Router::new()
+            .fallback(|State(state): State<UpstreamState>| async move {
+                let (status, body, content_type) = {
+                    let state = state.lock().expect("upstream state should lock");
+                    state.clone()
+                };
+                Response::builder()
+                    .status(
+                        http::StatusCode::from_u16(status)
+                            .expect("test upstream status should be valid"),
+                    )
+                    .header("content-type", content_type)
+                    .header("content-length", body.len().to_string())
+                    .header("x-upstream", "kept")
+                    .header("x-request-id", "upstream-request")
+                    .body(Body::from(body))
+                    .expect("test upstream response should build")
+            })
+            .with_state(state.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should be nonblocking");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                tokio::net::TcpListener::from_std(listener).expect("tokio listener should convert"),
+                app,
+            )
+            .await
+            .expect("mock upstream should serve");
+        });
+        (format!("http://{address}"), state, server)
+    }
+
+    fn output_adapter_for(protocol: &ChatProtocol) -> OutputAdapterEnum {
+        match protocol {
+            ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
+                OutputAdapterEnum::OpenAI(OpenAIOutputAdapter)
+            }
+            ChatProtocol::Claude => OutputAdapterEnum::Claude(ClaudeOutputAdapter),
+            ChatProtocol::Gemini => OutputAdapterEnum::Gemini(GeminiOutputAdapter),
+            ChatProtocol::Ollama => OutputAdapterEnum::Ollama(OllamaOutputAdapter),
+            ChatProtocol::Decision => panic!("decision is not a chat output protocol"),
+        }
+    }
+
+    fn expected_status_and_type(
+        protocol: &ChatProtocol,
+        upstream_status: u16,
+    ) -> (u16, &'static str) {
+        match (protocol, upstream_status) {
+            (ChatProtocol::OpenAI, 401) => (401, "authentication_error"),
+            (ChatProtocol::OpenAI, 429) => (429, "rate_limit_error"),
+            (ChatProtocol::OpenAI, 503) => (503, "server_error"),
+            (ChatProtocol::Claude, 401) => (401, "authentication_error"),
+            (ChatProtocol::Claude, 429) => (429, "rate_limit_error"),
+            (ChatProtocol::Claude, 503) => (529, "overloaded_error"),
+            (ChatProtocol::Gemini, 401) => (401, "UNAUTHENTICATED"),
+            (ChatProtocol::Gemini, 429) => (429, "RESOURCE_EXHAUSTED"),
+            (ChatProtocol::Gemini, 503) => (503, "UNAVAILABLE"),
+            (ChatProtocol::Ollama, 401) => (401, "authentication_error"),
+            (ChatProtocol::Ollama, 429) => (429, "rate_limit_error"),
+            (ChatProtocol::Ollama, 503) => (503, "server_error"),
+            _ => panic!("unexpected protocol/status pair in test matrix"),
+        }
+    }
+
+    async fn assert_error_response(
+        protocol: &ChatProtocol,
+        response: Response,
+        upstream_status: u16,
+        expected_message: &str,
+        expected_openai_code: &Value,
+    ) {
+        let (expected_status, expected_type) = expected_status_and_type(protocol, upstream_status);
+        assert_eq!(response.status().as_u16(), expected_status);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-upstream")
+                .expect("upstream x-* header should survive filtering"),
+            "kept"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-request-id")
+                .expect("request identifier should survive filtering"),
+            "upstream-request"
+        );
+        for name in [
+            "content-length",
+            "transfer-encoding",
+            "connection",
+            "content-encoding",
+            "keep-alive",
+        ] {
+            assert!(
+                !response.headers().contains_key(name),
+                "transport header {name} must be filtered"
+            );
+        }
+        assert!(
+            !response
+                .headers()
+                .keys()
+                .any(|name| name.as_str().starts_with("x-cs-")),
+            "control/diagnostic headers must not leak to the client"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .expect("client response should declare a content type"),
+            "application/json"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("error body should be readable");
+        let payload: Value = serde_json::from_slice(&body).expect("error body should be JSON");
+        match protocol {
+            ChatProtocol::OpenAI | ChatProtocol::HuggingFace => {
+                assert_eq!(payload["error"]["message"], expected_message);
+                assert_eq!(payload["error"]["type"], expected_type);
+                assert_eq!(&payload["error"]["code"], expected_openai_code);
+            }
+            ChatProtocol::Claude => {
+                assert_eq!(payload["type"], "error");
+                assert_eq!(payload["error"]["type"], expected_type);
+                assert_eq!(payload["error"]["message"], expected_message);
+                assert_eq!(payload["request_id"], "upstream-request");
+                assert!(payload["error"].get("code").is_none());
+            }
+            ChatProtocol::Gemini => {
+                assert_eq!(payload["error"]["code"], expected_status);
+                assert_eq!(payload["error"]["status"], expected_type);
+                assert_eq!(payload["error"]["message"], expected_message);
+            }
+            ChatProtocol::Ollama => {
+                assert_eq!(payload, json!({ "error": expected_message }));
+            }
+            ChatProtocol::Decision => panic!("decision is not a chat output protocol"),
+        }
+    }
+
+    fn chat_request() -> UnifiedRequest {
+        let mut request = UnifiedRequest::default();
+        request.model = "alias".to_string();
+        request
+    }
 
     fn proxy_model(base_url: String) -> ProxyModel {
         ProxyModel {
@@ -930,6 +1135,146 @@ mod usage_attribution_tests {
     }
 
     #[tokio::test]
+    async fn ccproxy_unified_error_statuses_map_per_protocol_and_filter_headers() {
+        let (base_url, upstream_state, server) = spawn_error_upstream().await;
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("ccproxy-error-matrix.db"))
+                .expect("test store should initialize"),
+        );
+        let upstream_body = br#"{"error":{"message":"upstream rejected request","type":"upstream_type","status":"UPSTREAM_STATUS","code":"upstream_code"}}"#.to_vec();
+        let protocols = [
+            ChatProtocol::OpenAI,
+            ChatProtocol::Claude,
+            ChatProtocol::Gemini,
+            ChatProtocol::Ollama,
+        ];
+
+        for protocol in &protocols {
+            for upstream_status in [401_u16, 429, 503] {
+                *upstream_state.lock().expect("upstream state should lock") =
+                    (upstream_status, upstream_body.clone(), "application/json");
+                let mut model = proxy_model(base_url.clone());
+                model.chat_protocol = protocol.clone();
+                let response = execute_unified_chat_request(
+                    protocol.clone(),
+                    HeaderMap::new(),
+                    chat_request(),
+                    "alias".to_string(),
+                    model,
+                    false,
+                    false,
+                    false,
+                    "message-id".to_string(),
+                    false,
+                    false,
+                    store.clone(),
+                    output_adapter_for(protocol),
+                )
+                .await
+                .expect("unified error should be rendered to the client");
+
+                let expected_openai_code = if matches!(protocol, ChatProtocol::OpenAI) {
+                    json!("upstream_code")
+                } else {
+                    Value::Null
+                };
+                assert_error_response(
+                    protocol,
+                    response,
+                    upstream_status,
+                    "upstream rejected request",
+                    &expected_openai_code,
+                )
+                .await;
+            }
+        }
+
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .expect("flush task should join")
+            .expect("error stats should flush");
+        let per_status = runtime
+            .read(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT status_code, COUNT(*) FROM ccproxy_stats GROUP BY status_code ORDER BY status_code",
+                )?;
+                let rows = statement
+                    .query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .expect("error stats query should succeed");
+        assert_eq!(per_status, vec![(401, 4), (429, 4), (503, 4)]);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn ccproxy_unified_empty_and_html_errors_keep_protocol_envelopes() {
+        let (base_url, upstream_state, server) = spawn_error_upstream().await;
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("ccproxy-error-bodies.db"))
+                .expect("test store should initialize"),
+        );
+        let html_body = "<html><body>upstream overloaded</body></html>";
+        let body_variants = [
+            ("", "application/json", "Service Unavailable"),
+            (html_body, "text/html", html_body),
+        ];
+        let protocols = [
+            ChatProtocol::OpenAI,
+            ChatProtocol::Claude,
+            ChatProtocol::Gemini,
+            ChatProtocol::Ollama,
+        ];
+
+        for protocol in &protocols {
+            for (upstream_body, content_type, expected_message) in body_variants {
+                *upstream_state.lock().expect("upstream state should lock") =
+                    (503, upstream_body.as_bytes().to_vec(), content_type);
+                let mut model = proxy_model(base_url.clone());
+                model.chat_protocol = protocol.clone();
+                let response = execute_unified_chat_request(
+                    protocol.clone(),
+                    HeaderMap::new(),
+                    chat_request(),
+                    "alias".to_string(),
+                    model,
+                    false,
+                    false,
+                    false,
+                    "message-id".to_string(),
+                    false,
+                    false,
+                    store.clone(),
+                    output_adapter_for(protocol),
+                )
+                .await
+                .expect("empty and HTML errors should render to the client");
+
+                let expected_openai_code = if matches!(protocol, ChatProtocol::OpenAI) {
+                    json!("503")
+                } else {
+                    Value::Null
+                };
+                assert_error_response(
+                    protocol,
+                    response,
+                    503,
+                    expected_message,
+                    &expected_openai_code,
+                )
+                .await;
+            }
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn ccproxy_unified_internal_error_preserves_upstream_status_body_and_headers() {
         let app = Router::new().route(
             "/chat/completions",
@@ -989,6 +1334,69 @@ mod usage_attribution_tests {
             &b"{\"error\":{\"type\":\"quota_exceeded\",\"message\":\"quota exhausted\"}}"[..]
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn ccproxy_unified_stream_abort_emits_protocol_error_event() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 8192];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            let event = b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0}]}\n\n";
+            socket
+                .write_all(format!("{:x}\r\n", event.len()).as_bytes())
+                .await
+                .unwrap();
+            socket.write_all(event).await.unwrap();
+            socket.write_all(b"\r\n").await.unwrap();
+            socket.flush().await.unwrap();
+            // Close without the terminating chunk so the client observes an aborted stream.
+        });
+        let directory = tempdir().unwrap();
+        let store =
+            Arc::new(MainStore::new(directory.path().join("ccproxy-unified-abort.db")).unwrap());
+        let mut request = UnifiedRequest::default();
+        request.model = "alias".to_string();
+        request.stream = true;
+
+        let response = execute_unified_chat_request(
+            ChatProtocol::OpenAI,
+            HeaderMap::new(),
+            request,
+            "alias".to_string(),
+            proxy_model(format!("http://{address}")),
+            true,
+            false,
+            false,
+            "message-id".to_string(),
+            false,
+            false,
+            store,
+            OutputAdapterEnum::OpenAI(OpenAIOutputAdapter),
+        )
+        .await
+        .expect("stream setup should succeed");
+
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("converted stream should complete with an error event");
+        let body = String::from_utf8_lossy(&body);
+        assert!(
+            body.contains("\"error\""),
+            "body should carry a protocol-safe error event"
+        );
+        server.await.unwrap();
     }
 
     #[tokio::test]

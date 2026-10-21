@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use tauri::{AppHandle, Manager, Window, Wry};
 use tauri_plugin_opener::OpenerExt;
 use wry::{NewWindowResponse, ProxyConfig, WebContext, WebViewBuilder};
@@ -40,7 +41,8 @@ pub fn host_window(app: &AppHandle<Wry>) -> Result<Window<Wry>> {
             message: format!(
                 "ChatHub host window '{}' is not available",
                 CHAT_HUB_HOST_WINDOW_LABEL
-            ),
+            )
+            .into(),
         })
 }
 
@@ -173,7 +175,7 @@ pub async fn run_on_page_thread(
         let result = match thread_app.try_state::<ChatHubPageState>() {
             Some(state) => operation(state.inner(), &thread_app),
             None => Err(AppError::General {
-                message: "the ChatHub page state is not managed".to_string(),
+                message: "the ChatHub page state is not managed".into(),
             }),
         };
         let _ = sender.send(result);
@@ -182,12 +184,17 @@ pub async fn run_on_page_thread(
     tokio::task::spawn_blocking(move || receiver.recv())
         .await
         .map_err(|error| AppError::General {
-            message: format!("the ChatHub page task failed: {}", error),
+            message: FailureMessage::leaf(format!("the ChatHub page task failed: {}", error))
+                .with_origin(ErrorOrigin::from_error(&error)),
         })
         .and_then(|received| match received {
             Ok(result) => result,
             Err(error) => Err(AppError::General {
-                message: format!("the ChatHub page task did not report a result: {}", error),
+                message: FailureMessage::leaf(format!(
+                    "the ChatHub page task did not report a result: {}",
+                    error
+                ))
+                .with_origin(ErrorOrigin::from_error(&error)),
             }),
         })
 }

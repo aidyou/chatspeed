@@ -11,13 +11,13 @@ pub struct FinancialFilter {
 impl FinancialFilter {
     pub fn new() -> Result<Self, SensitiveError> {
         let money_regex = Regex::new(r#"(?i)(?:Total\s+Fee|Total\s+Amount|Sum|Price|Payment|Paid|Amount)(?:[:：]|\s+is\s+|\s+of\s+|\s+totaling\s+|\s)*([$¥£€]?[0-9.,]+\s*(?:USD|RMB|EUR|GBP|dollars|million|billion)?)"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_financial_money".to_string(), message: e.to_string() })?;
+            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_financial_money".to_string(), message: crate::error_diagnostics::FailureMessage::from_error(&e) })?;
         let bank_account_regex = Regex::new(
             r#"(?i)(?:Account\s+Number|IBAN|SWIFT|Sort\s+Code)[:：]\s*([A-Z0-9\s-]{8,34})"#,
         )
         .map_err(|e| SensitiveError::RegexCompilationFailed {
             pattern: "en_financial_bank".to_string(),
-            message: e.to_string(),
+            message: crate::error_diagnostics::FailureMessage::from_error(&e),
         })?;
         Ok(Self {
             money_regex,

@@ -309,6 +309,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAgentStore } from '@/stores/agent'
 import { useWorkflowAutomationStore } from '@/stores/workflowAutomation'
+import { formatUserError } from '@/libs/error'
 import AgentSelector from '@/components/workflow/AgentSelector.vue'
 import WorkflowModelSelector from '@/components/workflow/WorkflowModelSelector.vue'
 
@@ -630,7 +631,7 @@ const previewPlan = async () => {
     permissionAcknowledged.value = false
     planVisible.value = true
   } catch (err) {
-    ElMessage.error(err?.message || String(err))
+    ElMessage.error(formatUserError(err))
   } finally {
     reviewing.value = false
   }
@@ -655,7 +656,7 @@ const applyReviewedPlan = async () => {
     if (refreshed) applyAutomationToForm(refreshed)
     emit('saved', result?.automation ?? refreshed ?? null)
   } catch (err) {
-    ElMessage.error(err?.message || String(err))
+    ElMessage.error(formatUserError(err))
   } finally {
     applying.value = false
   }
@@ -716,7 +717,7 @@ const saveAutomation = async () => {
     emit('saved', saved)
     visible.value = false
   } catch (error) {
-    ElMessage.error(error?.message || String(error))
+    ElMessage.error(formatUserError(error))
   } finally {
     saving.value = false
   }
@@ -740,7 +741,7 @@ const deleteAutomation = async () => {
     resetForm()
     visible.value = false
   } catch (error) {
-    ElMessage.error(error?.message || String(error))
+    ElMessage.error(formatUserError(error))
   }
 }
 
@@ -753,7 +754,7 @@ const runNow = async () => {
     ElMessage.success(t('workflow.automation.runStarted'))
     visible.value = false
   } catch (error) {
-    ElMessage.error(error?.message || String(error))
+    ElMessage.error(formatUserError(error))
   } finally {
     runningNow.value = false
   }

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { formatUserError } from '@/libs/error'
 import { invokeWrapper } from '@/libs/tauri'
 import { useSettingStore } from '@/stores/setting'
 
@@ -79,7 +80,7 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
       }
       return automations.value
     } catch (err) {
-      error.value = err.message || String(err)
+      error.value = formatUserError(err)
       throw err
     } finally {
       loading.value = false
@@ -101,7 +102,7 @@ export const useWorkflowAutomationStore = defineStore('workflowAutomation', () =
       selectAutomation(automation.id)
       return automation
     } catch (err) {
-      error.value = err.message || String(err)
+      error.value = formatUserError(err)
       throw err
     } finally {
       loading.value = false

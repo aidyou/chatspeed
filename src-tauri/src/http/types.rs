@@ -5,6 +5,7 @@
 
 #![allow(dead_code)]
 
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use rust_i18n::t;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -505,7 +506,7 @@ impl HttpRequest {
     ) -> Result<reqwest::RequestBuilder, HttpError> {
         // Check if URL exists
         if self.config.url.is_empty() {
-            return Err(HttpError::Config(t!("http.missing_url").to_string()));
+            return Err(HttpError::Config(t!("http.missing_url").to_string().into()));
         }
         let mut url = self.config.url.clone();
 
@@ -523,7 +524,10 @@ impl HttpRequest {
             .try_into()
             .map_err(|e: tauri::http::Error| {
                 HttpError::Config(
-                    t!("http.headers_convert_failed", error = e.to_string()).to_string(),
+                    FailureMessage::leaf(
+                        t!("http.headers_convert_failed", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(ErrorOrigin::from_error(&e)),
                 )
             })?;
 

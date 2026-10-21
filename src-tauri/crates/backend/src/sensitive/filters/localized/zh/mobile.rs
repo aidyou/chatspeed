@@ -14,7 +14,7 @@ impl MobileFilter {
         let regex =
             Regex::new(r#"1[3-9]\d{9}"#).map_err(|e| SensitiveError::RegexCompilationFailed {
                 pattern: "zh_mobile_regex".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             })?;
         Ok(Self { regex })
     }

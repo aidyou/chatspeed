@@ -8,6 +8,9 @@ use serde::Serialize;
 use serde_json::json;
 use thiserror::Error;
 
+use crate::ccproxy::diagnostic;
+use crate::error_diagnostics::ErrorDiagnostic;
+
 /// Custom error types for the ccproxy module.
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "kind", content = "message", rename_all = "camelCase")]
@@ -47,67 +50,71 @@ pub enum CCProxyError {
     StoreLockError(String),
 }
 
+impl CCProxyError {
+    fn status_and_type(&self) -> (StatusCode, &'static str) {
+        match self {
+            CCProxyError::InvalidToken | CCProxyError::MissingToken => {
+                (StatusCode::UNAUTHORIZED, "Authentication Error")
+            }
+            CCProxyError::NoBackendTargets(_) => (StatusCode::BAD_REQUEST, "Configuration Error"),
+            CCProxyError::NoKeysConfigured => (StatusCode::UNAUTHORIZED, "Configuration Error"),
+            CCProxyError::InvalidProtocolError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Configuration Error")
+            }
+            CCProxyError::InvalidRequestBody(_) => (StatusCode::BAD_REQUEST, "Invalid Request"),
+            CCProxyError::InternalError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+            }
+            CCProxyError::BackendRequestError(_) => {
+                (StatusCode::BAD_GATEWAY, "Upstream Connection Error")
+            }
+            CCProxyError::ModelAliasNotFound(_) => (StatusCode::NOT_FOUND, "Model Not Found"),
+            CCProxyError::ModelDetailsFetchError(_) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Database Error")
+            }
+            CCProxyError::StoreLockError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Store Error"),
+        }
+    }
+
+    fn diagnostic_code(&self) -> &'static str {
+        match self {
+            CCProxyError::InvalidToken => "invalid_token",
+            CCProxyError::InternalError(_) => "internal_error",
+            CCProxyError::BackendRequestError(_) => "backend_request",
+            CCProxyError::MissingToken => "missing_token",
+            CCProxyError::ModelAliasNotFound(_) => "model_alias_not_found",
+            CCProxyError::NoBackendTargets(_) => "no_backend_targets",
+            CCProxyError::NoKeysConfigured => "no_keys_configured",
+            CCProxyError::ModelDetailsFetchError(_) => "model_details_fetch",
+            CCProxyError::InvalidProtocolError(_) => "invalid_protocol",
+            CCProxyError::InvalidRequestBody(_) => "invalid_request",
+            CCProxyError::StoreLockError(_) => "store_lock",
+        }
+    }
+
+    pub(crate) fn diagnostic(&self) -> ErrorDiagnostic {
+        let (status, error_type) = self.status_and_type();
+        let mut diagnostic = diagnostic::from_error(
+            "ccproxy",
+            "proxy_response",
+            self,
+            [
+                ("category", Some(error_type.to_string())),
+                ("response", Some(format!("status={}", status.as_u16()))),
+            ],
+        );
+        diagnostic.code = Some(self.diagnostic_code().to_string());
+        diagnostic.http_status = Some(status.as_u16());
+        diagnostic
+    }
+}
+
 impl IntoResponse for CCProxyError {
     fn into_response(self) -> Response {
-        let (status, error_type, message) = match self {
-            CCProxyError::InvalidToken => (
-                StatusCode::UNAUTHORIZED,
-                "Authentication Error",
-                t!("proxy.error.invalid_api_key").to_string(),
-            ),
-            CCProxyError::MissingToken => (
-                StatusCode::UNAUTHORIZED,
-                "Authentication Error",
-                t!("proxy.error.missing_auth_header").to_string(),
-            ),
-            CCProxyError::NoBackendTargets(alias) => (
-                StatusCode::BAD_REQUEST,
-                "Configuration Error",
-                t!("proxy.error.no_backend_targets", alias = alias).to_string(),
-            ),
-            CCProxyError::NoKeysConfigured => (
-                StatusCode::UNAUTHORIZED,
-                "Configuration Error",
-                t!("proxy.error.no_keys_configured").to_string(),
-            ),
-            CCProxyError::InvalidProtocolError(protocol) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Configuration Error",
-                t!("proxy.error.invalid_protocol", protocol = protocol).to_string(),
-            ),
-            CCProxyError::InvalidRequestBody(error) => (
-                StatusCode::BAD_REQUEST,
-                "Invalid Request",
-                t!("proxy.error.invalid_request_format", error = error).to_string(),
-            ),
-            CCProxyError::InternalError(message) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Internal Server Error",
-                t!("proxy.error.internal_server_error", error = message).to_string(),
-            ),
-            CCProxyError::BackendRequestError(message) => (
-                StatusCode::BAD_GATEWAY,
-                "Upstream Connection Error",
-                message,
-            ),
-            CCProxyError::ModelAliasNotFound(alias) => (
-                StatusCode::NOT_FOUND,
-                "Model Not Found",
-                t!("proxy.error.model_alias_not_found", alias = alias).to_string(),
-            ),
-            CCProxyError::ModelDetailsFetchError(id) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Database Error",
-                t!("proxy.error.model_details_fetch_failed", id = id).to_string(),
-            ),
-            CCProxyError::StoreLockError(message) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Store Error",
-                t!("proxy.error.store_lock_failed", error = message).to_string(),
-            ),
-        };
+        let (status, error_type) = self.status_and_type();
+        let message = self.to_string();
 
-        log::error!("CCProxyError: type={}, message={}", error_type, &message);
+        diagnostic::emit(log::Level::Error, &self.diagnostic());
 
         let error_response = json!({ "error": { "message": message, "type": error_type }});
         (status, Json(error_response)).into_response()
@@ -123,6 +130,21 @@ mod tests {
     use axum::{body::to_bytes, response::IntoResponse};
     use http::StatusCode;
     use serde_json::{json, Value};
+
+    #[test]
+    fn diagnostic_keeps_typed_cause_code_and_status() {
+        let error = CCProxyError::InternalError("upstream token=CANARY failed".to_string());
+        let diagnostic = error.diagnostic();
+        let line = diagnostic.to_json_line();
+
+        assert_eq!(diagnostic.module, "ccproxy");
+        assert_eq!(diagnostic.operation, "proxy_response");
+        assert_eq!(diagnostic.code.as_deref(), Some("internal_error"));
+        assert_eq!(diagnostic.http_status, Some(500));
+        assert_eq!(diagnostic.context_chain[0].module, "ccproxy");
+        assert_eq!(diagnostic.context_chain[1].operation, "response");
+        assert!(!line.contains("CANARY"));
+    }
 
     #[tokio::test]
     async fn backend_request_error_preserves_original_message() {

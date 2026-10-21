@@ -1025,6 +1025,7 @@ import { useAgentStore } from '@/stores/agent'
 import { useCapabilityStore } from '@/stores/capability'
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import {
   getExecutionStyleOptions,
   resolveExecutionStylePreference
@@ -1512,7 +1513,7 @@ const persistSandboxConfig = async (executionMode, schemeId) => {
     return true
   } catch (error) {
     console.error('Failed to update workflow sandbox configuration:', error)
-    showMessage(error?.message || t('settings.agent.sandboxConfigTip'), 'error')
+    showMessage(formatUserError(error, t('settings.agent.sandboxConfigTip')), 'error')
     return false
   } finally {
     isUpdatingSandboxConfig.value = false

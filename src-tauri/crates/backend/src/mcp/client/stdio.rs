@@ -68,7 +68,9 @@ impl StdioClient {
     pub fn new(config: McpServerConfig) -> McpClientResult<Self> {
         if config.command.as_deref().unwrap_or_default().is_empty() {
             return Err(McpError::ClientConfigError(
-                t!("mcp.client.stdio_command_cant_be_empty").to_string(),
+                t!("mcp.client.stdio_command_cant_be_empty")
+                    .to_string()
+                    .into(),
             ));
         }
         if config.protocol_type != McpProtocolType::Stdio {
@@ -78,12 +80,13 @@ impl StdioClient {
                     client = "StdioClient",
                     protocol_type = config.protocol_type.to_string()
                 )
-                .to_string(),
+                .to_string()
+                .into(),
             ));
         }
         if config.args.as_ref().map(Vec::is_empty).unwrap_or(true) {
             return Err(McpError::ClientConfigError(
-                t!("mcp.client.stdio_args_cant_be_empty").to_string(),
+                t!("mcp.client.stdio_args_cant_be_empty").to_string().into(),
             ));
         }
         #[cfg(debug_assertions)]
@@ -138,7 +141,9 @@ impl McpClient for StdioClient {
             .ok_or_else(|| {
                 McpError::ClientConfigError(
                     // Use ok_or_else for lazy evaluation
-                    t!("mcp.client.stdio_command_cant_be_empty").to_string(),
+                    t!("mcp.client.stdio_command_cant_be_empty")
+                        .to_string()
+                        .into(),
                 )
             })?;
 
@@ -204,7 +209,9 @@ impl McpClient for StdioClient {
             .args
             .as_ref()
             .ok_or_else(|| {
-                McpError::ClientConfigError(t!("mcp.client.stdio_args_cant_be_empty").into())
+                McpError::ClientConfigError(
+                    t!("mcp.client.stdio_args_cant_be_empty").to_string().into(),
+                )
             })?
             .iter()
             .filter_map(|s| {
@@ -266,15 +273,21 @@ impl McpClient for StdioClient {
                     )
                     .to_string()
                 };
-                McpError::ClientStartError(error_message)
+                McpError::ClientStartError(
+                    crate::error_diagnostics::FailureMessage::leaf(error_message)
+                        .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                )
             } else {
                 McpError::ClientStartError(
-                    t!(
-                        "mcp.client.stdio_process_creation_failed",
-                        command = original_cmd_str,
-                        error = original_error_message // Keep original OS error for context
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!(
+                            "mcp.client.stdio_process_creation_failed",
+                            command = original_cmd_str,
+                            error = original_error_message // Keep original OS error for context
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 )
             }
         })?;
@@ -291,12 +304,15 @@ impl McpClient for StdioClient {
             let detailed_error = e.to_string();
             log::error!("Start StdioClient error: {}", detailed_error);
             McpError::ClientStartError(
-                t!(
-                    "mcp.client.stdio_service_start_failed",
-                    command = original_cmd_str, // Report based on original configured command
-                    error = detailed_error
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "mcp.client.stdio_service_start_failed",
+                        command = original_cmd_str, // Report based on original configured command
+                        error = detailed_error
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })
     }

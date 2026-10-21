@@ -12,6 +12,7 @@ chat:
     response_parse_failed: 解析來自 %{provider} 的回應失敗：%{details}
     stream_processing_failed: 處理來自 %{provider} 的資料流時發生錯誤：%{details}
     tool_call_serialization_failed: 工具呼叫序列化失敗：%{details}
+  error_feedback: 發生未知錯誤，請稍後再試
   failed_to_convert_language_code: 轉換語言代碼失敗：%{error}
   failed_to_create_file: 建立檔案失敗：%{error}
   failed_to_detect_language: 偵測語言失敗
@@ -274,6 +275,12 @@ setting:
   failed_to_save_logo_thumbnail: 儲存 Logo 縮圖失敗：%{error}
   failed_to_update_shortcut: 更新快捷方式失敗：%{error}
   file_not_exists: 檔案不存在：%{file_path}
+terminal:
+  forbidden: 你沒有權限操作此終端機工作階段。
+  invalid_size: 要求的終端機尺寸超出支援範圍。
+  session_exited: 此終端機工作階段已結束，請新增終端機。
+  session_not_found: 此終端機工作階段不存在或已關閉。
+  shell_unavailable: 目前系統沒有可用的受支援 Shell。
 tools:
   error:
     auth_error: 認證錯誤

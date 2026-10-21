@@ -964,6 +964,7 @@ import {
   mapBrowserLangToStandard
 } from '@/i18n/langUtils'
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri'
+import { formatUserError } from '@/libs/error'
 import { showMessage, openUrl } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 import { useSettingStore } from '@/stores/setting'
@@ -1160,7 +1161,10 @@ onMounted(async () => {
     await refreshApiKeyEncryptionStatus()
   } catch (error) {
     console.error('Failed to inspect API key encryption status:', error)
-    showMessage(t('settings.general.apiKeyProtection.statusFailed'), 'error')
+    showMessage(
+      formatUserError(error, t('settings.general.apiKeyProtection.statusFailed')),
+      'error'
+    )
   }
   defaultBackupDir.value = await invokeWrapper('get_backup_dir', { backupDir: settings.value.backupDir || null })
   getAllBackups()
@@ -1189,7 +1193,10 @@ const applyApiKeyFile = async (command, path) => {
     showMessage(t('settings.general.apiKeyProtection.saveSuccess'), 'success')
   } catch (error) {
     console.error('Failed to update API key file:', error)
-    showMessage(t('settings.general.apiKeyProtection.operationFailed'), 'error')
+    showMessage(
+      formatUserError(error, t('settings.general.apiKeyProtection.operationFailed')),
+      'error'
+    )
   } finally {
     apiKeyFileBusy.value = false
   }
@@ -1229,13 +1236,17 @@ const setSetting = (key, value) => {
   settingStore.setSetting(key, value).catch(err => {
     if (err instanceof FrontendAppError) {
       showMessage(
-        t('settings.general.updateSettingFailed', { error: err.toFormattedString() }),
+        t('settings.general.updateSettingFailed', {
+          error: formatUserError(err, t('common.errorFallback'))
+        }),
         'error'
       )
       console.error('Error updating setting:', err.originalError)
     } else {
       showMessage(
-        t('settings.general.updateSettingFailed', { error: err.message || String(err) }),
+        t('settings.general.updateSettingFailed', {
+          error: formatUserError(err, t('common.errorFallback'))
+        }),
         'error'
       )
       console.error('Error updating setting:', err)
@@ -1592,13 +1603,17 @@ const onManualUpdateClick = async () => {
   } catch (error) {
     if (error instanceof FrontendAppError) {
       showMessage(
-        t('settings.general.manualUpdateCheckFailed', { error: error.toFormattedString() }),
+        t('settings.general.manualUpdateCheckFailed', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
         'error'
       )
       console.error('Failed to check for updates:', error.originalError)
     } else {
       showMessage(
-        t('settings.general.manualUpdateCheckFailed', { error: error?.message || String(error) }),
+        t('settings.general.manualUpdateCheckFailed', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
         'error'
       )
       console.error('Failed to check for updates:', error)
@@ -1651,12 +1666,19 @@ const onAutoStartChange = async value => {
         error.originalError
       )
       showMessage(
-        t('settings.general.autoStartChangeFailed', { error: error.toFormattedString() }),
+        t('settings.general.autoStartChangeFailed', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
         'error'
       )
     } else {
       console.error('Failed to change autostart setting:', error)
-      showMessage(t('settings.general.autoStartChangeFailed', { error: error.toString() }), 'error')
+      showMessage(
+        t('settings.general.autoStartChangeFailed', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
+        'error'
+      )
     }
   }
 }
@@ -1693,10 +1715,10 @@ const selectBackupDir = async () => {
   } catch (error) {
     settings.value.backupDir = ''
     if (error instanceof FrontendAppError) {
-      showMessage(error.toFormattedString(), 'error')
+      showMessage(formatUserError(error, t('common.errorFallback')), 'error')
       console.error('Error selecting backup directory:', error.originalError)
     } else {
-      showMessage(error.toString(), 'error')
+      showMessage(formatUserError(error, t('common.errorFallback')), 'error')
       console.error('Error selecting backup directory:', error)
     }
   } finally {
@@ -1723,10 +1745,10 @@ const startBackup = async () => {
     showMessage(t('settings.general.backupSuccess'), 'success')
   } catch (error) {
     if (error instanceof FrontendAppError) {
-      showMessage(error.toFormattedString(), 'error')
+      showMessage(formatUserError(error, t('common.errorFallback')), 'error')
       console.error('Error backing up settings:', error.originalError)
     } else {
-      showMessage(error.toString(), 'error')
+      showMessage(formatUserError(error, t('common.errorFallback')), 'error')
       console.error('Error backing up settings:', error)
     }
   } finally {
@@ -1784,10 +1806,10 @@ const onRestore = async value => {
     // Close loading before showing the error message
     loadingInstance.close()
     if (error instanceof FrontendAppError) {
-      showMessage(error.toFormattedString(), 'error')
+      showMessage(formatUserError(error, t('common.errorFallback')), 'error')
       console.error('Error restoring settings:', error.originalError)
     } else {
-      showMessage(error.toString(), 'error')
+      showMessage(formatUserError(error, t('common.errorFallback')), 'error')
       console.error('Error restoring settings:', error)
     }
   }
@@ -1825,7 +1847,7 @@ const submitConfigurationExport = async () => {
     showMessage(t('settings.general.configExportSuccess'), 'success')
   } catch (error) {
     console.error('Failed to export configuration:', error)
-    showMessage(error instanceof FrontendAppError ? error.toFormattedString() : error.toString(), 'error')
+    showMessage(formatUserError(error, t('common.errorFallback')), 'error')
   } finally {
     configExportBusy.value = false
   }
@@ -1845,7 +1867,7 @@ const selectConfigurationImport = async () => {
     configImportRiskConfirmed.value = false
     configImportVisible.value = true
   } catch (error) {
-    showMessage(error instanceof FrontendAppError ? error.toFormattedString() : error.toString(), 'error')
+    showMessage(formatUserError(error, t('common.errorFallback')), 'error')
   }
 }
 
@@ -1862,7 +1884,7 @@ const importConfiguration = async () => {
     configImportResultVisible.value = true
     showMessage(t('settings.general.configImportSuccess'), 'success')
   } catch (error) {
-    showMessage(error instanceof FrontendAppError ? error.toFormattedString() : error.toString(), 'error')
+    showMessage(formatUserError(error, t('common.errorFallback')), 'error')
   }
 }
 
@@ -1883,10 +1905,10 @@ const getAllBackups = () => {
     })
     .catch(error => {
       if (error instanceof FrontendAppError) {
-        showMessage(error.toFormattedString(), 'error')
+        showMessage(formatUserError(error, t('common.errorFallback')), 'error')
         console.error('Error getting all backups:', error.originalError)
       } else {
-        showMessage(error.toString(), 'error')
+        showMessage(formatUserError(error, t('common.errorFallback')), 'error')
         console.error('Error getting all backups:', error)
       }
     })

@@ -87,7 +87,7 @@ impl MainStore {
                 .as_ref()
                 .map(serde_json::to_string)
                 .transpose()
-                .map_err(|error| StoreError::JsonError(error.to_string()))?;
+                .map_err(|error| StoreError::JsonError(crate::error_diagnostics::FailureMessage::from_error(&error)))?;
             conn.execute(
                 &format!(
                     "INSERT INTO {} (name, description, prompt_injection, prompt_text, tool_filter, temperature, metadata, disabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -125,7 +125,7 @@ impl MainStore {
                 .as_ref()
                 .map(serde_json::to_string)
                 .transpose()
-                .map_err(|error| StoreError::JsonError(error.to_string()))?;
+                .map_err(|error| StoreError::JsonError(crate::error_diagnostics::FailureMessage::from_error(&error)))?;
             conn.execute(
                 &format!(
                     "UPDATE {} SET name = ?1, description = ?2, prompt_injection = ?3, prompt_text = ?4, tool_filter = ?5, temperature = ?6, metadata = ?7, disabled = ?8 WHERE id = ?9",

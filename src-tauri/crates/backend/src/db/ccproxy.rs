@@ -7,9 +7,11 @@ fn stats_range_for_days(days: i32) -> Result<Option<(String, String)>, StoreErro
         return Ok(None);
     }
     if days < -1 {
-        return Err(StoreError::Query(format!(
-            "Invalid proxy statistics day range: {days}"
-        )));
+        return Err(StoreError::Query(
+            crate::error_diagnostics::FailureMessage::leaf(format!(
+                "Invalid proxy statistics day range: {days}"
+            )),
+        ));
     }
 
     let today = Local::now().date_naive();
@@ -22,7 +24,12 @@ fn stats_range_for_days(days: i32) -> Result<Option<(String, String)>, StoreErro
 
 fn stats_range_for_local_date(date: &str) -> Result<(String, String), StoreError> {
     let date = NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|error| {
-        StoreError::Query(format!("Invalid proxy statistics date '{date}': {error}"))
+        StoreError::Query(
+            crate::error_diagnostics::FailureMessage::leaf(format!(
+                "Invalid proxy statistics date '{date}': {error}"
+            ))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )
     })?;
     stats_range_for_local_dates(date, date + Duration::days(1))
 }
@@ -34,7 +41,9 @@ fn stats_range_for_local_dates(
     let to_utc_boundary = |date: NaiveDate| {
         Local
             .from_local_datetime(&date.and_hms_opt(0, 0, 0).ok_or_else(|| {
-                StoreError::Query(format!("Invalid proxy statistics date boundary: {date}"))
+                StoreError::Query(crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Invalid proxy statistics date boundary: {date}"
+                )))
             })?)
             .earliest()
             .map(|boundary| {
@@ -44,9 +53,9 @@ fn stats_range_for_local_dates(
                     .to_string()
             })
             .ok_or_else(|| {
-                StoreError::Query(format!(
+                StoreError::Query(crate::error_diagnostics::FailureMessage::leaf(format!(
                     "Invalid local proxy statistics date boundary: {date}"
-                ))
+                )))
             })
     };
 
@@ -58,18 +67,26 @@ fn stats_range_for_date_range(
     end_date: &str,
 ) -> Result<(String, String), StoreError> {
     let start_date = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").map_err(|error| {
-        StoreError::Query(format!(
-            "Invalid proxy statistics start date '{start_date}': {error}"
-        ))
+        StoreError::Query(
+            crate::error_diagnostics::FailureMessage::leaf(format!(
+                "Invalid proxy statistics start date '{start_date}': {error}"
+            ))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )
     })?;
     let end_date = NaiveDate::parse_from_str(end_date, "%Y-%m-%d").map_err(|error| {
-        StoreError::Query(format!(
-            "Invalid proxy statistics end date '{end_date}': {error}"
-        ))
+        StoreError::Query(
+            crate::error_diagnostics::FailureMessage::leaf(format!(
+                "Invalid proxy statistics end date '{end_date}': {error}"
+            ))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )
     })?;
     if end_date < start_date {
         return Err(StoreError::Query(
-            "Proxy statistics end date precedes start date".to_string(),
+            crate::error_diagnostics::FailureMessage::leaf(
+                "Proxy statistics end date precedes start date",
+            ),
         ));
     }
     stats_range_for_local_dates(start_date, end_date + Duration::days(1))
@@ -119,7 +136,7 @@ fn query_grouped_stats(
     );
     let mut stmt = conn
         .prepare(&sql)
-        .map_err(|e| StoreError::Query(e.to_string()))?;
+        .map_err(|e| StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e)))?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(range_params(range)), |row| {
             Ok(serde_json::json!({
@@ -141,11 +158,13 @@ fn query_grouped_stats(
                 "totalEstimatedCost": row.get::<_, f64>(15).unwrap_or(0.0),
             }))
         })
-        .map_err(|e| StoreError::Query(e.to_string()))?;
+        .map_err(|e| StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e)))?;
 
     let mut stats = Vec::new();
     for row in rows {
-        stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
+        stats.push(row.map_err(|e| {
+            StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e))
+        })?);
     }
     Ok(stats)
 }
@@ -206,7 +225,7 @@ fn query_daily_stats(
     );
     let mut stmt = conn
         .prepare(&sql)
-        .map_err(|e| StoreError::Query(e.to_string()))?;
+        .map_err(|e| StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e)))?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(range_params(range)), |row| {
             Ok(serde_json::json!({
@@ -225,9 +244,9 @@ fn query_daily_stats(
                 "totalRequestCount": row.get::<_, u32>(12).unwrap_or(0),
             }))
         })
-        .map_err(|e| StoreError::Query(e.to_string()))?;
+        .map_err(|e| StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e)))?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| StoreError::Query(e.to_string()))
+        .map_err(|e| StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e)))
 }
 
 fn query_provider_stats_by_date(
@@ -254,7 +273,7 @@ fn query_provider_stats_by_date(
          GROUP BY provider_id, provider, client_model, backend_model, protocol, tool_compat_mode
          ORDER BY request_count DESC",
         )
-        .map_err(|e| StoreError::Query(e.to_string()))?;
+        .map_err(|e| StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e)))?;
     let rows = stmt
         .query_map(params![start_at, end_at], |row| {
             Ok(serde_json::json!({
@@ -271,10 +290,12 @@ fn query_provider_stats_by_date(
                 "errorCount": row.get::<_, u32>(10).unwrap_or(0),
             }))
         })
-        .map_err(|e| StoreError::Query(e.to_string()))?;
+        .map_err(|e| StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e)))?;
     let mut stats = Vec::new();
     for row in rows {
-        stats.push(row.map_err(|e| StoreError::Query(e.to_string()))?);
+        stats.push(row.map_err(|e| {
+            StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e))
+        })?);
     }
     Ok(stats)
 }
@@ -325,7 +346,9 @@ impl MainStore {
                         params![start_at],
                     ),
                 }
-                .map_err(|e| StoreError::Query(e.to_string()))?;
+                .map_err(|e| {
+                    StoreError::Query(crate::error_diagnostics::FailureMessage::from_error(&e))
+                })?;
                 Ok(())
             })
             .await

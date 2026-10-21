@@ -54,11 +54,11 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import i18n from '@/i18n/index.js'
 import { formatReference, parseMarkdown, htmlspecialchars, toolName } from '@/libs/chat'
 import { MarkdownStreamParser } from '@/libs/markdown-stream-parser.js'
-import i18n from '@/i18n/index.js'
-import { watch } from 'vue'
+import { resolveToolResultState, resolveToolResultDisplay } from '@/libs/toolResultState.js'
 
 const contentRef = ref(null)
 
@@ -133,16 +133,7 @@ const createSingleToolCallHtml = call => {
   const functionName = call?.function?.name
   if (!functionName) return ''
 
-  let status = 'calling'
-  if (call.result) {
-    try {
-      const parsedResult = typeof call.result === 'string' ? JSON.parse(call.result) : call.result
-      status = parsedResult?.error ? 'error' : 'success'
-    } catch {
-      status =
-        typeof call.result === 'string' && call.result.startsWith('Error: ') ? 'error' : 'success'
-    }
-  }
+  const status = resolveToolResultState(call)
 
   const args = call.function.arguments ? JSON.parse(call.function.arguments) : {}
 
@@ -154,8 +145,9 @@ const createSingleToolCallHtml = call => {
     toolDisplayName = toolName(functionName, args)
   }
 
+  const displayedResult = resolveToolResultDisplay(call)
   const result =
-    typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)
+    typeof displayedResult === 'string' ? displayedResult : JSON.stringify(displayedResult, null, 2)
   const escapedArguments = htmlspecialchars(call.function.arguments || '')
 
   return `<div class="chat-tool-calls">

@@ -7,6 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::error_diagnostics::{ErrorDiagnostic, ErrorOrigin, ErrorProjection, FailureMessage};
+use chatspeed_contracts::error::UserErrorPresentation;
+
 use super::redaction;
 
 /// Canonical machine-readable error codes.
@@ -54,10 +57,56 @@ pub mod code {
 }
 
 /// A capability failure with a stable code and a non-secret message.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_envelope_omits_origin_and_typed_store_cause_survives() {
+        let error = CapabilityError::from(crate::db::StoreError::Query(
+            FailureMessage::leaf("legacy query wrapper").with_origin(ErrorOrigin::leaf(
+                "root token=CANARY",
+                None,
+                None,
+                Some(503),
+            )),
+        ));
+        assert_eq!(error.code(), code::STORE_ERROR);
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            json!({"code":"store_error","message":"legacy query wrapper"})
+        );
+        assert_eq!(error.user_error().upstream_status, Some(503));
+        assert!(error.user_error().message.starts_with("root"));
+        assert!(!error.user_error().message.contains("CANARY"));
+        let restored: CapabilityError =
+            serde_json::from_value(json!({"code":"store_error", "message":"old"})).unwrap();
+        assert!(restored.error_origin().is_none());
+        assert_eq!(restored.to_string(), "store_error: old");
+    }
+
+    #[test]
+    fn typed_io_and_json_keep_existing_classification() {
+        let io = CapabilityError::from(std::io::Error::other("token=CANARY"));
+        assert_eq!(io.code(), code::INTERNAL);
+        assert!(!io.user_error().message.contains("CANARY"));
+        let json_error = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        let error = CapabilityError::from(json_error);
+        assert_eq!(error.code(), code::INVALID_REQUEST);
+        assert!(error.origin.is_some());
+    }
+}
+
+/// A capability failure with a stable code and a non-secret message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityError {
     pub code: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<UserErrorPresentation>,
+    #[serde(skip, default)]
+    pub(crate) origin: Option<ErrorOrigin>,
 }
 
 impl CapabilityError {
@@ -65,7 +114,23 @@ impl CapabilityError {
         Self {
             code: code.to_string(),
             message: message.into(),
+            presentation: None,
+            origin: None,
         }
+    }
+
+    /// Attaches the runtime's safe presentation plus the explicit origin it
+    /// describes. The origin is built only from structured fields, never from
+    /// message text, so a keyword in the legacy message cannot invent a reason.
+    pub fn with_user_error(mut self, presentation: UserErrorPresentation) -> Self {
+        self.origin = Some(ErrorOrigin::leaf(
+            presentation.message.clone(),
+            presentation.reason,
+            Some(self.code.clone()),
+            presentation.upstream_status,
+        ));
+        self.presentation = Some(presentation);
+        self
     }
 
     pub fn invalid_request(message: impl Into<String>) -> Self {
@@ -125,22 +190,67 @@ impl std::fmt::Display for CapabilityError {
 
 impl std::error::Error for CapabilityError {}
 
+impl ErrorProjection for CapabilityError {
+    fn user_error(&self) -> UserErrorPresentation {
+        let presentation = self.origin.as_ref().map(|origin| {
+            let mut value = origin.clone();
+            value.message = redaction::redact_text(&value.message);
+            value
+        });
+        let message = presentation
+            .as_ref()
+            .map(|origin| origin.message.clone())
+            .unwrap_or_else(|| self.redacted_message());
+        UserErrorPresentation {
+            schema_version: 1,
+            message: crate::error_diagnostics::sanitize_user_message(&message),
+            reason: presentation.as_ref().and_then(|origin| origin.reason),
+            upstream_status: presentation.as_ref().and_then(|origin| origin.status),
+        }
+    }
+
+    fn diagnostic(&self) -> ErrorDiagnostic {
+        let mut diagnostic = self
+            .origin
+            .as_ref()
+            .map(|origin| {
+                FailureMessage::leaf(self.message.clone())
+                    .with_origin(origin.clone())
+                    .diagnostic()
+            })
+            .unwrap_or_else(|| FailureMessage::leaf(self.message.clone()).diagnostic());
+        diagnostic.code = Some(self.code.clone());
+        diagnostic.error = redaction::redact_text(&diagnostic.error);
+        diagnostic
+    }
+}
+
+impl CapabilityError {
+    pub fn error_origin(&self) -> Option<&ErrorOrigin> {
+        self.origin.as_ref()
+    }
+}
+
 impl From<crate::db::StoreError> for CapabilityError {
     fn from(error: crate::db::StoreError) -> Self {
-        // Store errors can embed a JSON payload or a database message; both
-        // are filtered before they can reach a log line, DTO or journal row.
-        Self::store(redaction::redact_text(&error.to_string()))
+        let mut result = Self::store(redaction::redact_text(&error.to_string()));
+        result.origin = Some(error.error_origin());
+        result
     }
 }
 
 impl From<std::io::Error> for CapabilityError {
     fn from(error: std::io::Error) -> Self {
-        Self::internal(redaction::redact_text(&error.to_string()))
+        let mut result = Self::internal(redaction::redact_text(&error.to_string()));
+        result.origin = Some(ErrorOrigin::from_error(&error));
+        result
     }
 }
 
 impl From<serde_json::Error> for CapabilityError {
     fn from(error: serde_json::Error) -> Self {
-        Self::invalid_request(redaction::redact_text(&error.to_string()))
+        let mut result = Self::invalid_request(redaction::redact_text(&error.to_string()));
+        result.origin = Some(ErrorOrigin::from_error(&error));
+        result
     }
 }

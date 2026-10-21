@@ -43,6 +43,7 @@ import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { useModelStore } from '@/stores/model'
 import { useSettingStore } from '@/stores/setting'
 
@@ -87,7 +88,10 @@ const saveConfig = async () => {
       model: draft.model
     })
   } catch (error) {
-    showMessage(error?.message || t('settings.sandbox.decisionSaveFailed'), 'error')
+    showMessage(
+      formatUserError(error, t('settings.sandbox.decisionSaveFailed')),
+      'error'
+    )
   }
 }
 

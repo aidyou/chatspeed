@@ -1,3 +1,5 @@
+import { normalizeUserError } from './error.js'
+
 /**
  * Dependency-free helpers shared by the Agent Skills capability UI.
  *
@@ -68,20 +70,12 @@ export function mcpDisplayState(view) {
 
 
 export function parseCapabilityError(error) {
-  const raw = typeof error === 'string' ? error : JSON.stringify(error);
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.code === 'string') {
-      const wrapped = new Error(parsed.message || parsed.code);
-      wrapped.code = parsed.code;
-      return wrapped;
-    }
-  } catch {
-    // Not a capability envelope; fall through to a generic error.
-  }
-  const wrapped = new Error(String(raw));
-  wrapped.code = 'unknown';
-  return wrapped;
+  const normalized = normalizeUserError(error)
+  const wrapped = new Error(normalized.message)
+  wrapped.code = normalized.code || 'unknown'
+  wrapped.reason = normalized.reason
+  wrapped.upstream_status = normalized.upstream_status
+  return wrapped
 }
 
 /**

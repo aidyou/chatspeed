@@ -487,6 +487,7 @@ import { invokeWrapper } from '@/libs/tauri'
 import { useI18n } from 'vue-i18n'
 import { Refresh, Delete } from '@element-plus/icons-vue'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { ElMessageBox } from 'element-plus'
 import { DataLine, Coin, Warning, Collection } from '@element-plus/icons-vue'
 import { useModelStore } from '@/stores/model'
@@ -1585,7 +1586,7 @@ const handleDeleteStats = async days => {
   } catch (error) {
     if (error !== 'cancel') {
       console.error('Failed to delete proxy stats:', error)
-      showMessage(error.message || String(error), 'error')
+      showMessage(formatUserError(error, t('common.errorFallback')), 'error')
     }
   } finally {
     loading.value = false

@@ -2,6 +2,7 @@ import { computed, ref, watch } from 'vue'
 import { invokeWrapper } from '@/libs/tauri'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
+import { resolveWorkflowErrorDisplay, resolveWorkflowUserError } from './messageProjectionRules.js'
 
 const DEFAULT_CHILD_AGENT_LIMIT = 5
 const DEFAULT_RUNNING_SUMMARY = 'Running'
@@ -34,6 +35,40 @@ const contextPercentFromProgress = progress => {
   return Math.min(100, Math.round((current / max) * 100))
 }
 
+// Snapshot progress can survive a reload even when the parent window has no card.
+// Only a structured terminal observation is allowed to project the safe user error;
+// legacy terminal text stays on the existing display path.
+export const resolveSubAgentSnapshotUserError = latest => {
+  const metadata = latest?.metadata || {}
+  const isTerminal =
+    metadata.observation_type === 'terminal_error' ||
+    latest?.messageSubtype === 'terminal_error' ||
+    latest?.message_subtype === 'terminal_error'
+  if (!isTerminal) return null
+  return resolveWorkflowUserError(latest)
+}
+
+const resolveSnapshotUserErrorValue = snapshotUserError => {
+  if (!snapshotUserError || typeof snapshotUserError !== 'object') return null
+  const message = snapshotUserError.display || snapshotUserError.message
+  return resolveWorkflowUserError({
+    user_error: { ...snapshotUserError, schema_version: 1, message }
+  })
+}
+
+// Legacy `summary` text can overwrite the safe projection while the card is assembled.
+// This helper runs after that assembly so the safe user error always wins. Snapshot
+// progress stores the normalized copy under `userError` (camelCase), while live progress
+// exposes the central `user_error` / `result.error_metadata.user_error` paths.
+export const resolveSubAgentSummaryDisplay = (progress, last, legacySummary = '') => {
+  const safeUserError =
+    resolveSnapshotUserErrorValue(progress?.userError) ||
+    resolveWorkflowUserError(progress) ||
+    resolveWorkflowUserError(last)
+  const display = safeUserError?.display || safeUserError?.displayCopy || safeUserError?.message
+  return typeof display === 'string' && display.trim() ? display : String(legacySummary || '')
+}
+
 const buildSubAgentProgressFromSnapshot = (id, snapshot, workflowStore, agentStore) => {
   const ctx = snapshot?.executionContext || {}
   const workflow = snapshot?.workflow || {}
@@ -42,6 +77,7 @@ const buildSubAgentProgressFromSnapshot = (id, snapshot, workflowStore, agentSto
     .reverse()
     .find(message => message?.role === 'assistant' || message?.role === 'tool')
   const latestMeta = latest?.metadata || {}
+  const snapshotUserError = resolveSubAgentSnapshotUserError(latest)
   const status = ctx.state || workflow.status || 'pending'
 
   return {
@@ -58,7 +94,8 @@ const buildSubAgentProgressFromSnapshot = (id, snapshot, workflowStore, agentSto
     workflowState: workflow.status || status,
     waitReason: ctx.waitReason || ctx.wait_reason || workflow.waitReason || null,
     title: workflow.title || workflow.userQuery || id,
-    summary: latestMeta.summary || latest?.message || '',
+    summary: snapshotUserError?.display || latestMeta.summary || latest?.message || '',
+    userError: snapshotUserError,
     toolCallsCount: snapshotMessages.filter(message => message?.role === 'tool').length,
     currentContextTokens: ctx.currentContextTokens ?? ctx.current_context_tokens ?? null,
     maxContextTokens: ctx.maxContextTokens ?? ctx.max_context_tokens ?? null,
@@ -175,7 +212,9 @@ const createSharedSubAgentSummaries = () => {
       if (last) {
         const meta = last.metadata || {}
         const observationData = meta.data || {}
-        const content = truncateSummary(last.message || '')
+        const content = truncateSummary(
+          resolveWorkflowErrorDisplay(last, last.message).display || last.message || ''
+        )
         if (content) summary = content
         agentName =
           meta.sub_agent_name ||
@@ -239,6 +278,8 @@ const createSharedSubAgentSummaries = () => {
         task = progress.task || task
         summary = truncateSummary(progress.summary) || summary
       }
+
+      summary = truncateSummary(resolveSubAgentSummaryDisplay(progress, last, summary)) || summary
 
       if (childWorkflow?.status) {
         const workflowStatus = String(childWorkflow.status).toLowerCase()

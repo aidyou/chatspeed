@@ -30,7 +30,7 @@ use crate::workflow::react::gateway::Gateway;
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::intelligence::IntelligenceManager;
 #[cfg(not(feature = "desktop"))]
-use crate::workflow::react::manager::{ManagedSessionStatus, WorkflowManager};
+use crate::workflow::react::manager::{ManagedSessionStatus, SignalSendError, WorkflowManager};
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::orchestrator::{
     clear_completed_background_tasks_for_owner, list_background_task_ids_for_owner,
@@ -2076,6 +2076,39 @@ fn child_was_detached_by_latest_manual_clear(
     }))
 }
 
+/// Recovers the UI-only failure projection from the child's durable terminal
+/// observation. Only validated typed metadata is accepted; transcript wording is
+/// never interpreted as an error classification.
+#[cfg(not(feature = "desktop"))]
+fn durable_child_terminal_user_error(
+    store: &MainStore,
+    child_id: &str,
+) -> Option<chatspeed_contracts::UserErrorPresentation> {
+    let snapshot = store.get_workflow_snapshot(child_id).ok()?;
+    snapshot
+        .messages
+        .iter()
+        .rev()
+        .filter(|message| {
+            message.metadata.as_ref().is_some_and(|metadata| {
+                metadata.get("observation_type").and_then(Value::as_str) == Some("terminal_error")
+                    || message.message_subtype.as_deref() == Some("terminal_error")
+            })
+        })
+        .find_map(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("user_error"))
+                .and_then(|value| {
+                    serde_json::from_value::<chatspeed_contracts::UserErrorPresentation>(
+                        value.clone(),
+                    )
+                    .ok()
+                })
+        })
+}
+
 #[cfg(not(feature = "desktop"))]
 fn reconcile_durable_child_completion(
     store: &MainStore,
@@ -2125,6 +2158,17 @@ fn reconcile_durable_child_completion(
         .find(|completion| completion.sub_agent_id == child_id);
     let already_projected =
         existing_completion.is_some_and(|completion| completion.usage_summary.is_some());
+    // This recovery path may replace an old completion object. Keep the typed UI
+    // projection from the pending completion, then fall back to the child's durable
+    // terminal observation, so a restart never drops the safe failure display.
+    let recovered_user_error = existing_completion
+        .and_then(SubAgentCompletion::ui_user_error)
+        .cloned()
+        .or_else(|| {
+            (status == "failed")
+                .then(|| durable_child_terminal_user_error(store, child_id))
+                .flatten()
+        });
     let should_signal = matches!(&parent_context.state, RuntimeState::Waiting)
         && matches!(
             parent_context.wait_reason.as_ref(),
@@ -2210,6 +2254,7 @@ fn reconcile_durable_child_completion(
                 usage_summary: serde_json::from_value(result["usage_summary"].clone()).ok(),
                 completed_at_ms: chrono::Utc::now().timestamp_millis(),
                 consumed: false,
+                user_error: recovered_user_error.clone(),
             });
     }
     store.upsert_execution_context(&parent_context)?;
@@ -2218,22 +2263,22 @@ fn reconcile_durable_child_completion(
     // is normal during cold recovery; the durable completion will be applied when the executor
     // is restored.
     if should_signal {
-        if let Err(error) = WorkflowManager::try_send_signal_to_session(
-            parent_session_id,
-            json!({
-                "type": "sub_agent_complete",
-                "sub_agent_id": child_id,
-                "result": result,
-            })
-            .to_string(),
-        ) {
-            if error.contains("signal channel not found") {
+        let signal = json!({
+            "type": "sub_agent_complete",
+            "sub_agent_id": child_id,
+            "result": result,
+        })
+        .to_string();
+        match WorkflowManager::try_send_signal_to_session_typed(parent_session_id, signal) {
+            Ok(()) => {}
+            Err(error @ SignalSendError::SignalChannelNotFound { .. }) => {
                 log::trace!(
                     "[Workflow][session={}][phase=reconcile][event=sub_agent_completion] Live recovery channel unavailable; durable completion remains replayable: {}",
                     child_id,
                     error
                 );
-            } else {
+            }
+            Err(error) => {
                 log::warn!(
                     "[Workflow][session={}][phase=reconcile][event=sub_agent_completion] Live recovery signal failed; durable completion remains replayable: {}",
                     child_id,
@@ -2272,6 +2317,9 @@ fn reconcile_durable_child_completion(
         metadata["result"] = result.clone();
         metadata["summary"] = json!(summary);
         metadata["execution_status"] = json!(status);
+        if let Some(user_error) = recovered_user_error.as_ref() {
+            metadata["user_error"] = json!(user_error);
+        }
         store.add_workflow_message(&WorkflowMessage {
             id: None,
             session_id: parent_session_id.to_string(),
@@ -2545,6 +2593,7 @@ fn reconcile_child_workflows(
                         usage_summary,
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
                         consumed: true,
+                        user_error: None,
                     });
                 store.upsert_execution_context(&parent_context)?;
                 if !parent_workflow_is_terminal {
@@ -3759,19 +3808,19 @@ pub(crate) async fn workflow_start_core(
                 "[Workflow][session={}][phase=start] Session is still stopping, rejecting restart",
                 session_id
             );
-            return Err(ApplicationError::state(format!(
-                "Session is stopping: {}",
-                session_id
-            )));
+            return Err(
+                ApplicationError::state(format!("Session is stopping: {}", session_id))
+                    .with_reason(chatspeed_contracts::ErrorReason::SessionStopping),
+            );
         }
         log::info!(
             "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
             session_id
         );
-        return Err(ApplicationError::conflict(format!(
-            "Session already exists: {}",
-            session_id
-        )));
+        return Err(
+            ApplicationError::conflict(format!("Session already exists: {}", session_id))
+                .with_reason(chatspeed_contracts::ErrorReason::SessionAlreadyExists),
+        );
     }
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
@@ -4054,7 +4103,7 @@ async fn run_terminal_manual_compression(
     factory: Arc<dyn SubAgentFactory>,
     session_id: &str,
     workflow_snapshot: &WorkflowSnapshot,
-) -> Result<bool, String> {
+) -> Result<bool, ApplicationError> {
     let mut agent_config = main_store
         .get_agent(&workflow_snapshot.workflow.agent_id)
         .map_err(|error| error.to_string())?
@@ -4124,7 +4173,18 @@ async fn run_terminal_manual_compression(
     executor
         .run_terminal_manual_compression()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            // Capture the typed source before `to_string` flattens it, while the command
+            // error keeps its existing kind and legacy message.
+            let origin = error
+                .error_origin()
+                .map(|origin| origin.context("workflow", "manual_compression", None));
+            let message = error.to_string();
+            match origin {
+                Some(origin) => ApplicationError::internal(message).with_origin(origin),
+                None => ApplicationError::internal(message),
+            }
+        })
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -4774,7 +4834,8 @@ pub(crate) async fn workflow_signal_core(
     Err(ApplicationError::gateway(format!(
         "Failed to send signal: No active session for {}",
         session_id
-    )))
+    ))
+    .with_reason(chatspeed_contracts::ErrorReason::NoActiveSession))
 }
 
 /// Terminal workflow statuses that no longer have a live executor to consume a
@@ -7372,8 +7433,212 @@ mod tests {
                             && metadata["result"]["usage_summary"].is_object()
                     })
             })
-            .count();
-        assert_eq!(hidden_projections, 1);
+            .collect::<Vec<_>>();
+        assert_eq!(hidden_projections.len(), 1);
+        assert!(
+            hidden_projections[0]
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.get("user_error").is_none()),
+            "an old completed completion must not invent a UI error projection"
+        );
+    }
+
+    #[test]
+    fn reconcile_terminal_background_child_recovers_typed_user_error_projection() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("typed-parent", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "typed-child",
+                "Child task",
+                "agent-test",
+                None,
+                Some("typed-parent"),
+            )
+            .expect("failed to create child workflow");
+        store
+            .append_workflow_event(&WorkflowEvent::sub_agent_started(
+                "typed-parent".to_string(),
+                "typed-child".to_string(),
+                "background".to_string(),
+            ))
+            .expect("failed to persist background start event");
+        let mut child_context = ExecutionContext::new("typed-child".to_string());
+        child_context.state = RuntimeState::Failed;
+        store
+            .upsert_execution_context(&child_context)
+            .expect("failed to persist failed child state");
+
+        // Legacy transcript content stays untouched and is never used to classify
+        // the failure; only the typed terminal metadata supplies the UI projection.
+        let typed_user_error = json!({
+            "schema_version": 1,
+            "message": "provider overloaded",
+            "reason": "unknown",
+            "upstream_status": 503
+        });
+        let mut metadata = runtime_observation_metadata(
+            RuntimeObservationType::TerminalError,
+            json!({
+                "error_type": "llm_retry_exhausted",
+                "user_error": typed_user_error.clone(),
+            }),
+        );
+        metadata["user_error"] = typed_user_error.clone();
+        store
+            .add_workflow_message(&WorkflowMessage {
+                id: None,
+                session_id: "typed-child".to_string(),
+                role: "assistant".to_string(),
+                message: "Critical Error: raw provider failure CANARY".to_string(),
+                reasoning: None,
+                message_kind: "message".to_string(),
+                message_subtype: None,
+                segment_id: 1,
+                source_event_type: None,
+                metadata: Some(metadata),
+                attached_context: None,
+                step_type: Some(StepType::Observe.to_string()),
+                step_index: 0,
+                is_error: true,
+                error_type: Some("llm_retry_exhausted".to_string()),
+                created_at: None,
+            })
+            .expect("failed to persist typed terminal child message");
+
+        reconcile_interrupted_child_workflows(&store).expect("failed to recover background child");
+        reconcile_interrupted_child_workflows(&store).expect("recovery must be idempotent");
+
+        let parent_snapshot = store
+            .get_workflow_snapshot("typed-parent")
+            .expect("failed to load recovered parent messages");
+        let projections = parent_snapshot
+            .messages
+            .iter()
+            .filter(|message| {
+                message.source_event_type.as_deref() == Some("sub_agent_completed")
+                    && message.metadata.as_ref().is_some_and(|metadata| {
+                        metadata["sub_agent_id"].as_str() == Some("typed-child")
+                            && metadata["execution_mode"].as_str() == Some("background")
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(projections.len(), 1, "recovery must not duplicate the card");
+        let projection_metadata = projections[0]
+            .metadata
+            .as_ref()
+            .expect("background card metadata");
+        assert_eq!(
+            projection_metadata["user_error"], typed_user_error,
+            "the safe typed projection must be mirrored at the metadata root"
+        );
+        assert_eq!(
+            projection_metadata["result"]["summary"],
+            "Sub-agent terminal completion recovered after restart"
+        );
+        assert!(projection_metadata["result"].get("user_error").is_none());
+        assert!(projection_metadata["result"]
+            .get("error_metadata")
+            .is_none());
+        assert!(projections[0].message.is_empty());
+
+        let parent_context = store
+            .get_execution_context("typed-parent")
+            .expect("failed to load parent context")
+            .expect("recovery must persist the parent completion projection");
+        let completions = parent_context
+            .pending_sub_agent_completions
+            .iter()
+            .filter(|completion| completion.sub_agent_id == "typed-child")
+            .collect::<Vec<_>>();
+        assert_eq!(completions.len(), 1);
+        let completion_user_error = completions[0]
+            .ui_user_error()
+            .expect("recovered completion must keep the typed UI error");
+        assert_eq!(completion_user_error.message, "provider overloaded");
+        assert_eq!(completion_user_error.upstream_status, Some(503));
+        assert_eq!(
+            completions[0].summary.as_deref(),
+            Some("Sub-agent terminal completion recovered after restart")
+        );
+    }
+
+    #[test]
+    fn reconcile_replacement_keeps_existing_completion_ui_user_error() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow("preserve-parent", "Parent task", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+        store
+            .create_workflow(
+                "preserve-child",
+                "Child task",
+                "agent-test",
+                None,
+                Some("preserve-parent"),
+            )
+            .expect("failed to create child workflow");
+
+        let existing_user_error = chatspeed_contracts::UserErrorPresentation {
+            schema_version: 1,
+            message: "existing safe failure".to_string(),
+            reason: None,
+            upstream_status: Some(429),
+        };
+        let mut parent_context = ExecutionContext::new("preserve-parent".to_string());
+        parent_context.state = RuntimeState::Completed;
+        parent_context
+            .pending_sub_agent_completions
+            .push(SubAgentCompletion {
+                sub_agent_id: "preserve-child".to_string(),
+                parent_session_id: "preserve-parent".to_string(),
+                status: "failed".to_string(),
+                result: None,
+                summary: Some("legacy recovered summary".to_string()),
+                error: Some("legacy raw failure".to_string()),
+                tool_calls_count: 0,
+                usage_summary: None,
+                completed_at_ms: 1,
+                consumed: false,
+                user_error: Some(existing_user_error.clone()),
+            });
+        store
+            .upsert_execution_context(&parent_context)
+            .expect("failed to persist pending completion");
+
+        let mut child_context = ExecutionContext::new("preserve-child".to_string());
+        child_context.state = RuntimeState::Failed;
+        store
+            .upsert_execution_context(&child_context)
+            .expect("failed to persist failed child state");
+
+        reconcile_interrupted_child_workflows(&store).expect("failed to recover child");
+
+        let recovered_context = store
+            .get_execution_context("preserve-parent")
+            .expect("failed to load parent context")
+            .expect("recovery must keep the parent context");
+        let completions = recovered_context
+            .pending_sub_agent_completions
+            .iter()
+            .filter(|completion| completion.sub_agent_id == "preserve-child")
+            .collect::<Vec<_>>();
+        assert_eq!(completions.len(), 1);
+        assert_eq!(
+            completions[0].ui_user_error(),
+            Some(&existing_user_error),
+            "replacing the completion must not drop its typed UI projection"
+        );
+        assert_eq!(
+            completions[0].summary.as_deref(),
+            Some("Sub-agent terminal completion recovered after restart")
+        );
+        assert!(completions[0].usage_summary.is_some());
     }
 
     #[test]

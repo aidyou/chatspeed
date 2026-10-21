@@ -38,6 +38,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use rust_i18n::t;
 use serde_json::Value;
 // use tauri::utils::{config::WindowEffectsConfig, WindowEffect};
@@ -98,7 +99,10 @@ pub async fn open_setting_window(
             },
         )
         .map_err(|e| AppError::General {
-            message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         })?;
 
     Ok(())
@@ -127,7 +131,10 @@ pub async fn open_note_window(app_handle: tauri::AppHandle) -> Result<()> {
     app_handle
         .emit("create-note-window", ())
         .map_err(|e| AppError::General {
-            message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         })?;
 
     Ok(())
@@ -149,7 +156,10 @@ pub fn open_proxy_switcher_window(app_handle: tauri::AppHandle) -> Result<()> {
     app_handle
         .emit("create-proxy-switcher-window", ())
         .map_err(|e| AppError::General {
-            message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         })?;
 
     Ok(())
@@ -287,7 +297,10 @@ pub fn show_window(app_handle: tauri::AppHandle, window_label: &str) -> Result<(
     app_handle
         .emit("show-window", ShowWindowPayload { window_label })
         .map_err(|e| AppError::General {
-            message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         })?;
 
     Ok(())
@@ -321,7 +334,10 @@ pub async fn open_url(app_handle: tauri::AppHandle, url: String) -> Result<()> {
     app_handle
         .emit("create-url-window", UrlWindowPayload { url })
         .map_err(|e| AppError::General {
-            message: t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("main.failed_to_emit_event", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         })?;
 
     Ok(())
@@ -388,18 +404,22 @@ pub async fn toggle_window_always_on_top(
                     "main.failed_to_find_window_with_label",
                     label = window_label
                 )
-                .to_string(),
+                .to_string()
+                .into(),
             })?;
 
         // Set always on top state
         window
             .set_always_on_top(new_state)
             .map_err(|e| AppError::General {
-                message: t!(
-                    "main.failed_to_set_window_always_on_top",
-                    error = e.to_string()
+                message: FailureMessage::leaf(
+                    t!(
+                        "main.failed_to_set_window_always_on_top",
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(ErrorOrigin::from_error(&e)),
             })?;
 
         // Update global state
@@ -580,6 +600,7 @@ fn emit_quit_status(app: &tauri::AppHandle, coordinator: &ExitCoordinator) {
 fn runtime_unavailable_code(error: &RuntimeUnavailable) -> &'static str {
     match error {
         RuntimeUnavailable::NotConnected => QUIT_ERROR_RUNTIME_NOT_CONNECTED,
+        _ if error.is_runtime_stopping() => "runtime_stopping",
         _ => RuntimeStopOutcome::Failed.code(),
     }
 }
@@ -622,7 +643,8 @@ pub fn move_window_to_screen_edge(
                 "main.failed_to_find_window_with_label",
                 label = window_label
             )
-            .to_string(),
+            .to_string()
+            .into(),
         })?;
 
     if let Ok(Some(monitor)) = window.current_monitor() {
@@ -631,12 +653,15 @@ pub fn move_window_to_screen_edge(
 
         // Get current window outer size (including title bar and borders)
         let window_size = window.outer_size().map_err(|e| AppError::General {
-            message: t!("main.failed_to_get_window_size", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("main.failed_to_get_window_size", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         })?;
 
         // Get current window position to preserve the y-coordinate
         let current_pos = window.outer_position().map_err(|e| AppError::General {
-            message: e.to_string(),
+            message: FailureMessage::from_error(&e),
         })?;
 
         // Calculate new x position based on direction
@@ -647,7 +672,9 @@ pub fn move_window_to_screen_edge(
             }
             _ => {
                 return Err(AppError::General {
-                    message: t!("main.invalid_direction", direction = direction).to_string(),
+                    message: t!("main.invalid_direction", direction = direction)
+                        .to_string()
+                        .into(),
                 })
             }
         };
@@ -661,8 +688,10 @@ pub fn move_window_to_screen_edge(
         window
             .set_position(new_position)
             .map_err(|e| AppError::General {
-                message: t!("main.failed_to_set_window_position", error = e.to_string())
-                    .to_string(),
+                message: FailureMessage::leaf(
+                    t!("main.failed_to_set_window_position", error = e.to_string()).to_string(),
+                )
+                .with_origin(ErrorOrigin::from_error(&e)),
             })?;
 
         log::debug!(
@@ -674,7 +703,7 @@ pub fn move_window_to_screen_edge(
         );
     } else {
         return Err(AppError::General {
-            message: t!("main.failed_to_get_current_monitor").to_string(),
+            message: t!("main.failed_to_get_current_monitor").to_string().into(),
         });
     }
 
@@ -690,17 +719,18 @@ pub fn center_window(app: tauri::AppHandle, window_label: &str) -> Result<()> {
                 "main.failed_to_find_window_with_label",
                 label = window_label
             )
-            .to_string(),
+            .to_string()
+            .into(),
         })?;
 
     if let Ok(Some(monitor)) = window.current_monitor() {
         let monitor_size = monitor.size();
         let monitor_pos = monitor.position();
         let window_size = window.outer_size().map_err(|e| AppError::General {
-            message: e.to_string(),
+            message: FailureMessage::from_error(&e),
         })?;
         let current_pos = window.outer_position().map_err(|e| AppError::General {
-            message: e.to_string(),
+            message: FailureMessage::from_error(&e),
         })?;
 
         let new_x = monitor_pos.x + (monitor_size.width as i32 - window_size.width as i32) / 2;
@@ -711,12 +741,12 @@ pub fn center_window(app: tauri::AppHandle, window_label: &str) -> Result<()> {
         window
             .set_position(new_position)
             .map_err(|e| AppError::General {
-                message: e.to_string(),
+                message: FailureMessage::from_error(&e),
             })?;
     } else {
         // Fallback to default center if monitor info is not available
         window.center().map_err(|e| AppError::General {
-            message: e.to_string(),
+            message: FailureMessage::from_error(&e),
         })?;
     }
 

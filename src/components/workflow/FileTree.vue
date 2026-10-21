@@ -125,6 +125,7 @@ import { invokeWrapper } from '@/libs/tauri'
 import { writeClipboard } from '@/libs/clipboard'
 import { imagePreview } from '@/libs/fs'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import TreeNode from './TreeNode.vue'
 
 const { t } = useI18n()
@@ -236,7 +237,7 @@ const copyRootPath = async path => {
     showMessage(t('common.copied'), 'success')
   } catch (error) {
     console.error('Failed to copy root path:', error)
-    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+    showMessage(t('common.operationFailed', { error: formatUserError(error) }), 'error')
   }
 }
 
@@ -284,7 +285,7 @@ const openPreviewFileWithDefaultApp = async () => {
     await invokeWrapper('open_path_in_file_manager', { path: previewFilePath.value })
   } catch (error) {
     console.error('Failed to open file with default app:', error)
-    showMessage(t('workflow.filePreview.openFailed', { error: String(error) }), 'error')
+    showMessage(t('workflow.filePreview.openFailed', { error: formatUserError(error) }), 'error')
   }
 }
 

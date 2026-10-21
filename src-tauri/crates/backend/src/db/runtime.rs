@@ -1,4 +1,5 @@
 use crate::db::{CcproxyStat, StoreError};
+use crate::error_diagnostics::ErrorProjection;
 use parking_lot::{Condvar, Mutex};
 use rusqlite::{Connection, OpenFlags};
 use std::{
@@ -95,10 +96,11 @@ where
             tokio::task::block_in_place(operation)
         }
         Ok(_) => std::thread::scope(|scope| {
-            scope
-                .spawn(operation)
-                .join()
-                .map_err(|_| StoreError::WorkerFailed(format!("{description} thread panicked")))?
+            scope.spawn(operation).join().map_err(|_| {
+                StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "{description} thread panicked"
+                )))
+            })?
         }),
         Err(_) => operation(),
     }
@@ -247,8 +249,8 @@ struct Worker {
 enum TelemetryMessage {
     #[cfg(not(feature = "desktop"))]
     Stat(CcproxyStat, JobPermit),
-    Flush(oneshot::Sender<Result<(), String>>),
-    Shutdown(oneshot::Sender<Result<(), String>>),
+    Flush(oneshot::Sender<Result<(), crate::error_diagnostics::FailureMessage>>),
+    Shutdown(oneshot::Sender<Result<(), crate::error_diagnostics::FailureMessage>>),
 }
 
 struct TelemetryIngress {
@@ -317,9 +319,11 @@ impl TelemetryIngress {
                     .map_err(StoreError::WorkerFailed)
             });
         let join_result = if let Some(join_handle) = self.join_handle.lock().take() {
-            join_handle
-                .join()
-                .map_err(|_| StoreError::WorkerFailed("telemetry worker panicked".to_string()))
+            join_handle.join().map_err(|_| {
+                StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(
+                    "telemetry worker panicked",
+                ))
+            })
         } else {
             Ok(())
         };
@@ -339,8 +343,16 @@ impl TelemetryIngress {
         let join_result = if let Some(join_handle) = self.join_handle.lock().take() {
             tokio::task::spawn_blocking(move || join_handle.join())
                 .await
-                .map_err(|error| StoreError::WorkerFailed(error.to_string()))?
-                .map_err(|_| StoreError::WorkerFailed("telemetry worker panicked".to_string()))
+                .map_err(|error| {
+                    StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::from_error(
+                        &error,
+                    ))
+                })?
+                .map_err(|_| {
+                    StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(
+                        "telemetry worker panicked",
+                    ))
+                })
         } else {
             Ok(())
         };
@@ -373,9 +385,11 @@ impl Worker {
             .blocking_recv()
             .map_err(|_| StoreError::RuntimeClosed)?;
         if let Some(join_handle) = self.join_handle.lock().take() {
-            join_handle
-                .join()
-                .map_err(|_| StoreError::WorkerFailed("worker thread panicked".to_string()))?;
+            join_handle.join().map_err(|_| {
+                StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(
+                    "worker thread panicked",
+                ))
+            })?;
         }
         Ok(())
     }
@@ -392,8 +406,16 @@ impl Worker {
         if let Some(join_handle) = self.join_handle.lock().take() {
             tokio::task::spawn_blocking(move || join_handle.join())
                 .await
-                .map_err(|error| StoreError::WorkerFailed(error.to_string()))?
-                .map_err(|_| StoreError::WorkerFailed("worker thread panicked".to_string()))?;
+                .map_err(|error| {
+                    StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::from_error(
+                        &error,
+                    ))
+                })?
+                .map_err(|_| {
+                    StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(
+                        "worker thread panicked",
+                    ))
+                })?;
         }
         Ok(())
     }
@@ -514,7 +536,11 @@ impl DbRuntime {
                     }
                 }
             })
-            .map_err(|error| StoreError::WorkerFailed(error.to_string()))?;
+            .map_err(|error| {
+                StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::from_error(
+                    &error,
+                ))
+            })?;
 
         Ok(Worker {
             sender,
@@ -633,9 +659,15 @@ impl DbRuntime {
                             }
                             Err(error) => {
                                 worker_metrics.failed_jobs.fetch_add(1, Ordering::Relaxed);
-                                log::error!("Failed to persist CCProxy telemetry batch: {error}");
+                                let diagnostic = error.diagnostic();
+                                crate::error_diagnostics::log_error_diagnostic(&diagnostic);
                                 if pending_error.is_none() {
-                                    pending_error = Some(error.to_string());
+                                    pending_error = Some(
+                                        crate::error_diagnostics::FailureMessage::leaf(
+                                            error.to_string(),
+                                        )
+                                        .with_origin(error.error_origin()),
+                                    );
                                 }
                             }
                         }
@@ -659,7 +691,7 @@ impl DbRuntime {
                     }
                 }
             })
-            .map_err(|error| StoreError::WorkerFailed(error.to_string()))?;
+            .map_err(|error| StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::from_error(&error)))?;
 
         Ok(TelemetryIngress {
             sender,
@@ -832,7 +864,9 @@ impl DbRuntime {
         self.maintenance_gate.begin_maintenance()?;
         std::thread::scope(|scope| {
             scope.spawn(|| self.drain_blocking()).join().map_err(|_| {
-                StoreError::WorkerFailed("maintenance drain thread panicked".to_string())
+                StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(
+                    "maintenance drain thread panicked",
+                ))
             })?
         })
     }
@@ -848,7 +882,9 @@ impl DbRuntime {
                 .spawn(|| self.shutdown_blocking())
                 .join()
                 .map_err(|_| {
-                    StoreError::WorkerFailed("maintenance shutdown thread panicked".to_string())
+                    StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(
+                        "maintenance shutdown thread panicked",
+                    ))
                 })?
         })
     }
@@ -1408,10 +1444,14 @@ mod tests {
             reader_runtime
                 .read(move |_| {
                     started_sender.send(()).map_err(|_| {
-                        StoreError::WorkerFailed("reader start receiver dropped".to_string())
+                        StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(
+                            "reader start receiver dropped",
+                        ))
                     })?;
                     release_receiver.recv().map_err(|error| {
-                        StoreError::WorkerFailed(format!("reader release signal failed: {error}"))
+                        StoreError::WorkerFailed(crate::error_diagnostics::FailureMessage::leaf(
+                            format!("reader release signal failed: {error}"),
+                        ))
                     })?;
                     Ok(())
                 })

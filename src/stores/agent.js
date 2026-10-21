@@ -4,6 +4,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
 import { AGENT_ROLE } from '@/constants/agent';
+import { formatUserError } from '@/libs/error';
 import { sendSyncState } from '@/libs/sync';
 
 /**
@@ -261,12 +262,11 @@ export const useAgentStore = defineStore('agent', () => {
 
   const _handleError = (err, message = 'Agent Store Error') => {
     loading.value = false;
+    error.value = formatUserError(err);
     if (err instanceof FrontendAppError) {
-      error.value = err.toFormattedString();
-      console.error(`${message}:`, error.value, err.originalError);
+      console.error(`${message}: ${err.toFormattedString()}`, err.originalError);
     } else {
-      error.value = err.message || String(err);
-      console.error(`${message}:`, error.value);
+      console.error(`${message}:`, err);
     }
     throw err;
   };

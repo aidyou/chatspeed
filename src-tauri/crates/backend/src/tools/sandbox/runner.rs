@@ -19,7 +19,7 @@ pub fn sandbox_command_for_plan(
     let mut iter = argv.into_iter();
     let program = iter
         .next()
-        .ok_or_else(|| ToolError::ExecutionFailed("sandbox command argv is empty".to_string()))?;
+        .ok_or_else(|| ToolError::ExecutionFailed("sandbox command argv is empty".into()))?;
     let mut command = Command::new(program);
     command.args(iter);
     configure_child_stdio(&mut command);

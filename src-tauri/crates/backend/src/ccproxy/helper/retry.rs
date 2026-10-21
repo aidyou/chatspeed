@@ -1,9 +1,12 @@
 use crate::ccproxy::errors::{CCProxyError, ProxyResult};
 use reqwest::{RequestBuilder, Response};
 use rust_i18n::t;
-use std::error::Error;
 use std::time::Duration;
 use tokio::time::sleep;
+
+use crate::error_diagnostics::{
+    log_error_diagnostic, ErrorOrigin, ErrorProjection, FailureMessage,
+};
 
 /// Exponential backoff retry configuration
 #[derive(Debug, Clone)]
@@ -137,47 +140,25 @@ fn format_backend_request_error(error: &reqwest::Error) -> String {
     format!("Request to backend failed: {}", error)
 }
 
-fn format_error_sources(error: &(dyn Error + 'static)) -> String {
-    let mut messages = Vec::new();
-    let mut current = error.source();
-
-    while let Some(cause) = current {
-        let message = cause.to_string();
-        if !message.is_empty() && messages.last() != Some(&message) {
-            messages.push(message);
-        }
-        current = cause.source();
-    }
-
-    messages.join(" -> ")
-}
-
 fn log_backend_request_error(attempt: Option<u32>, error: &reqwest::Error) {
-    let causes = format_error_sources(error);
     let attempt = attempt
         .map(|value| value.to_string())
         .unwrap_or_else(|| "none".to_string());
-
-    if causes.is_empty() {
-        log::error!(
-            "Backend request error: attempt={}, error={}",
-            attempt,
-            error
-        );
-    } else {
-        log::error!(
-            "Backend request error: attempt={}, error={}, causes={}",
-            attempt,
-            error,
-            causes
-        );
-    }
+    let mut origin = ErrorOrigin::from_error(error);
+    origin = origin.context(
+        "ccproxy",
+        "backend_request",
+        Some(format!("attempt={attempt}")),
+    );
+    let mut diagnostic = FailureMessage::from_error(error).with_origin(origin).diagnostic();
+    diagnostic.module = "ccproxy".to_string();
+    diagnostic.operation = "backend_request".to_string();
+    log_error_diagnostic(&diagnostic);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Context;
 
     #[test]
     fn test_retry_config_default() {
@@ -217,6 +198,7 @@ mod tests {
 
     #[test]
     fn test_format_error_sources_excludes_top_level_message() {
+        use anyhow::Context;
         let result: anyhow::Result<()> = Err(std::io::Error::new(
             std::io::ErrorKind::ConnectionRefused,
             "connection refused by test backend",
@@ -224,11 +206,9 @@ mod tests {
         .context("TCP connection failed")
         .context("request dispatch failed");
         let error = result.expect_err("test error chain should be present");
-
-        assert_eq!(
-            format_error_sources(error.as_ref()),
-            "TCP connection failed -> connection refused by test backend"
-        );
+        let origin = ErrorOrigin::from_error(error.as_ref());
+        assert_eq!(origin.message, "connection refused by test backend");
+        assert_eq!(origin.sources, vec!["request dispatch failed", "TCP connection failed"]);
     }
 
     #[tokio::test]

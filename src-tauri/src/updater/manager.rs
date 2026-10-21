@@ -4,6 +4,7 @@
 
 use super::error::{Result, UpdateError};
 use super::types::VersionInfo;
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use log::{info, warn};
 use reqwest::Proxy;
 use semver::Version;
@@ -59,10 +60,11 @@ impl UpdateManager {
         }
 
         let result = async {
-            let updater = self
-                .build_updater()
-                .await
-                .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
+            let updater = self.build_updater().await.map_err(|e| {
+                UpdateError::ConfigError(
+                    FailureMessage::leaf(e.to_string()).with_origin(e.error_origin()),
+                )
+            })?;
 
             if let Ok(Some(update)) = updater.check().await {
                 info!("New version available: {}", update.version);
@@ -129,13 +131,12 @@ impl UpdateManager {
                     let proxy_server = snapshot.get_string(CFG_PROXY_SERVER, "");
                     if proxy_server.trim().is_empty() {
                         return Err(UpdateError::ConfigError(
-                            "HTTP proxy is enabled for updates, but proxy_server is empty"
-                                .to_string(),
+                            "HTTP proxy is enabled for updates, but proxy_server is empty".into(),
                         ));
                     }
 
                     let mut proxy = Proxy::all(proxy_server.as_str())
-                        .map_err(|e| UpdateError::ConfigError(e.to_string()))?;
+                        .map_err(|e| UpdateError::ConfigError(FailureMessage::from_error(&e)))?;
                     let proxy_username = snapshot.get_string(CFG_PROXY_USERNAME, "");
                     let proxy_password = snapshot.get_string(CFG_PROXY_PASSWORD, "");
 
@@ -153,7 +154,7 @@ impl UpdateManager {
 
         builder
             .build()
-            .map_err(|e| UpdateError::ConfigError(e.to_string()))
+            .map_err(|e| UpdateError::ConfigError(FailureMessage::from_error(&e)))
     }
 
     /// Installs the latest downloaded update and restarts the application.
@@ -161,7 +162,12 @@ impl UpdateManager {
         let update_state = self
             .latest_update
             .lock()
-            .map_err(|_| UpdateError::LockError("Failed to lock latest_update mutex".to_string()))?
+            .map_err(|e| {
+                UpdateError::LockError(
+                    FailureMessage::leaf("Failed to lock latest_update mutex")
+                        .with_origin(ErrorOrigin::leaf(e.to_string(), None, None, None)),
+                )
+            })?
             .take();
 
         if let Some(state) = update_state {
@@ -170,7 +176,7 @@ impl UpdateManager {
             state
                 .update
                 .install(&bytes)
-                .map_err(|e| UpdateError::InstallError(e.to_string()))?;
+                .map_err(|e| UpdateError::InstallError(FailureMessage::from_error(&e)))?;
             tokio::fs::remove_file(&state.tmp_path).await?;
             self.app.restart();
         } else {
@@ -191,27 +197,33 @@ impl UpdateManager {
         let new_version =
             Version::parse(new_version_str).map_err(|e| UpdateError::VersionParseError {
                 version: new_version_str.to_string(),
-                error: e.to_string(),
+                error: FailureMessage::from_error(&e),
             })?;
         let current_version =
             Version::parse(&current_version_str).map_err(|e| UpdateError::VersionParseError {
                 version: current_version_str,
-                error: e.to_string(),
+                error: FailureMessage::from_error(&e),
             })?;
 
         Ok(new_version > current_version)
     }
 
     fn has_ready_update(&self) -> Result<bool> {
-        let latest_update = self.latest_update.lock().map_err(|_| {
-            UpdateError::LockError("Failed to lock latest_update mutex".to_string())
+        let latest_update = self.latest_update.lock().map_err(|e| {
+            UpdateError::LockError(
+                FailureMessage::leaf("Failed to lock latest_update mutex")
+                    .with_origin(ErrorOrigin::leaf(e.to_string(), None, None, None)),
+            )
         })?;
         Ok(latest_update.is_some())
     }
 
     fn try_mark_check_started(&self) -> Result<bool> {
-        let mut check_in_progress = self.check_in_progress.lock().map_err(|_| {
-            UpdateError::LockError("Failed to lock check_in_progress mutex".to_string())
+        let mut check_in_progress = self.check_in_progress.lock().map_err(|e| {
+            UpdateError::LockError(
+                FailureMessage::leaf("Failed to lock check_in_progress mutex")
+                    .with_origin(ErrorOrigin::leaf(e.to_string(), None, None, None)),
+            )
         })?;
 
         if *check_in_progress {
@@ -223,8 +235,11 @@ impl UpdateManager {
     }
 
     fn set_check_in_progress(&self, value: bool) -> Result<()> {
-        let mut check_in_progress = self.check_in_progress.lock().map_err(|_| {
-            UpdateError::LockError("Failed to lock check_in_progress mutex".to_string())
+        let mut check_in_progress = self.check_in_progress.lock().map_err(|e| {
+            UpdateError::LockError(
+                FailureMessage::leaf("Failed to lock check_in_progress mutex")
+                    .with_origin(ErrorOrigin::leaf(e.to_string(), None, None, None)),
+            )
         })?;
         *check_in_progress = value;
         Ok(())
@@ -282,12 +297,12 @@ async fn download_update_to_file(
     let bytes = update
         .download(on_chunk, on_finish)
         .await
-        .map_err(|e| UpdateError::DownloadError(e.to_string()))?;
+        .map_err(|e| UpdateError::DownloadError(FailureMessage::from_error(&e)))?;
 
     let cache_dir = app
         .path()
         .app_cache_dir()
-        .map_err(|e| UpdateError::IoError(e.to_string()))?;
+        .map_err(|e| UpdateError::IoError(FailureMessage::from_error(&e)))?;
     if !cache_dir.exists() {
         tokio::fs::create_dir_all(&cache_dir).await?;
     }
@@ -295,9 +310,12 @@ async fn download_update_to_file(
 
     tokio::fs::write(&tmp_path, &bytes).await?;
 
-    let mut lu = latest_update
-        .lock()
-        .map_err(|_| UpdateError::LockError("Failed to lock latest_update mutex".to_string()))?;
+    let mut lu = latest_update.lock().map_err(|e| {
+        UpdateError::LockError(
+            FailureMessage::leaf("Failed to lock latest_update mutex")
+                .with_origin(ErrorOrigin::leaf(e.to_string(), None, None, None)),
+        )
+    })?;
     *lu = Some(UpdateState { update, tmp_path });
 
     let _ = app.emit(EVENT_UPDATE_READY, ());

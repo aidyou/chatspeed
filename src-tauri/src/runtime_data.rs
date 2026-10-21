@@ -16,7 +16,7 @@ use crate::ai::model_catalog::ResolvedModelProfile;
 use crate::ai::traits::chat::ModelDetails;
 use crate::db::config_transfer::ConfigCategory;
 use crate::db::{ChatHub, Conversation, Note, NoteTag, ProxyGroup, SandboxScheme};
-use crate::runtime_client::RuntimeSupervisor;
+use crate::runtime_client::{client_error_wire, runtime_error_wire, RuntimeSupervisor};
 use crate::sensitive::manager::SensitiveConfig;
 use chatspeed_contracts::{
     ModelDetailsDto, ModelsDevPresetProviderDto, ModelsDevProviderModelsRequest,
@@ -32,7 +32,7 @@ const DATA_COMMAND_ROUTE: &str = chatspeed_runtime_client::DATA_COMMANDS_PATH;
 
 /// Resolves the connected control-plane client, or fails when no lease is held.
 async fn control_plane_client(supervisor: &RuntimeSupervisor) -> Result<RuntimeClient, String> {
-    supervisor.client().await.map_err(|error| error.to_string())
+    supervisor.client().await.map_err(runtime_error_wire)
 }
 
 /// Fresh idempotency key for one mutating command invocation.
@@ -42,10 +42,7 @@ fn new_idempotency_key() -> String {
 
 /// Maps a transport/domain client error to the Tauri string error.
 fn map_client_error(error: ClientError) -> String {
-    match error {
-        ClientError::Server { message, .. } => message,
-        other => other.to_string(),
-    }
+    client_error_wire(error)
 }
 
 /// Encodes a typed request body for the wire.

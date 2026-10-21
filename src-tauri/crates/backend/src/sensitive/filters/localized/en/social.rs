@@ -10,7 +10,7 @@ pub struct SocialFilter {
 impl SocialFilter {
     pub fn new() -> Result<Self, SensitiveError> {
         let regex = Regex::new(r#"(?i)(?:WeChat|WhatsApp|Telegram|Skype|Twitter|Instagram|ID)[:：]?\s*([a-zA-Z0-9_-]{4,32})"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_social_regex".to_string(), message: e.to_string() })?;
+            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_social_regex".to_string(), message: crate::error_diagnostics::FailureMessage::from_error(&e) })?;
         Ok(Self { regex })
     }
 }

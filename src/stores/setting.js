@@ -9,7 +9,6 @@ import { sendSyncState } from '@/libs/sync'
 import { isEmpty, snakeToCamel, camelToSnake } from '@/libs/util'
 import { mapBrowserLangToStandard } from '@/i18n/langUtils'
 import { normalizeInterfaceLocale } from '@/i18n/supportedLocales'
-import i18n from '@/i18n'
 
 const windowLabel = getCurrentWebviewWindow().label
 
@@ -167,7 +166,7 @@ export const useSettingStore = defineStore('setting', () => {
         } else {
           console.error('Failed to update shortcut:', error);
         }
-        throw new Error(i18n.global.t('settings.general.updateShortcutFailed', { error: error.message || String(error) }))
+        throw error
       }
     }
 

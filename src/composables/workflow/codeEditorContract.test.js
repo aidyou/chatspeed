@@ -12,6 +12,7 @@ import {
 } from './codeEditorLanguages.js'
 import {
   WORKFLOW_EDITOR_MAX_BYTES,
+  isEditorConflictError,
   useWorkflowCodeEditor
 } from './useWorkflowCodeEditor.js'
 
@@ -128,7 +129,13 @@ test('editor state handles tabs, dirty state, successful save, and conflicts', a
       if (command === 'read_text_file_for_editor') {
         return { name: 'conflict.ts', content: 'base', size: 4, modified_at_ms: 10 }
       }
-      throw new Error('File changed on disk. Reload before saving.')
+      throw {
+        presentation: {
+          schema_version: 1,
+          message: '磁碟上的檔案已變更。儲存前請重新載入。',
+          reason: 'file_changed_on_disk'
+        }
+      }
     }
   })
   await conflictEditor.openFile('/tmp/conflict.ts')
@@ -163,6 +170,57 @@ test('editor state handles tabs, dirty state, successful save, and conflicts', a
   })
 })
 
+test('editor conflict and size handling use exact reasons, not message wording', async () => {
+  assert.equal(
+    isEditorConflictError({
+      message: 'File changed on disk. Reload before saving.'
+    }),
+    false,
+    'legacy English wording must not activate conflict recovery'
+  )
+  assert.equal(
+    isEditorConflictError({
+      message: '磁盘上的文件已更改，请重新加载后保存。'
+    }),
+    false,
+    'localized wording must not activate conflict recovery without a reason'
+  )
+  for (const message of [
+    'File changed on disk. Reload before saving.',
+    '磁碟上的檔案已變更。儲存前請重新載入。'
+  ]) {
+    assert.equal(
+      isEditorConflictError({
+        presentation: {
+          schema_version: 1,
+          message,
+          reason: 'file_changed_on_disk'
+        }
+      }),
+      true,
+      'the same typed reason must activate conflict recovery for every locale'
+    )
+  }
+
+  const notifications = []
+  const editor = useWorkflowCodeEditor({
+    t: (key, params = {}) => `${key}${params.max ? `:${params.max}` : ''}`,
+    notify: (message, type) => notifications.push({ message, type }),
+    invoke: async () => {
+      throw {
+        presentation: {
+          schema_version: 1,
+          message: 'Datei zu groß',
+          reason: 'file_too_large'
+        }
+      }
+    }
+  })
+  await assert.rejects(() => editor.openFile('/tmp/large.txt'))
+  assert.deepEqual(notifications, [
+    { message: 'workflow.codeEditor.fileTooLarge:5 MiB', type: 'warning' }
+  ])
+})
 test('workflow code editor source contracts keep CodeMirror, shortcuts, and tab escape hint', async () => {
   const [component, composable, workflow, sidebar, fileTree, fsCommands, lib] = await Promise.all([
     read('src/components/workflow/WorkflowCodeEditor.vue'),
@@ -189,7 +247,9 @@ test('workflow code editor source contracts keep CodeMirror, shortcuts, and tab 
   assert.match(composable, /read_text_file_for_editor/)
   assert.match(composable, /write_text_file_for_editor/)
   assert.match(composable, /expectedModifiedAtMs/)
-  assert.match(composable, /expectedSize/)
+  assert.doesNotMatch(composable, /changed on disk|磁盘|磁碟|reload before saving|too large|太大/)
+  assert.match(composable, /USER_ERROR_REASONS\.FILE_CHANGED_ON_DISK/)
+  assert.match(composable, /USER_ERROR_REASONS\.FILE_TOO_LARGE/)
   assert.match(workflow, /<WorkflowCodeEditor/)
   assert.match(workflow, /workflow-workspace/)
   assert.match(workflow, /code-editor-resize-handle/)

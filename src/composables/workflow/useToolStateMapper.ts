@@ -7,7 +7,7 @@
 
 import type { ToolViewState, ToolViewStatus } from './useTaskLedger'
 import { isAutoExecuteWorkflowTool } from './toolApproval'
-import { getStructuredWorkflowToolName } from './messageProjectionRules'
+import { getStructuredWorkflowToolName, resolveWorkflowErrorDisplay } from './messageProjectionRules'
 import {
   formatDisplayPath,
   getToolStatusSummary,
@@ -286,6 +286,10 @@ export function deriveToolViewState(
     if (isInternalTool(toolName)) continue
     const args = extractArguments(message)
     const meta = message.metadata || {}
+    const errorDisplay =
+      status === 'final_error'
+        ? resolveWorkflowErrorDisplay(message, message.message).display
+        : ''
 
     const existing = result.get(toolCallId)
 
@@ -327,10 +331,12 @@ export function deriveToolViewState(
         toolName,
         status,
         title,
-        summary,
+        summary: errorDisplay || summary,
         arguments: args || existing?.arguments,
         result: message.role === 'tool' ? message.message : existing?.result,
         errorType: meta.is_error ? 'execution_error' : existing?.errorType,
+        errorDisplay: errorDisplay || existing?.errorDisplay,
+        errorDisplayCopy: errorDisplay || existing?.errorDisplayCopy,
         approvalStatus: meta.approval_status || existing?.approvalStatus || 'pending',
         createdAt: existing?.createdAt || message.createdAt || now,
         updatedAt: now,

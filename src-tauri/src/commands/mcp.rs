@@ -27,6 +27,7 @@ use crate::error::{AppError, Result};
 use crate::mcp::client::{McpProtocolType, McpServerConfig};
 use crate::mcp::McpError;
 use crate::runtime_client::RuntimeSupervisor;
+use chatspeed_runtime_backend::error_diagnostics::FailureMessage;
 use rust_i18n::t;
 use serde_json::Value;
 use std::sync::Arc;
@@ -60,25 +61,25 @@ pub async fn list_mcp_servers(supervisor: State<'_, Arc<RuntimeSupervisor>>) -> 
 fn check_form(name: &str, config: &McpServerConfig) -> Result<()> {
     if name.is_empty() || config.name.is_empty() {
         return Err(AppError::Mcp(McpError::ClientConfigError(
-            t!("mcp.config.name_must_be_non_empty").to_string(),
+            FailureMessage::leaf(t!("mcp.config.name_must_be_non_empty").to_string()),
         )));
     }
 
     if config.protocol_type == McpProtocolType::Sse {
         return Err(AppError::Mcp(McpError::ClientConfigError(
-            t!("mcp.config.sse_removed_in_rmcp_v1").to_string(),
+            FailureMessage::leaf(t!("mcp.config.sse_removed_in_rmcp_v1").to_string()),
         )));
     }
 
     if config.protocol_type == McpProtocolType::Stdio {
         if config.command.clone().unwrap_or_default().is_empty() {
             return Err(AppError::Mcp(McpError::ClientConfigError(
-                t!("mcp.config.stdio_command_must_be_non_empty").to_string(),
+                FailureMessage::leaf(t!("mcp.config.stdio_command_must_be_non_empty").to_string()),
             )));
         }
         if config.args.clone().unwrap_or_default().is_empty() {
             return Err(AppError::Mcp(McpError::ClientConfigError(
-                t!("mcp.config.stdio_args_must_be_non_empty").to_string(),
+                FailureMessage::leaf(t!("mcp.config.stdio_args_must_be_non_empty").to_string()),
             )));
         }
     }
@@ -89,10 +90,17 @@ fn check_form(name: &str, config: &McpServerConfig) -> Result<()> {
 /// Maps a capability failure onto the `McpError` shapes the page already handles.
 fn legacy_error(error: CapabilityError) -> AppError {
     let message = error.redacted_message();
+    let failure = || {
+        error
+            .error_origin()
+            .cloned()
+            .map(|origin| FailureMessage::leaf(message.clone()).with_origin(origin))
+            .unwrap_or_else(|| FailureMessage::leaf(message.clone()))
+    };
     match error.code() {
         code::NOT_FOUND | code::OPERATION_NOT_FOUND => AppError::Mcp(McpError::NotFound(message)),
         code::INVALID_REQUEST | code::UNSUPPORTED_ADAPTER | code::IDEMPOTENCY_KEY_REQUIRED => {
-            AppError::Mcp(McpError::ClientConfigError(message))
+            AppError::Mcp(McpError::ClientConfigError(failure()))
         }
         code::BUSY
         | code::REFUSED
@@ -101,7 +109,7 @@ fn legacy_error(error: CapabilityError) -> AppError {
         | code::RUNTIME_UNAVAILABLE
         | code::INTERRUPTED_BEFORE_EFFECT
         | code::PARTIAL => AppError::Mcp(McpError::StateChangeFailed(message)),
-        _ => AppError::Mcp(McpError::General(message)),
+        _ => AppError::Mcp(McpError::General(failure())),
     }
 }
 

@@ -18,6 +18,7 @@ pub fn error_response(status: StatusCode, code: &'static str, message: String) -
         error: ErrorDetail {
             code: code.to_string(),
             message,
+            presentation: None,
         },
     };
     (status, axum::Json(body)).into_response()
@@ -39,7 +40,10 @@ pub fn application_error_response(error: &ApplicationError) -> Response {
         ),
         ApplicationErrorKind::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
     };
-    error_response(status, code, error.message.clone())
+    use crate::error_diagnostics::ErrorProjection;
+    let body =
+        ErrorEnvelope::new(code, error.message.clone()).with_presentation(error.user_error());
+    (status, axum::Json(body)).into_response()
 }
 
 /// Maps an automation facade error to a stable HTTP status and code.
@@ -65,7 +69,10 @@ pub fn automation_error_response(
         code::PERMISSION_EXPANSION => StatusCode::UNPROCESSABLE_ENTITY,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    error_response(status, error.code(), error.message().to_string())
+    use crate::error_diagnostics::ErrorProjection;
+    let body = ErrorEnvelope::new(error.code(), error.message().to_string())
+        .with_presentation(error.user_error());
+    (status, axum::Json(body)).into_response()
 }
 
 /// Maps a capability error to a stable HTTP status and code.
@@ -126,7 +133,10 @@ pub fn capability_error_response(error: &crate::capability::error::CapabilityErr
         }
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     };
-    error_response(status, code, error.redacted_message())
+    use crate::error_diagnostics::ErrorProjection;
+    let body =
+        ErrorEnvelope::new(code, error.redacted_message()).with_presentation(error.user_error());
+    (status, axum::Json(body)).into_response()
 }
 
 /// Response keys whose values are persisted or caller-defined JSON payloads.
@@ -190,6 +200,98 @@ pub fn camel_to_snake(input: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn application_origin_projection_keeps_legacy_status_code_and_message() {
+        let error = ApplicationError::state("legacy wrapper").with_origin(
+            crate::error_diagnostics::ErrorOrigin::leaf(
+                "overloaded: https://example.test/a\nretry",
+                Some(chatspeed_contracts::ErrorReason::SessionStopping),
+                Some("internal_error".into()),
+                Some(503),
+            ),
+        );
+        let response = application_error_response(&error);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let envelope: ErrorEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(envelope.error.code, "invalid_state");
+        assert_eq!(envelope.error.message, "legacy wrapper");
+        let presentation = envelope.error.presentation.unwrap();
+        assert_eq!(
+            presentation.reason,
+            Some(chatspeed_contracts::ErrorReason::SessionStopping)
+        );
+        assert_eq!(presentation.upstream_status, Some(503));
+        assert_eq!(
+            presentation.message,
+            "overloaded: https://example.test/a\nretry"
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("context_chain"));
+    }
+
+    #[tokio::test]
+    async fn capability_projection_keeps_status_code_and_redacts_both_messages() {
+        use crate::capability::error::CapabilityError;
+        use chatspeed_contracts::UserErrorPresentation;
+
+        let error = CapabilityError::not_found("legacy token=LEGACY_CANARY").with_user_error(
+            UserErrorPresentation {
+                schema_version: 1,
+                message: "provider api_key=UI_CANARY".to_string(),
+                reason: None,
+                upstream_status: Some(503),
+            },
+        );
+        let response = capability_error_response(&error);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let bytes = axum::body::to_bytes(response.into_body(), 8192).await.unwrap();
+        let envelope: ErrorEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(envelope.error.code, "not_found");
+        let presentation = envelope.error.presentation.unwrap();
+        assert_eq!(presentation.upstream_status, Some(503));
+        assert!(presentation.message.starts_with("provider"));
+        let wire = String::from_utf8_lossy(&bytes);
+        assert!(!wire.contains("LEGACY_CANARY"));
+        assert!(!wire.contains("UI_CANARY"));
+        assert!(!wire.contains("context_chain"));
+    }
+
+    #[tokio::test]
+    async fn automation_projection_keeps_legacy_status_code_and_message() {
+        use crate::workflow::automation::errors::AutomationError;
+
+        let response = automation_error_response(&AutomationError::invalid_request("bad input"));
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let envelope: ErrorEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(envelope.error.code, "invalid_request");
+        assert_eq!(envelope.error.message, "bad input");
+        let presentation = envelope.error.presentation.expect("presentation");
+        assert_eq!(presentation.message, "bad input");
+        assert_eq!(presentation.reason, None);
+
+        let stopping = AutomationError::stopping("runtime is stopping");
+        let response = automation_error_response(&stopping);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let envelope: ErrorEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            envelope.error.code,
+            chatspeed_contracts::RUNTIME_CODE_RUNTIME_STOPPING
+        );
+        assert_eq!(envelope.error.message, "runtime is stopping");
+        assert_eq!(
+            envelope.error.presentation.unwrap().reason,
+            Some(chatspeed_contracts::ErrorReason::RuntimeStopping)
+        );
+    }
 
     #[test]
     fn camel_to_snake_converts_identifiers() {

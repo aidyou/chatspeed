@@ -4,6 +4,7 @@ import {
   formatWorkflowRetryMessage,
   mergeWorkflowMessagePages,
   normalizeWorkflowErrorAlertContent,
+  resolveWorkflowErrorDisplay,
   projectWorkflowMessageList,
   isWorkflowCompletionMessage,
   isWorkflowMessagePendingApproval
@@ -128,6 +129,20 @@ assert.deepEqual(
   'locally submitted child approvals must leave only the remaining structured pending tools'
 )
 
+test('workflow error branches use structured reasons and localized presentation', async () => {
+  const [approval, core, model] = await Promise.all([
+    readFile('src/composables/workflow/useWorkflowApproval.ts', 'utf8'),
+    readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8'),
+    readFile('src/components/setting/Model.vue', 'utf8')
+  ])
+
+  assert.match(approval, /normalizedError\.reason === USER_ERROR_REASONS\.NO_ACTIVE_SESSION/)
+  assert.doesNotMatch(approval, /No sender|No active session|Session interrupted/)
+  assert.match(core, /normalizeUserError\(error\)\.reason/)
+  assert.doesNotMatch(core, /errorText\.includes\(['"]Session (?:is stopping|already exists)/)
+  assert.match(model, /normalizedError\.reason === USER_ERROR_REASONS\.UNSUPPORTED_LIST_MODELS/)
+  assert.doesNotMatch(model, /Method Not Allowed|status_code\\\":405|not available for Coding Agents/)
+})
 test('both workflow retry displays share structured retry formatting', async () => {
   const [messageList, notifier, ...locales] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
@@ -193,7 +208,7 @@ test('workflow terminal model errors use structured localized alert titles', asy
   const errorContentSource = messageList.slice(errorContentStart, errorContentEnd)
   assert.match(
     errorContentSource,
-    /normalizeWorkflowErrorAlertContent\(message\?\.message\)[\s\S]*?metadata\.retry_exhausted !== true[\s\S]*?workflow\.errorTypes\.retryAttemptsExhausted/
+    /(?:resolveWorkflowErrorDisplay\(message, message\?\.message\)|normalizeWorkflowErrorAlertContent\(message\?\.message\))[\s\S]*?metadata\.retry_exhausted !== true[\s\S]*?workflow\.errorTypes\.retryAttemptsExhausted/
   )
   assert.doesNotMatch(errorContentSource, /props\.getParsedMessage\(message\)/)
   assert.doesNotMatch(messageList, /quota|payment required|insufficient balance/i)
@@ -221,6 +236,7 @@ test('terminal provider errors survive live projection and history reload as vis
   const alerts = runInNewContext(
     `${messageList.slice(start, end)}\n;({ shouldShowErrorAlert, getErrorAlertContent, getErrorAlertTitle })`,
     {
+      resolveWorkflowErrorDisplay,
       normalizeWorkflowErrorAlertContent,
       props: { removeSystemReminder: value => value },
       t: key => key.split('.').reduce((value, part) => value?.[part], locale)

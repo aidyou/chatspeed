@@ -34,6 +34,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 
 import { invokeWrapper } from '@/libs/tauri'
+import { formatUserError } from '@/libs/error'
 import { showMessage } from '@/libs/util'
 import { sendSyncState } from '@/libs/sync'
 import { useModelStore } from '@/stores/model'
@@ -83,7 +84,7 @@ const selectKeyFile = async () => {
     showMessage(t('settings.general.apiKeyProtection.unlockSuccess'), 'success')
   } catch (error) {
     console.error('Failed to activate API key file:', error)
-    showMessage(t('settings.general.apiKeyProtection.operationFailed'), 'error')
+    showMessage(formatUserError(error, t('settings.general.apiKeyProtection.operationFailed')), 'error')
   } finally {
     selecting.value = false
   }
@@ -108,7 +109,7 @@ onMounted(async () => {
     await refreshStatus()
   } catch (error) {
     console.error('Failed to inspect API key encryption status:', error)
-    showMessage(t('settings.general.apiKeyProtection.statusFailed'), 'error')
+    showMessage(formatUserError(error, t('settings.general.apiKeyProtection.statusFailed')), 'error')
   }
 })
 

@@ -521,6 +521,7 @@ import { ElMessageBox } from 'element-plus'
 
 import { useProxyGroupStore } from '@/stores/proxy_group'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { useSettingStore } from '@/stores/setting'
 import { FrontendAppError } from '@/libs/tauri'
 
@@ -697,13 +698,17 @@ const handleGroupConfigSubmit = async () => {
       } catch (error) {
         if (error instanceof FrontendAppError) {
           showMessage(
-            t('settings.proxyGroup.saveFailed', { error: error.toFormattedString() }),
+            t('settings.proxyGroup.saveFailed', {
+              error: formatUserError(error, t('common.errorFallback'))
+            }),
             'error'
           )
           console.error('Error saving proxy group:', error.originalError)
         } else {
           showMessage(
-            t('settings.proxyGroup.saveFailed', { error: error.message || String(error) }),
+            t('settings.proxyGroup.saveFailed', {
+              error: formatUserError(error, t('common.errorFallback'))
+            }),
             'error'
           )
           console.error('Error saving proxy group:', error)
@@ -732,13 +737,17 @@ const handleDeleteGroup = id => {
       } catch (error) {
         if (error instanceof FrontendAppError) {
           showMessage(
-            t('settings.proxyGroup.deleteFailed', { error: error.toFormattedString() }),
+            t('settings.proxyGroup.deleteFailed', {
+              error: formatUserError(error, t('common.errorFallback'))
+            }),
             'error'
           )
           console.error('Error deleting proxy group:', error.originalError)
         } else {
           showMessage(
-            t('settings.proxyGroup.deleteFailed', { error: error.message || String(error) }),
+            t('settings.proxyGroup.deleteFailed', {
+              error: formatUserError(error, t('common.errorFallback'))
+            }),
             'error'
           )
           console.error('Error deleting proxy group:', error)
@@ -753,7 +762,12 @@ const handleActivateGroup = async name => {
     await proxyGroupStore.setActiveGroup(name)
     showMessage(t('settings.proxyGroup.updateSuccess'), 'success')
   } catch (error) {
-    showMessage(t('settings.proxyGroup.saveFailed', { error: String(error) }), 'error')
+    showMessage(
+      t('settings.proxyGroup.saveFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
   }
 }
 
@@ -850,7 +864,12 @@ const handleBatchUpdateSubmit = async () => {
     batchUpdateDialogVisible.value = false
   } catch (error) {
     console.error('Batch update failed:', error)
-    showMessage(t('settings.proxyGroup.saveFailed', { error: String(error) }), 'error')
+    showMessage(
+      t('settings.proxyGroup.saveFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
   } finally {
     formLoading.value = false
   }
@@ -925,7 +944,12 @@ const handleToggleToolCompatMode = async group => {
       'success'
     )
   } catch (error) {
-    showMessage(t('settings.proxyGroup.saveFailed', { error: String(error) }), 'error')
+    showMessage(
+      t('settings.proxyGroup.saveFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
   }
 }
 </script>

@@ -1,6 +1,7 @@
 use crate::commands::workflow::workflow_start_core;
 use crate::db::automation::ManualClaimOutcome;
 use crate::db::{WorkflowAutomation, WorkflowAutomationRun, WorkflowAutomationUpsert};
+use crate::error_diagnostics::{log_error_diagnostic, ErrorProjection};
 use crate::owned_process::{run_owned_shell, OwnedProcessCancellation, OwnedShellOutcome};
 use crate::workflow::automation::errors::AutomationError;
 use crate::workflow::automation::types::{
@@ -704,12 +705,18 @@ pub(crate) async fn execute_automation_run(
             if let Err(update_error) =
                 store.update_workflow_automation_run_status(run_id, "failed", Some(&error))
             {
-                log::error!(
-                    "[WorkflowAutomation][automation={}][run={}] Failed to mark shell failure: {}",
-                    automation.id,
-                    run_id,
-                    update_error
-                );
+                let mut diagnostic = update_error.diagnostic();
+                diagnostic.module = "workflow.automation".to_string();
+                diagnostic.operation = "mark_shell_failure".to_string();
+                diagnostic.session_id = Some(run_id.to_string());
+                diagnostic
+                    .context_chain
+                    .push(crate::error_diagnostics::ErrorFrame::new(
+                        "workflow.automation",
+                        "mark_shell_failure",
+                        Some(format!("automation={}", automation.id)),
+                    ));
+                log_error_diagnostic(&diagnostic);
             }
             return Err(AutomationError::internal(error));
         }
@@ -726,12 +733,18 @@ pub(crate) async fn execute_automation_run(
             if let Err(update_error) =
                 store.update_workflow_automation_run_status(run_id, "cancelled", Some(reason))
             {
-                log::error!(
-                    "[WorkflowAutomation][automation={}][run={}] Failed to mark cancelled run: {}",
-                    automation.id,
-                    run_id,
-                    update_error
-                );
+                let mut diagnostic = update_error.diagnostic();
+                diagnostic.module = "workflow.automation".to_string();
+                diagnostic.operation = "mark_run_cancelled".to_string();
+                diagnostic.session_id = Some(run_id.to_string());
+                diagnostic
+                    .context_chain
+                    .push(crate::error_diagnostics::ErrorFrame::new(
+                        "workflow.automation",
+                        "mark_run_cancelled",
+                        Some(format!("automation={}", automation.id)),
+                    ));
+                log_error_diagnostic(&diagnostic);
             }
             return Err(AutomationError::stopping(reason));
         }
@@ -746,25 +759,25 @@ pub(crate) async fn execute_automation_run(
         if let Some(session_id) = existing_session_id {
             let exists = store
                 .get_workflow(&session_id)
-                .map_err(|e| AutomationError::internal(e.to_string()))?
+                .map_err(|e| AutomationError::internal_from(e))?
                 .is_some();
             if exists {
                 session_id
             } else {
                 tsid_generator
                     .generate()
-                    .map_err(|e| AutomationError::internal(e.to_string()))?
+                    .map_err(|e| AutomationError::internal(e))?
             }
         } else {
             tsid_generator
                 .generate()
-                .map_err(|e| AutomationError::internal(e.to_string()))?
+                .map_err(|e| AutomationError::internal(e))?
         }
     };
 
     let workflow_exists = store
         .get_workflow(&workflow_session_id)
-        .map_err(|e| AutomationError::internal(e.to_string()))?
+        .map_err(|e| AutomationError::internal_from(e))?
         .is_some();
 
     if !workflow_exists {
@@ -776,7 +789,7 @@ pub(crate) async fn execute_automation_run(
                 automation.agent_config.clone(),
                 None,
             )
-            .map_err(|e| AutomationError::internal(e.to_string()))?;
+            .map_err(|e| AutomationError::internal_from(e))?;
     }
 
     let allowed_paths = parse_allowed_paths(&automation.allowed_paths);
@@ -815,7 +828,7 @@ pub(crate) async fn execute_automation_run(
                 .continuous_context
                 .then_some(workflow_session_id.as_str()),
         )
-        .map_err(|e| AutomationError::internal(e.to_string()))?;
+        .map_err(|e| AutomationError::internal_from(e))?;
 
     if let Err(error) = workflow_start_core(
         svc,
@@ -828,17 +841,28 @@ pub(crate) async fn execute_automation_run(
     )
     .await
     {
+        let origin = error.origin.clone();
         if let Err(update_error) =
             store.update_workflow_automation_run_status(run_id, "failed", Some(&error.message))
         {
-            log::error!(
-                "[WorkflowAutomation][automation={}][run={}] Failed to mark run failed after start error: {}",
-                automation.id,
-                run_id,
-                update_error
-            );
+            let mut diagnostic = update_error.diagnostic();
+            diagnostic.module = "workflow.automation".to_string();
+            diagnostic.operation = "mark_start_failure".to_string();
+            diagnostic.session_id = Some(run_id.to_string());
+            diagnostic
+                .context_chain
+                .push(crate::error_diagnostics::ErrorFrame::new(
+                    "workflow.automation",
+                    "mark_start_failure",
+                    Some(format!("automation={}", automation.id)),
+                ));
+            log_error_diagnostic(&diagnostic);
         }
-        return Err(AutomationError::internal(error.message));
+        let mut failure = AutomationError::internal(error.message);
+        if let Some(origin) = origin {
+            failure = failure.with_origin(origin);
+        }
+        return Err(failure);
     }
 
     Ok(())
@@ -856,7 +880,7 @@ pub(crate) async fn create_manual_run(
     let store = &*svc.main_store;
     let automation = store
         .get_workflow_automation(automation_id)
-        .map_err(|e| AutomationError::internal(e.to_string()))?
+        .map_err(|e| AutomationError::internal_from(e))?
         .ok_or_else(|| {
             AutomationError::not_found(format!("Automation {automation_id} not found"))
         })?;
@@ -864,7 +888,7 @@ pub(crate) async fn create_manual_run(
     let run_id = svc
         .tsid_generator
         .generate()
-        .map_err(|e| AutomationError::internal(e.to_string()))?;
+        .map_err(|e| AutomationError::internal(e))?;
     let scheduled_for = normalize_datetime_for_db(Local::now());
     // Admit the run in this instance's short-lived evidence *before* the durable
     // claim. The claim commits the pending row, and another worker thread running
@@ -875,7 +899,7 @@ pub(crate) async fn create_manual_run(
     let _in_flight = svc.automation_owner().begin_run(&run_id);
     let claimed_run = match store
         .claim_manual_run(&automation.id, &run_id, &scheduled_for)
-        .map_err(|e| AutomationError::internal(e.to_string()))?
+        .map_err(|e| AutomationError::internal_from(e))?
     {
         ManualClaimOutcome::Claimed(run) => run,
         ManualClaimOutcome::Busy => {
@@ -892,7 +916,7 @@ pub(crate) async fn create_manual_run(
 
     let run = store
         .get_workflow_automation_run(&claimed_run.id)
-        .map_err(|e| AutomationError::internal(e.to_string()))?
+        .map_err(|e| AutomationError::internal_from(e))?
         .ok_or_else(|| AutomationError::internal("created run disappeared"))?;
     Ok((automation, run))
 }

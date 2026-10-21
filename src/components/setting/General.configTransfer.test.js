@@ -37,5 +37,8 @@ test('applies frontend category dependency closure and defaults export to every 
   assert.match(source, /:loading="configExportBusy"/)
   assert.match(source, /try \{\n    const path = await save\(/)
   assert.match(source, /console\.error\('Failed to export configuration:', error\)/)
-  assert.match(source, /showMessage\(error instanceof FrontendAppError \? error\.toFormattedString\(\) : error\.toString\(\), 'error'\)/)
+  assert.match(
+    source,
+    /showMessage\(formatUserError\(error, t\('common\.errorFallback'\)\), 'error'\)/
+  )
 })

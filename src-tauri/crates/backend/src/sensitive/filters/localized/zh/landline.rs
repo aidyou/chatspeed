@@ -14,7 +14,7 @@ impl LandlineFilter {
         let regex = Regex::new(r#"\b0\d{2,3}[-]?\d{7,8}\b"#).map_err(|e| {
             SensitiveError::RegexCompilationFailed {
                 pattern: "zh_landline_regex".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             }
         })?;
         Ok(Self { regex })

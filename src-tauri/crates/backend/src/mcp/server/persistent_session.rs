@@ -299,8 +299,11 @@ where
         let (handle, worker) = create_local_session(id.clone(), self.session_config.clone(), true);
         let transport = WorkerTransport::spawn(worker);
 
-        let service = (self.service_factory)()
-            .map_err(|e| McpError::ServerInitializationError(e.to_string()))?;
+        let service = (self.service_factory)().map_err(|e| {
+            McpError::ServerInitializationError(
+                crate::error_diagnostics::FailureMessage::from_error(&e),
+            )
+        })?;
 
         let session_manager_clone = self.clone();
         let session_id_clone = id.clone();
@@ -348,7 +351,9 @@ where
         if self.check_db_session(id).await? {
             self.rehydrate_session(id).await
         } else {
-            Err(McpError::General(format!("Session not found: {}", id)))
+            Err(McpError::General(
+                format!("Session not found: {}", id).into(),
+            ))
         }
     }
 
@@ -1038,10 +1043,10 @@ impl Worker for LocalSessionWorker {
     type Error = McpError;
     type Role = RoleServer;
     fn err_closed() -> Self::Error {
-        McpError::General("Transport closed".to_string())
+        McpError::General("Transport closed".into())
     }
     fn err_join(e: tokio::task::JoinError) -> Self::Error {
-        McpError::General(e.to_string())
+        McpError::General(crate::error_diagnostics::FailureMessage::from_error(&e))
     }
     fn config(&self) -> rmcp::transport::worker::WorkerConfig {
         let mut config = rmcp::transport::worker::WorkerConfig::default();
@@ -1061,13 +1066,13 @@ impl Worker for LocalSessionWorker {
         if !self.is_rehydrated {
             let evt = self.event_rx.recv().await.ok_or_else(|| {
                 WorkerQuitReason::fatal(
-                    McpError::General("Transport terminated".to_string()),
+                    McpError::General("Transport terminated".into()),
                     "get initialize request",
                 )
             })?;
             let SessionEvent::InitializeRequest { request, responder } = evt else {
                 return Err(WorkerQuitReason::fatal(
-                    McpError::General("Unexpected event".to_string()),
+                    McpError::General("Unexpected event".into()),
                     "get initialize request",
                 ));
             };
@@ -1077,7 +1082,7 @@ impl Worker for LocalSessionWorker {
                 .send(Ok(send_initialize_response.message))
                 .map_err(|_| {
                     WorkerQuitReason::fatal(
-                        McpError::General("Fail to send initialize request".to_string()),
+                        McpError::General("Fail to send initialize request".into()),
                         "send initialize response",
                     )
                 })?;
@@ -1096,7 +1101,7 @@ impl Worker for LocalSessionWorker {
                     if let Some(event) = event {
                         InnerEvent::FromHttpService(event)
                     } else {
-                        return Err(WorkerQuitReason::fatal(McpError::General("Transport terminated".to_string()), "waiting next session event"))
+                        return Err(WorkerQuitReason::fatal(McpError::General("Transport terminated".into()), "waiting next session event"))
                     }
                 },
                 from_handler = context.recv_from_handler() => {
@@ -1106,7 +1111,7 @@ impl Worker for LocalSessionWorker {
                     return Err(WorkerQuitReason::Cancelled)
                 }
                 _ = keep_alive_timeout => {
-                    return Err(WorkerQuitReason::fatal(McpError::Timeout(keep_alive.as_millis().to_string()), "poll next session event"))
+                    return Err(WorkerQuitReason::fatal(McpError::Timeout(keep_alive.as_millis().to_string().into()), "poll next session event"))
                 }
             };
             match event {
@@ -1122,10 +1127,9 @@ impl Worker for LocalSessionWorker {
                         }
                         _ => None,
                     };
-                    let handle_result = self
-                        .handle_server_message(message)
-                        .await
-                        .map_err(|e| McpError::General(e.to_string()));
+                    let handle_result = self.handle_server_message(message).await.map_err(|e| {
+                        McpError::General(crate::error_diagnostics::FailureMessage::from_error(&e))
+                    });
                     let _ = responder.send(handle_result).inspect_err(|error| {
                         log::warn!(
                             "failed to send message to http service handler, error = {:?}",

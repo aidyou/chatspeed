@@ -528,6 +528,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 
 import { invokeWrapper } from '@/libs/tauri'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { useModelStore } from '@/stores/model'
 import { useAgentStore } from '@/stores/agent'
 import { useSandboxSchemeStore } from '@/stores/sandbox_scheme'
@@ -1750,7 +1751,7 @@ const editAgent = async id => {
 
       allModelRoles.forEach(role => parseModelField(agentForm.value[role.key + 'Model'], role.key))
     } catch (error) {
-      showMessage(t('settings.agent.fetchFailed'), 'error')
+      showMessage(formatUserError(error, t('settings.agent.fetchFailed')), 'error')
     }
   } else {
     editId.value = null
@@ -1886,7 +1887,7 @@ const copyAgent = async id => {
     skillSearchKeyword.value = ''
     agentDialogVisible.value = true
   } catch (error) {
-    showMessage(t('settings.agent.fetchFailed'), 'error')
+    showMessage(formatUserError(error, t('settings.agent.fetchFailed')), 'error')
   }
 }
 
@@ -1940,7 +1941,9 @@ const updateAgent = () => {
         await agentStore.fetchAgents()
       } catch (error) {
         showMessage(
-          t('settings.agent.saveFailed', { error: error?.message || String(error) }),
+          t('settings.agent.saveFailed', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
           'error'
         )
       }
@@ -1958,14 +1961,24 @@ const deleteAgent = id => {
       await agentStore.deleteAgent(id)
       showMessage(t('settings.agent.deleteSuccess'), 'success')
     } catch (error) {
-      showMessage(t('settings.agent.deleteFailed'), 'error')
+      showMessage(
+        t('settings.agent.deleteFailed', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
+        'error'
+      )
     }
   })
 }
 
 const persistGroupedAgentOrder = () => {
-  agentStore.updateAgentOrder(flattenGroupedAgents()).catch(() => {
-    showMessage(t('settings.agent.reorderFailed'), 'error')
+  agentStore.updateAgentOrder(flattenGroupedAgents()).catch(error => {
+    showMessage(
+      t('settings.agent.reorderFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
     agentStore.fetchAgents()
   })
 }
@@ -2020,7 +2033,10 @@ const toggleAgentStatus = async agent => {
     agent.disabled = originalDisabled
     const actionText = originalDisabled ? 'enable' : 'disable'
     showMessage(
-      t(`settings.agent.${actionText}Failed`, { error: e.message || String(e), name: agent.name }),
+      t(`settings.agent.${actionText}Failed`, {
+        error: formatUserError(e, t('common.errorFallback')),
+        name: agent.name
+      }),
       'error'
     )
   }

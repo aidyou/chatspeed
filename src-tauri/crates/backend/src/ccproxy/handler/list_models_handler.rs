@@ -7,11 +7,26 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     ccproxy::{
+        diagnostic,
         errors::{CCProxyError, ProxyResult},
         types::BackendModelTarget,
     },
     db::MainStore,
 };
+
+fn log_missing_group(group: &str, protocol: &str, path: &'static str) {
+    let diagnostic = diagnostic::from_message(
+        "ccproxy",
+        "resolve_group",
+        format!("proxy group '{group}' not found"),
+        [
+            ("group", Some(group.to_string())),
+            ("protocol", Some(format!("client={protocol}"))),
+            ("route", Some(format!("path={path}"))),
+        ],
+    );
+    diagnostic::emit(log::Level::Warn, &diagnostic);
+}
 
 // =================================================
 //  chat completion proxy
@@ -30,7 +45,7 @@ pub async fn handle_list_models(
         cfg.get(group)
             .cloned()
             .ok_or_else(|| {
-                log::warn!("Proxy group '{}' not found.", group);
+                log_missing_group(group, "openai", "list_models");
                 CCProxyError::ModelAliasNotFound(group.to_string())
             })
             .unwrap_or(HashMap::new())
@@ -134,7 +149,7 @@ pub async fn handle_ollama_tags(
         cfg.get(group)
             .cloned()
             .ok_or_else(|| {
-                log::warn!("Proxy group '{}' not found.", group);
+                log_missing_group(group, "ollama", "tags");
                 CCProxyError::ModelAliasNotFound(group.to_string())
             })
             .unwrap_or(HashMap::new())
@@ -286,7 +301,7 @@ pub async fn handle_gemini_list_models(
         cfg.get(group)
             .cloned()
             .ok_or_else(|| {
-                log::warn!("Proxy group '{}' not found.", group);
+                log_missing_group(group, "gemini", "list_models");
                 CCProxyError::ModelAliasNotFound(group.to_string())
             })
             .unwrap_or(HashMap::new())
@@ -349,4 +364,39 @@ pub async fn handle_gemini_list_models(
     });
 
     Ok(Json(response))
+}
+#[cfg(test)]
+mod tests {
+    use super::{handle_gemini_list_models, handle_list_models, handle_ollama_tags};
+    use crate::db::MainStore;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn list_models_missing_group_degrades_to_empty_lists_for_every_protocol() {
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("list-models-missing-groups.db"))
+                .expect("test store should initialize"),
+        );
+
+        // The handlers currently unwrap the ModelAliasNotFound branch into an empty map,
+        // so a missing group is observable only as an empty protocol-shaped list.
+        let openai = handle_list_models(Some("missing-openai".to_string()), store.clone())
+            .await
+            .expect("missing OpenAI group should not fail");
+        assert_eq!(openai.0["data"], serde_json::json!([]));
+        assert!(openai.0["first_id"].is_null());
+        assert!(openai.0["last_id"].is_null());
+
+        let ollama = handle_ollama_tags(Some("missing-ollama".to_string()), store.clone())
+            .await
+            .expect("missing Ollama group should not fail");
+        assert_eq!(ollama.0["models"], serde_json::json!([]));
+
+        let gemini = handle_gemini_list_models(Some("missing-gemini".to_string()), store.clone())
+            .await
+            .expect("missing Gemini group should not fail");
+        assert_eq!(gemini.0["models"], serde_json::json!([]));
+    }
 }

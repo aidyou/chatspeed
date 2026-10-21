@@ -1564,9 +1564,11 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), StoreError> {
     temporary.write_all(contents)?;
     temporary.flush()?;
     temporary.as_file().sync_all()?;
-    temporary
-        .persist(path)
-        .map_err(|error| StoreError::IoError(error.error.to_string()))?;
+    temporary.persist(path).map_err(|error| {
+        StoreError::IoError(crate::error_diagnostics::FailureMessage::from_error(
+            &error.error,
+        ))
+    })?;
     Ok(())
 }
 
@@ -2419,7 +2421,7 @@ mod tests {
         source_runtime.write_blocking(|connection| {
             connection.execute("INSERT INTO ai_model (id, name, models, default_model, api_protocol, base_url, api_key) VALUES (11, 'Model', '[]', '', 'openai', 'https://example.test', '')", [])?;
             connection.execute("INSERT INTO ai_skill (id, name, prompt) VALUES (12, 'Skill', 'prompt')", [])?;
-            connection.execute("INSERT INTO mcp (id, name, description, config, disabled) VALUES (13, 'Server', 'MCP', '{\"name\":\"Server\",\"type\":\"stdio\"}', 0)", [])?;
+            connection.execute("INSERT INTO mcp (id, name, description, config, disabled) VALUES (13, 'Server', 'MCP', '{\"name\":\"Server\",\"type\":\"stdio\",\"command\":\"server\"}', 0)", [])?;
             connection.execute("INSERT INTO proxy_group (id, name, description, prompt_injection, prompt_text, tool_filter, temperature, disabled) VALUES (14, 'Proxy', '', '', '', '', 1.0, 0)", [])?;
             connection.execute("DELETE FROM chat_hubs", [])?;
             connection.execute("INSERT INTO chat_hubs (id, name, logo, url, sort_index, is_default) VALUES (15, 'Chat', '', 'https://example.test/chat', 0, 0)", [])?;

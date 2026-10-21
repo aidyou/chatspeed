@@ -34,11 +34,15 @@ use serde_json::{json, Map, Value};
 use chatspeed_contracts::workflow::{
     WorkflowCreateRequest, WorkflowStartRequest, WORKFLOW_EVENTS_MAX_LIMIT,
 };
+#[cfg(test)]
+use chatspeed_contracts::UserErrorPresentation;
 use chatspeed_runtime_client::{ClientError, RuntimeClient};
 
 use crate::commands::workflow::{WorkflowContextFrameResult, WorkspaceFile};
 use crate::db::{Workflow, WorkflowEfficiencyReport, WorkflowMessage};
-use crate::runtime_client::{RuntimeSupervisor, RuntimeUnavailable};
+use crate::runtime_client::{
+    client_error_wire, runtime_error_wire, RuntimeSupervisor, RuntimeUnavailable,
+};
 use crate::tools::ShellExecutionMode;
 use crate::workflow::react::dispatcher::DispatcherMetricsSnapshot;
 use crate::workflow::react::events::WorkflowEventRecord;
@@ -848,19 +852,18 @@ fn response_string(response: &Value, field: &str) -> Result<String, String> {
 
 /// Maps a transport/domain client error to the Tauri string error.
 ///
-/// A structured runtime error keeps its bare message so the Tauri wire stays as
-/// close as possible to the previous `ApplicationError::message` string; every
-/// other failure keeps the client's classified (redacted) description.
+/// The runtime's public rejections keep their shared `ErrorEnvelope` so the
+/// frontend can still branch on the code, status and optional safe presentation;
+/// transport, discovery, protocol and serialization failures stay technical
+/// strings. The envelope is built by the shared control-plane helper, so every
+/// desktop adapter emits one wire shape.
 fn map_client_error(error: ClientError) -> String {
-    match error {
-        ClientError::Server { message, .. } => message,
-        other => other.to_string(),
-    }
+    client_error_wire(error)
 }
 
 /// Maps a supervisor availability failure to the Tauri string error.
 fn map_runtime_error(error: RuntimeUnavailable) -> String {
-    error.to_string()
+    runtime_error_wire(error)
 }
 
 /// Converts a snake_case runtime response back to the Tauri camelCase wire.
@@ -908,7 +911,149 @@ fn snake_to_camel(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chatspeed_contracts::ErrorReason;
+    use chatspeed_runtime_client::{AuthError, ClientResponseError};
     use serde_json::json;
+
+    fn parse_rejection(error: ClientError) -> Value {
+        serde_json::from_str(&map_client_error(error)).expect("public rejection is a JSON envelope")
+    }
+
+    #[test]
+    fn structured_session_rejections_preserve_code_status_and_localized_presentation() {
+        for (reason, expected_reason, code, localized) in [
+            (
+                ErrorReason::SessionStopping,
+                "session_stopping",
+                "invalid_state",
+                "会话正在停止，请稍后再试",
+            ),
+            (
+                ErrorReason::SessionAlreadyExists,
+                "session_already_exists",
+                "conflict",
+                "该会话已存在",
+            ),
+            (
+                ErrorReason::NoActiveSession,
+                "no_active_session",
+                "invalid_state",
+                "当前没有活动会话",
+            ),
+        ] {
+            let wire = parse_rejection(ClientError::Server(ClientResponseError {
+                legacy_display: format!("server error 409: technical detail ({code})"),
+                status: 409,
+                code: code.to_string(),
+                message: "technical detail".to_string(),
+                presentation: Some(UserErrorPresentation {
+                    schema_version: 1,
+                    message: localized.to_string(),
+                    reason: Some(reason),
+                    upstream_status: None,
+                }),
+            }));
+
+            // Old readers keep the legacy code/message pair and the status.
+            assert_eq!(wire["error"]["code"], code);
+            assert_eq!(wire["error"]["message"], "technical detail");
+            assert_eq!(wire["status"], 409);
+            // Reason-aware readers get the safe localized projection instead.
+            assert_eq!(wire["error"]["presentation"]["schema_version"], 1);
+            assert_eq!(wire["error"]["presentation"]["message"], localized);
+            assert_eq!(wire["error"]["presentation"]["reason"], expected_reason);
+            assert!(wire["error"]["presentation"]
+                .get("upstream_status")
+                .is_none());
+            // The display wrapper and diagnostic chain never reach the IPC wire.
+            assert!(wire.get("legacy_display").is_none());
+            assert!(wire.get("source_chain").is_none());
+            assert!(wire["error"].get("details").is_none());
+        }
+    }
+
+    #[test]
+    fn auth_rejections_keep_their_structured_presentation() {
+        let wire = parse_rejection(ClientError::Auth(AuthError {
+            status: 401,
+            code: "unauthorized".to_string(),
+            message: "token rejected".to_string(),
+            presentation: Some(UserErrorPresentation {
+                schema_version: 1,
+                message: "登录已失效，请重新连接运行时".to_string(),
+                reason: Some(ErrorReason::RuntimeStopping),
+                upstream_status: None,
+            }),
+        }));
+
+        assert_eq!(wire["error"]["code"], "unauthorized");
+        assert_eq!(wire["error"]["message"], "token rejected");
+        assert_eq!(wire["status"], 401);
+        assert_eq!(
+            wire["error"]["presentation"]["message"],
+            "登录已失效，请重新连接运行时"
+        );
+        assert_eq!(wire["error"]["presentation"]["reason"], "runtime_stopping");
+    }
+
+    #[test]
+    fn legacy_rejection_without_presentation_remains_consumable() {
+        let wire = parse_rejection(ClientError::Server(ClientResponseError {
+            legacy_display: "server error 404: workflow is gone (not_found)".to_string(),
+            status: 404,
+            code: "not_found".to_string(),
+            message: "workflow is gone".to_string(),
+            presentation: None,
+        }));
+
+        assert_eq!(
+            wire,
+            json!({
+                "error": { "code": "not_found", "message": "workflow is gone" },
+                "status": 404
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_reason_is_never_recovered_from_legacy_keywords() {
+        let keywords = "session already exists; session stopping; no active session";
+        let legacy = parse_rejection(ClientError::Server(ClientResponseError {
+            legacy_display: format!("server error 409: {keywords} (invalid_state)"),
+            status: 409,
+            code: "invalid_state".to_string(),
+            message: keywords.to_string(),
+            presentation: None,
+        }));
+        assert_eq!(legacy["error"]["message"], keywords);
+        assert!(legacy["error"].get("presentation").is_none());
+
+        // A reason the runtime actually marked unknown stays unknown; the
+        // message text must not upgrade it back into a control classification.
+        let explicit = parse_rejection(ClientError::Server(ClientResponseError {
+            legacy_display: "server error 409: technical detail (invalid_state)".to_string(),
+            status: 409,
+            code: "invalid_state".to_string(),
+            message: "technical detail".to_string(),
+            presentation: Some(UserErrorPresentation {
+                schema_version: 1,
+                message: "会话已存在".to_string(),
+                reason: Some(ErrorReason::Unknown),
+                upstream_status: None,
+            }),
+        }));
+        assert_eq!(explicit["error"]["presentation"]["reason"], "unknown");
+    }
+
+    #[test]
+    fn non_rejection_failures_stay_technical_strings() {
+        let transport = map_client_error(ClientError::Transport("connection refused".to_string()));
+        assert_eq!(transport, "transport error: connection refused");
+        assert!(!transport.starts_with('{'));
+
+        let protocol = map_client_error(ClientError::Protocol("major mismatch".to_string()));
+        assert_eq!(protocol, "protocol mismatch: major mismatch");
+    }
 
     #[test]
     fn snake_to_camel_converts_identifiers() {

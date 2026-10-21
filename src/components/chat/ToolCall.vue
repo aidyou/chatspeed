@@ -2,7 +2,7 @@
   <div class="chat-tool-calls" v-for="(call, index) in toolParsed" :key="index">
     <div
       class="tool-name"
-      :class="{ expanded: expandedState[index], [toolStatus(call.result)]: true }"
+      :class="{ expanded: expandedState[index], [toolStatus(call)]: true }"
       @click="expandedState[index] = !expandedState[index]">
       <template v-if="call.function?.mcpName">
         <span>{{
@@ -33,6 +33,7 @@
 import { ref, computed } from 'vue'
 import i18n from '@/i18n/index.js'
 import { toolName } from '@/libs/chat.js'
+import { resolveToolResultState, resolveToolResultDisplay } from '@/libs/toolResultState.js'
 
 const props = defineProps({
   toolCalls: {
@@ -58,7 +59,8 @@ const toolParsed = computed(() => {
       }
     }
 
-    if (typeof call.result === 'string') {
+    call.result = resolveToolResultDisplay(call)
+    if (typeof call.result === 'string' && resolveToolResultState(call) !== 'error') {
       try {
         const parsedResult = JSON.parse(call.result)
         call.result = JSON.stringify(parsedResult, null, 2)
@@ -70,18 +72,7 @@ const toolParsed = computed(() => {
     return call
   })
 })
-const toolStatus = result => {
-  if (!result) {
-    return 'calling'
-  } else {
-    try {
-      const parsedResult = typeof result === 'string' ? JSON.parse(result) : result
-      return parsedResult?.error ? 'error' : 'success'
-    } catch {
-      return typeof result === 'string' && result.startsWith('Error: ') ? 'error' : 'success'
-    }
-  }
-}
+const toolStatus = call => resolveToolResultState(call)
 
 const args = argString => {
   if (!argString) {

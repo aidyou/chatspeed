@@ -6,8 +6,8 @@
 use crate::db::MainStore;
 use crate::workflow::react::events::{WorkflowEventRecord, WorkflowEventType};
 use crate::workflow::react::types::{
-    EffectiveTaskObjective, ExecutionContext, PendingFinalReview, PendingTool, RuntimeState,
-    SubAgentCompletion, WaitReason,
+    sub_agent_completion_user_error, EffectiveTaskObjective, ExecutionContext, PendingFinalReview,
+    PendingTool, RuntimeState, SubAgentCompletion, WaitReason,
 };
 #[cfg(not(feature = "desktop"))]
 use std::sync::Arc;
@@ -353,6 +353,7 @@ impl EventReducer {
                         .and_then(|value| serde_json::from_value(value).ok()),
                     completed_at_ms: 0,
                     consumed: false,
+                    user_error: sub_agent_completion_user_error(&result_payload),
                 };
                 self.pending_sub_agent_completions
                     .retain(|existing| existing.sub_agent_id != sub_agent_id);
@@ -1197,6 +1198,70 @@ mod tests {
         assert_eq!(
             ctx.pending_sub_agent_completions[0].result.as_deref(),
             Some("analysis done")
+        );
+        assert!(ctx.pending_sub_agent_completions[0]
+            .ui_user_error()
+            .is_none());
+    }
+
+    #[test]
+    fn test_reducer_projects_failed_completion_ui_user_error() {
+        let mut reducer = EventReducer::new("test-session".to_string());
+
+        let events = vec![
+            WorkflowEventRecord {
+                id: 1,
+                session_id: "test-session".to_string(),
+                event_type: "sub_agent_started".to_string(),
+                event_version: "1.0.0".to_string(),
+                event_data: serde_json::json!({
+                    "sub_agent_id": "subagent_1",
+                    "execution_mode": "call"
+                }),
+                created_at: "2026-01-01 00:00:00".to_string(),
+            },
+            WorkflowEventRecord {
+                id: 2,
+                session_id: "test-session".to_string(),
+                event_type: "sub_agent_completed".to_string(),
+                event_version: "1.0.0".to_string(),
+                event_data: serde_json::json!({
+                    "sub_agent_id": "subagent_1",
+                    "status": "failed",
+                    "result": {
+                        "error": "legacy failure",
+                        "error_type": "upstream_server",
+                        "error_metadata": {
+                            "user_error": {
+                                "schema_version": 1,
+                                "message": "overloaded",
+                                "upstream_status": 503
+                            }
+                        }
+                    }
+                }),
+                created_at: "2026-01-01 00:00:01".to_string(),
+            },
+        ];
+
+        for event in &events {
+            reducer.apply_event(event).unwrap();
+        }
+
+        let ctx = reducer.build();
+        let completion = &ctx.pending_sub_agent_completions[0];
+        assert_eq!(completion.error.as_deref(), Some("legacy failure"));
+        assert_eq!(
+            completion
+                .ui_user_error()
+                .map(|error| error.message.as_str()),
+            Some("overloaded")
+        );
+        assert_eq!(
+            completion
+                .ui_user_error()
+                .and_then(|error| error.upstream_status),
+            Some(503)
         );
     }
 

@@ -19,6 +19,20 @@ import { Markmap } from 'markmap-view'
 import mermaid from 'mermaid'
 
 
+// Failed renderer input is untrusted text, not an HTML fallback template.
+function renderDiagramError(diagram, title, content) {
+  const fallback = document.createElement('pre')
+  fallback.className = 'mermaid-error'
+  const titleBar = document.createElement('div')
+  titleBar.className = 'code-title-bar'
+  titleBar.textContent = title
+  const code = document.createElement('code')
+  code.textContent = content
+  fallback.appendChild(titleBar)
+  fallback.appendChild(code)
+  diagram.replaceChildren(fallback)
+}
+
 // Regular expressions for Mermaid diagram syntax normalization
 const MERMAID_ARROW_LABEL_REGEX = /---\s*(\w+)\s*-->/g
 const MERMAID_ARROW_LABEL_ALT_REGEX = /--\s*(\w+)\s*-->/g
@@ -477,7 +491,7 @@ async function renderMermaidDiagrams(el) {
       diagram.appendChild(container)
     } catch (error) {
       console.error('Failed to render mermaid diagram:', error)
-      diagram.innerHTML = `<pre class="mermaid-error"><div class="code-title-bar">${i18n.global.t('chat.diagramError')}</div><code>${content}</code></pre>`
+      renderDiagramError(diagram, i18n.global.t('chat.diagramError'), content)
     }
   }
 
@@ -567,7 +581,7 @@ async function renderMermaidDiagrams(el) {
       container.insertBefore(downloadBtn, svgContainer)
     } catch (error) {
       console.error('Failed to render markmap:', error)
-      diagram.innerHTML = `<pre class="mermaid-error"><div class="code-title-bar">${i18n.global.t('chat.mindmapError')}</div><code>${content}</code></pre>`
+      renderDiagramError(diagram, i18n.global.t('chat.mindmapError'), content)
     }
   }
 }
@@ -743,7 +757,7 @@ function renderFormula(element, displayMode = false) {
     element.innerHTML = rendered
   } catch (err) {
     console.warn('Math render error:', err)
-    element.innerHTML = element.getAttribute('data-formula') || ''
+    element.textContent = element.getAttribute('data-formula') || ''
   }
 }
 
@@ -1019,7 +1033,7 @@ function bindToolCallEvents(el) {
               }
             } catch (e) {
               console.error('Failed to decode or display tool result:', e)
-              codeElement.textContent = 'Error displaying tool result.'
+              codeElement.textContent = i18n.global.t('common.errorFallback')
             }
           }
         } else {

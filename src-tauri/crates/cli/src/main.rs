@@ -51,7 +51,7 @@ async fn main_entry() {
     let exit_code = match run(&cli).await {
         Ok(()) => 0,
         Err(error) => {
-            eprint_diagnostic(&format!("cs: {}", error));
+            eprint_diagnostic(&format!("cs: {}", error.user_message()));
             error.exit_code()
         }
     };

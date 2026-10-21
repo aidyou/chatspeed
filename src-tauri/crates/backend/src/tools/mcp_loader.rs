@@ -149,10 +149,13 @@ impl McpToolExecute {
             crate::mcp::client::McpStatus::Connected | crate::mcp::client::McpStatus::Running => {
                 Ok(canonical_name)
             }
-            status => Err(ToolError::ExecutionFailed(format!(
-                "MCP server '{}' is not available (status: {})",
-                server_name, status
-            ))),
+            status => Err(ToolError::ExecutionFailed(
+                format!(
+                    "MCP server '{}' is not available (status: {})",
+                    server_name, status
+                )
+                .into(),
+            )),
         }
     }
 }

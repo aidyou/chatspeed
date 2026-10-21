@@ -10,6 +10,7 @@ pub(crate) mod adapter;
 mod auth;
 #[cfg(not(feature = "desktop"))]
 pub(crate) mod decision;
+mod diagnostic;
 mod errors;
 #[cfg(not(feature = "desktop"))]
 mod handler;

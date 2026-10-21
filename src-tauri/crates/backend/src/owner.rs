@@ -16,6 +16,7 @@
 use crate::ai::interaction::chat_completion::ChatState;
 use crate::capability::CapabilityRecoveryReport;
 use crate::db::MainStore;
+use crate::error_diagnostics::{log_error_diagnostic, ErrorProjection};
 use crate::libs::tsid::TsidGenerator;
 use crate::libs::window_channels::WindowChannels;
 use crate::terminal::{TerminalError, TerminalManager, TerminalOwner, TerminalSubscription};
@@ -270,10 +271,10 @@ impl RuntimeOwner {
                 report
             }
             Err(error) => {
-                log::error!(
-                    "[Runtime][capability][recovery] startup recovery failed: {}",
-                    error.redacted_message()
-                );
+                let mut diagnostic = error.diagnostic();
+                diagnostic.module = "runtime.owner".to_string();
+                diagnostic.operation = "capability_recovery".to_string();
+                log_error_diagnostic(&diagnostic);
                 CapabilityRecoveryReport::default()
             }
         }

@@ -285,7 +285,9 @@ fn call_tool_failure(error: crate::tools::ToolError) -> CapabilityError {
         // `invoke_mcp_tool` has already reduced this detail to the generic
         // message plus an optional allowlisted provider code. Preserve that
         // diagnostic signal without forwarding arbitrary MCP error content.
-        ToolError::ExecutionFailed(detail) => CapabilityError::new(code::INTERNAL, detail),
+        ToolError::ExecutionFailed(detail) => {
+            CapabilityError::new(code::INTERNAL, detail.to_string())
+        }
         _ => CapabilityError::new(code::INTERNAL, "the MCP tool call failed"),
     }
 }
@@ -383,7 +385,9 @@ mod tests {
     #[test]
     fn execution_failure_preserves_the_bounded_provider_code() {
         let error = call_tool_failure(crate::tools::ToolError::ExecutionFailed(
-            "the MCP tool call failed (config_unavailable)".to_string(),
+            "the MCP tool call failed (config_unavailable)"
+                .to_string()
+                .into(),
         ));
         assert_eq!(error.code(), crate::capability::error::code::INTERNAL);
         assert_eq!(

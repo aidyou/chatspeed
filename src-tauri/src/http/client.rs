@@ -28,6 +28,7 @@
 
 #![allow(dead_code)]
 
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use futures::TryStreamExt;
 use regex::Regex;
 use reqwest::redirect::Policy;
@@ -72,7 +73,10 @@ impl HttpClient {
             if !proxy_server.is_empty() {
                 let mut reqwest_proxy = reqwest::Proxy::all(proxy_server).map_err(|e| {
                     HttpError::Config(
-                        t!("http.proxy_config_failed", error = e.to_string()).to_string(),
+                        FailureMessage::leaf(
+                            t!("http.proxy_config_failed", error = e.to_string()).to_string(),
+                        )
+                        .with_origin(ErrorOrigin::from_error(&e)),
                     )
                 })?;
                 if let (Some(username), Some(password)) = (proxy.username, proxy.password) {
@@ -103,7 +107,10 @@ impl HttpClient {
             if !proxy.is_empty() {
                 client = client.proxy(reqwest::Proxy::all(proxy).map_err(|e| {
                     HttpError::Config(
-                        t!("http.proxy_config_failed", error = e.to_string()).to_string(),
+                        FailureMessage::leaf(
+                            t!("http.proxy_config_failed", error = e.to_string()).to_string(),
+                        )
+                        .with_origin(ErrorOrigin::from_error(&e)),
                     )
                 })?);
             }
@@ -116,18 +123,29 @@ impl HttpClient {
 
     /// Helper function to handle common request errors
     fn handle_request_error(e: reqwest::Error) -> HttpError {
+        let origin = ErrorOrigin::from_error(&e);
         if e.is_timeout() {
-            HttpError::Request(t!("http.request_timeout").to_string())
+            HttpError::Request(
+                FailureMessage::leaf(t!("http.request_timeout").to_string()).with_origin(origin),
+            )
         } else if e.is_connect() {
-            HttpError::Request(t!("http.connection_failed", error = e.to_string()).to_string())
+            HttpError::Request(
+                FailureMessage::leaf(
+                    t!("http.connection_failed", error = e.to_string()).to_string(),
+                )
+                .with_origin(origin),
+            )
         } else {
             HttpError::Request(
-                t!(
-                    "http.request_failed",
-                    error = e.to_string(),
-                    status = e.status().unwrap_or_default()
+                FailureMessage::leaf(
+                    t!(
+                        "http.request_failed",
+                        error = e.to_string(),
+                        status = e.status().unwrap_or_default()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(origin),
             )
         }
     }
@@ -141,12 +159,15 @@ impl HttpClient {
         // open file
         let mut file = File::open(path).await.map_err(|e| {
             HttpError::Request(
-                t!(
-                    "http.failed_to_open_file",
-                    path = path,
-                    error = e.to_string()
+                FailureMessage::leaf(
+                    t!(
+                        "http.failed_to_open_file",
+                        path = path,
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -154,12 +175,15 @@ impl HttpClient {
         let mut contents = Vec::new();
         file.read_to_end(&mut contents).await.map_err(|e| {
             HttpError::Request(
-                t!(
-                    "http.failed_to_read_file",
-                    path = path,
-                    error = e.to_string()
+                FailureMessage::leaf(
+                    t!(
+                        "http.failed_to_read_file",
+                        path = path,
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -174,14 +198,24 @@ impl HttpClient {
             .file_name(filename.to_string())
             .mime_str("application/octet-stream")
             .map_err(|e| {
-                HttpError::Request(t!("http.mime_parse_failed", error = e.to_string()).to_string())
+                HttpError::Request(
+                    FailureMessage::leaf(
+                        t!("http.mime_parse_failed", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(ErrorOrigin::from_error(&e)),
+                )
             })?;
 
         let form = Form::new().part("file", part);
 
         // request builder
         let mut builder = request.build_request(&self.client).map_err(|e| {
-            HttpError::Request(t!("http.client_build_failed", error = e.to_string()).to_string())
+            HttpError::Request(
+                FailureMessage::leaf(
+                    t!("http.client_build_failed", error = e.to_string()).to_string(),
+                )
+                .with_origin(e.error_origin()),
+            )
         })?;
 
         // add multipart form
@@ -193,7 +227,12 @@ impl HttpClient {
         let headers = Self::extract_headers(response.headers());
 
         let body = response.text().await.map_err(|e| {
-            HttpError::Response(t!("http.read_response_failed", error = e.to_string()).to_string())
+            HttpError::Response(
+                FailureMessage::leaf(
+                    t!("http.read_response_failed", error = e.to_string()).to_string(),
+                )
+                .with_origin(ErrorOrigin::from_error(&e)),
+            )
         })?;
 
         Ok(HttpResponse {
@@ -212,7 +251,12 @@ impl HttpClient {
         save_path: &str,
     ) -> HttpResult<HttpResponse> {
         let builder = request.build_request(&self.client).map_err(|e| {
-            HttpError::Request(t!("http.client_build_failed", error = e.to_string()).to_string())
+            HttpError::Request(
+                FailureMessage::leaf(
+                    t!("http.client_build_failed", error = e.to_string()).to_string(),
+                )
+                .with_origin(e.error_origin()),
+            )
         })?;
 
         let response = self.execute_with_retry(request, builder).await?;
@@ -223,7 +267,7 @@ impl HttpClient {
         let mut downloaded: u64 = 0;
         let mut file = File::create(save_path)
             .await
-            .map_err(|e| HttpError::Io(e.to_string()))?;
+            .map_err(|e| HttpError::Io(FailureMessage::from_error(&e)))?;
 
         let mut stream = response.bytes_stream();
         let mut last_progress: Option<u8> = None;
@@ -232,11 +276,14 @@ impl HttpClient {
         let update_interval = Duration::from_millis(100);
 
         while let Some(chunk) = stream.try_next().await.map_err(|e| {
-            HttpError::Response(t!("http.download_failed", error = e.to_string()).to_string())
+            HttpError::Response(
+                FailureMessage::leaf(t!("http.download_failed", error = e.to_string()).to_string())
+                    .with_origin(ErrorOrigin::from_error(&e)),
+            )
         })? {
             file.write_all(&chunk)
                 .await
-                .map_err(|e| HttpError::Io(e.to_string()))?;
+                .map_err(|e| HttpError::Io(FailureMessage::from_error(&e)))?;
 
             downloaded += chunk.len() as u64;
             let current_progress = if total_size > 0 {
@@ -276,7 +323,7 @@ impl HttpClient {
 
         file.flush()
             .await
-            .map_err(|e| HttpError::Io(e.to_string()))?;
+            .map_err(|e| HttpError::Io(FailureMessage::from_error(&e)))?;
         drop(file);
 
         if let Some(callback) = request.config.progress_callback.as_ref() {
@@ -300,7 +347,12 @@ impl HttpClient {
     /// Handles standard HTTP requests
     async fn handle_request(&self, request: &HttpRequest) -> HttpResult<HttpResponse> {
         let builder = request.build_request(&self.client).map_err(|e| {
-            HttpError::Request(t!("http.client_build_failed", error = e.to_string()).to_string())
+            HttpError::Request(
+                FailureMessage::leaf(
+                    t!("http.client_build_failed", error = e.to_string()).to_string(),
+                )
+                .with_origin(e.error_origin()),
+            )
         })?;
 
         let response = self.execute_with_retry(request, builder).await?;
@@ -313,7 +365,10 @@ impl HttpClient {
 
             while let Some(chunk) = stream.try_next().await.map_err(|e| {
                 HttpError::Response(
-                    t!("http.read_response_failed", error = e.to_string()).to_string(),
+                    FailureMessage::leaf(
+                        t!("http.read_response_failed", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(ErrorOrigin::from_error(&e)),
                 )
             })? {
                 stream_callback(&chunk);
@@ -330,7 +385,10 @@ impl HttpClient {
         } else {
             let body = response.text().await.map_err(|e| {
                 HttpError::Response(
-                    t!("http.read_response_failed", error = e.to_string()).to_string(),
+                    FailureMessage::leaf(
+                        t!("http.read_response_failed", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(ErrorOrigin::from_error(&e)),
                 )
             })?;
 
@@ -362,7 +420,7 @@ impl HttpClient {
         loop {
             attempts += 1;
             let mut cloned_builder = builder.try_clone().ok_or_else(|| {
-                HttpError::Request(t!("http.failed_to_clone_request").to_string())
+                HttpError::Request(t!("http.failed_to_clone_request").to_string().into())
             })?;
 
             log::debug!("Attempting HTTP request (attempt {})", attempts);
@@ -387,7 +445,8 @@ impl HttpClient {
                                         content_length = content_length,
                                         max_size = max_size
                                     )
-                                    .to_string(),
+                                    .to_string()
+                                    .into(),
                                 ));
                             }
                         }

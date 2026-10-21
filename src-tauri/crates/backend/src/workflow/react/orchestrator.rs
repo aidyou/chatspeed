@@ -14,7 +14,9 @@ use crate::workflow::react::runtime_observation::{
     runtime_observation_metadata_with_visibility, RuntimeObservationLlmVisibility,
     RuntimeObservationType, RuntimeObservationUiVisibility,
 };
-use crate::workflow::react::types::{RuntimeState, StepType, SubAgentCompletion};
+use crate::workflow::react::types::{
+    sub_agent_completion_user_error, RuntimeState, StepType, SubAgentCompletion,
+};
 
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -144,7 +146,7 @@ fn sync_sub_agent_completion_consumed(
     Ok(())
 }
 
-fn find_durable_sub_agent_completion(
+pub(crate) fn find_durable_sub_agent_completion(
     main_store: &Arc<MainStore>,
     session_id: &str,
     task_id: &str,
@@ -227,6 +229,7 @@ fn build_sub_agent_completion(
             .and_then(|value| serde_json::from_value(value).ok()),
         completed_at_ms: chrono::Utc::now().timestamp_millis(),
         consumed: false,
+        user_error: sub_agent_completion_user_error(result),
     }
 }
 
@@ -277,6 +280,9 @@ fn persist_background_completion_projection(
     metadata["result"] = result.clone();
     metadata["summary"] = json!(summary);
     metadata["execution_status"] = json!(status);
+    if let Some(user_error) = sub_agent_completion_user_error(result) {
+        metadata["user_error"] = json!(user_error);
+    }
 
     store
         .add_workflow_message(&WorkflowMessage {
@@ -658,15 +664,21 @@ fn validate_task_access(current_session_id: &str, task_id: &str) -> Result<(), T
             return Ok(());
         }
         if !task.value().output_accessible() {
-            return Err(ToolError::ExecutionFailed(format!(
+            return Err(ToolError::ExecutionFailed(
+                format!(
+                    "Task {} is not accessible from the current session.",
+                    task_id
+                )
+                .into(),
+            ));
+        }
+        return Err(ToolError::ExecutionFailed(
+            format!(
                 "Task {} is not accessible from the current session.",
                 task_id
-            )));
-        }
-        return Err(ToolError::ExecutionFailed(format!(
-            "Task {} is not accessible from the current session.",
-            task_id
-        )));
+            )
+            .into(),
+        ));
     }
 
     if let Some(snapshot) = COMPLETED_BACKGROUND_TASKS.get(task_id) {
@@ -674,15 +686,21 @@ fn validate_task_access(current_session_id: &str, task_id: &str) -> Result<(), T
             return Ok(());
         }
         if !snapshot.output_accessible {
-            return Err(ToolError::ExecutionFailed(format!(
+            return Err(ToolError::ExecutionFailed(
+                format!(
+                    "Task {} is not accessible from the current session.",
+                    task_id
+                )
+                .into(),
+            ));
+        }
+        return Err(ToolError::ExecutionFailed(
+            format!(
                 "Task {} is not accessible from the current session.",
                 task_id
-            )));
-        }
-        return Err(ToolError::ExecutionFailed(format!(
-            "Task {} is not accessible from the current session.",
-            task_id
-        )));
+            )
+            .into(),
+        ));
     }
 
     Ok(())
@@ -1492,7 +1510,9 @@ impl ToolDefinition for TaskTool {
             "subagent_{}",
             self.tsid_generator
                 .generate()
-                .map_err(|e| ToolError::ExecutionFailed(e))?
+                .map_err(|e| ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(e)
+                ))?
         );
 
         let sub_executor = self
@@ -1506,7 +1526,13 @@ impl ToolDefinition for TaskTool {
             )
             .await
             .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to create sub-executor: {}", e))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to create sub-executor: {}",
+                        e
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                )
             })?;
 
         {
@@ -1515,10 +1541,13 @@ impl ToolDefinition for TaskTool {
                 self.executor_factory
                     .cleanup_session(&task_id, "task_tool.init_failed")
                     .await;
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Sub-agent init failed: {}",
-                    error
-                )));
+                return Err(ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Sub-agent init failed: {}",
+                        error
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                ));
             }
         }
 
@@ -1746,7 +1775,7 @@ impl ToolDefinition for TaskTool {
 
         let parent_id = self.parent_session_id.as_ref().ok_or_else(|| {
             ToolError::ExecutionFailed(
-                "sub_agent_run execution_mode='call' requires an active parent session".to_string(),
+                "sub_agent_run execution_mode='call' requires an active parent session".into(),
             )
         })?;
 
@@ -2204,14 +2233,14 @@ impl ToolDefinition for TaskOutputTool {
             "Sub-agent {} not found in active, completed, or durable sub-agent records for this session.\n<SYSTEM_REMINDER>sub_agent_output retrieves accessible background sub-agent outputs and can re-read durable call-mode completions only when they exist for this parent session. If this task was launched with execution_mode='call', its result is normally delivered directly to the parent workflow as a sub-agent completion observation. Use any delivered observation you already have; otherwise continue without polling this task_id. {} Do not use sub_agent_output as a generic final-answer tool or with a main session ID.</SYSTEM_REMINDER>",
             task_id,
             available_tasks
-        )))
+        ).into()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_terminal_sub_agent_result, cleanup_sub_agent_runtime,
+        build_sub_agent_completion, build_terminal_sub_agent_result, cleanup_sub_agent_runtime,
         clear_completed_background_tasks_for_owner, get_sub_agent_registry,
         persist_background_completion_projection, persist_sub_agent_completion,
         remember_completed_task, stop_background_task, BackgroundTask, CompletedTaskSnapshot,
@@ -2471,6 +2500,7 @@ mod tests {
             usage_summary: None,
             completed_at_ms: 1,
             consumed: false,
+            user_error: None,
         };
 
         let projected = persist_sub_agent_completion(&store, Some(1), completion)
@@ -2633,6 +2663,51 @@ mod tests {
                 .status,
             "pending"
         );
+    }
+
+    #[test]
+    fn sub_agent_failure_completion_keeps_legacy_signal_and_carries_ui_user_error() {
+        let failure = json!({
+            "status": "failed",
+            "task_id": "child-1",
+            "error": "legacy failure display",
+            "error_type": "upstream_server",
+            "error_metadata": {
+                "error_type": "upstream_server",
+                "user_error": {
+                    "schema_version": 1,
+                    "message": "overloaded",
+                    "upstream_status": 503
+                }
+            },
+            "tool_calls_count": 2
+        });
+
+        let completion = build_sub_agent_completion("parent-1", "child-1", &failure);
+
+        assert_eq!(completion.error.as_deref(), Some("legacy failure display"));
+        assert_eq!(
+            completion
+                .ui_user_error()
+                .map(|error| error.message.as_str()),
+            Some("overloaded")
+        );
+        let signal = completion.to_signal_result();
+        assert_eq!(signal["error"], "legacy failure display");
+        assert_eq!(signal["status"], "failed");
+        assert!(signal.get("user_error").is_none());
+        assert!(signal.get("error_metadata").is_none());
+
+        let success = json!({
+            "status": "completed",
+            "task_id": "child-2",
+            "result": "done",
+            "summary": "done",
+            "tool_calls_count": 1
+        });
+        let completion = build_sub_agent_completion("parent-1", "child-2", &success);
+        assert!(completion.ui_user_error().is_none());
+        assert_eq!(completion.result.as_deref(), Some("done"));
     }
 
     #[test]
@@ -2987,6 +3062,7 @@ mod tests {
                         usage_summary: None,
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
                         consumed: false,
+                        user_error: None,
                     }],
                     pending_final_review: None,
                     pending_completion_reports: Vec::new(),
@@ -3246,6 +3322,7 @@ mod tests {
                         usage_summary: None,
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
                         consumed: false,
+                        user_error: None,
                     }],
                     pending_final_review: None,
                     pending_completion_reports: Vec::new(),

@@ -507,6 +507,7 @@ import {
   normalizeToolDisplayText
 } from '@/composables/workflow/toolDisplay'
 import { invokeWrapper } from '@/libs/tauri'
+import { resolveWorkflowErrorDisplay } from '@/composables/workflow/messageProjectionRules'
 
 const { t } = useI18n()
 const workflowStore = useWorkflowStore()
@@ -939,10 +940,13 @@ const recentOperations = computed(() => {
           meta,
           displayRoots.value
         )
+        const errorDisplay = tool.status === 'final_error'
+          ? tool.errorDisplay || resolveWorkflowErrorDisplay(tool, tool.result).display
+          : ''
         return {
           name: shortName,
           fullText: normalizeToolDisplayText(
-            removeSystemReminder(tool.summary || tool.toolName || ''),
+            removeSystemReminder(errorDisplay || tool.summary || tool.toolName || ''),
             displayRoots.value
           ),
           icon,
@@ -981,10 +985,13 @@ const recentOperations = computed(() => {
 
       const { icon, toolType, shortName } = getToolInfo(name, meta, displayRoots.value)
 
+      const errorDisplay = status === 'error'
+        ? resolveWorkflowErrorDisplay(m, m.message).display
+        : ''
       return {
         name: shortName,
         fullText: normalizeToolDisplayText(
-          removeSystemReminder(meta.summary || name),
+          removeSystemReminder(errorDisplay || meta.summary || name),
           displayRoots.value
         ),
         icon,

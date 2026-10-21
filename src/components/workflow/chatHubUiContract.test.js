@@ -602,6 +602,6 @@ test('restoring the dock never touches the workflow runtime and never replays a 
   // Unmounting still releases every native view after the persisted state stopped being written.
   assert.match(
     workflowView,
-    /onBeforeUnmount\(\(\) => \{\s*dockTornDown = true[\s\S]*?void dockCoordinator\.dispose\(\)/
+    /onBeforeUnmount\(\(\) => \{[\s\S]*?dockTornDown = true[\s\S]*?void dockCoordinator\.dispose\(\)/
   )
 })

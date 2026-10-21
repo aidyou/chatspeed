@@ -21,6 +21,7 @@
 //! the window itself, which is what keeps a native view from painting over the rounded frame the
 //! window draws.
 
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use tauri::{AppHandle, Manager, Window, Wry};
 
 use crate::error::{AppError, Result};
@@ -64,15 +65,15 @@ impl DockBounds {
             && window_height.is_finite();
         if !measured {
             return Err(AppError::General {
-                message: "the dock bounds are not finite".to_string(),
+                message: FailureMessage::leaf("the dock bounds are not finite"),
             });
         }
         if self.width < MIN_DOCK_SIDE || self.height < MIN_DOCK_SIDE {
             return Err(AppError::General {
-                message: format!(
+                message: FailureMessage::leaf(format!(
                     "the dock bounds are empty ({:.0}x{:.0})",
                     self.width, self.height
-                ),
+                )),
             });
         }
 
@@ -82,7 +83,7 @@ impl DockBounds {
         let height = self.height.min(window_height - y);
         if width < MIN_DOCK_SIDE || height < MIN_DOCK_SIDE {
             return Err(AppError::General {
-                message: "the dock bounds lie outside the window".to_string(),
+                message: FailureMessage::leaf("the dock bounds lie outside the window"),
             });
         }
 
@@ -113,7 +114,7 @@ pub fn with_surface<T>(
     match app.try_state::<DockSurface>() {
         Some(surface) => operation(surface.inner()),
         None => Err(AppError::General {
-            message: "the native dock surface is not managed".to_string(),
+            message: FailureMessage::leaf("the native dock surface is not managed"),
         }),
     }
 }
@@ -488,7 +489,7 @@ mod linux {
         /// Locks the registry, reporting a poisoned lock as a plain error.
         fn lock(&self) -> Result<std::sync::MutexGuard<'_, Registry>> {
             self.registry.lock().map_err(|_| AppError::General {
-                message: "the native dock state is poisoned".to_string(),
+                message: FailureMessage::leaf("the native dock state is poisoned"),
             })
         }
     }
@@ -502,7 +503,10 @@ mod linux {
 
             let window = host_window(app)?;
             let vbox = window.default_vbox().map_err(|error| AppError::General {
-                message: format!("the Workflow window has no content box: {error}"),
+                message: FailureMessage::leaf(format!(
+                    "the Workflow window has no content box: {error}"
+                ))
+                .with_origin(ErrorOrigin::from_error(&error)),
             })?;
 
             // GTK can only layer a widget over another one, so the content the window already
@@ -514,7 +518,9 @@ mod linux {
                 .into_iter()
                 .next()
                 .ok_or_else(|| AppError::General {
-                    message: "the Workflow window holds no content to overlay".to_string(),
+                    message: FailureMessage::leaf(
+                        "the Workflow window holds no content to overlay",
+                    ),
                 })?;
             vbox.remove(&content);
             overlay.add(&content);

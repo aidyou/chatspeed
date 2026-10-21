@@ -80,12 +80,15 @@ impl DbBackup {
                     fs::create_dir_all(directory).map_err(|e| {
                         error!("Failed to create backup directory: {}", e);
                         StoreError::IoError(
-                            t!(
-                                "db.backup.failed_to_create_backup_dir_at",
-                                path = directory.display(),
-                                error = e.to_string()
+                            crate::error_diagnostics::FailureMessage::leaf(
+                                t!(
+                                    "db.backup.failed_to_create_backup_dir_at",
+                                    path = directory.display(),
+                                    error = e.to_string()
+                                )
+                                .to_string(),
                             )
-                            .to_string(),
+                            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                         )
                     })?;
                 }
@@ -149,11 +152,16 @@ impl DbBackup {
             .persist_noclobber(&backup_path)
             .map_err(|error| {
                 StoreError::IoError(
-                    t!(
-                        "db.backup.failed_to_create_encrypted_file",
-                        error = error.error.to_string()
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!(
+                            "db.backup.failed_to_create_encrypted_file",
+                            error = error.error.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(
+                        crate::error_diagnostics::ErrorOrigin::from_error(&error.error),
+                    ),
                 )
             })?;
 
@@ -207,12 +215,15 @@ impl DbBackup {
     ) -> Result<(), StoreError> {
         let source_file = File::open(source_path).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_open_file_for_zip",
-                    path = source_path.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_open_file_for_zip",
+                        path = source_path.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -224,24 +235,33 @@ impl DbBackup {
             .large_file(true);
         zip.start_file(entry_name, options).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_add_file_to_zip",
-                    path = entry_name,
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_add_file_to_zip",
+                        path = entry_name,
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
         let mut source_file = source_file;
         std::io::copy(&mut source_file, &mut zip).map_err(|e| {
             StoreError::IoError(
-                t!("db.backup.failed_to_write_to_zip", error = e.to_string()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.backup.failed_to_write_to_zip", error = e.to_string()).to_string(),
+                )
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         zip.finish().map_err(|e| {
             StoreError::IoError(
-                t!("db.backup.failed_to_finish_zip", error = e.to_string()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.backup.failed_to_finish_zip", error = e.to_string()).to_string(),
+                )
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -255,36 +275,48 @@ impl DbBackup {
     ) -> Result<(), StoreError> {
         let zip_file = File::open(zip_path).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_open_zip",
-                    path = zip_path.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_open_zip",
+                        path = zip_path.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         let mut archive = ZipArchive::new(zip_file).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_read_zip_archive",
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_read_zip_archive",
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         let mut entry = archive.by_name(entry_name).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_read_zip_entry",
-                    index = 0,
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_read_zip_entry",
+                        index = 0,
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         std::io::copy(&mut entry, &mut target_file).map_err(|e| {
             StoreError::IoError(
-                t!("db.backup.failed_to_write_to_zip", error = e.to_string()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.backup.failed_to_write_to_zip", error = e.to_string()).to_string(),
+                )
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -311,19 +343,24 @@ impl DbBackup {
     pub fn list_backups(&self) -> Result<Vec<PathBuf>, StoreError> {
         if !self.backup_dir.exists() {
             return Err(StoreError::IoError(
-                t!("db.backup.dir_not_found", path = self.backup_dir.display()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.backup.dir_not_found", path = self.backup_dir.display()).to_string(),
+                ),
             ));
         }
 
         let mut backups: Vec<PathBuf> = fs::read_dir(&self.backup_dir)
             .map_err(|e| {
                 StoreError::IoError(
-                    t!(
-                        "db.backup.failed_to_read_backup_dir",
-                        path = self.backup_dir.display(),
-                        error = e.to_string()
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!(
+                            "db.backup.failed_to_read_backup_dir",
+                            path = self.backup_dir.display(),
+                            error = e.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 )
             })?
             .filter_map(|entry| {
@@ -371,12 +408,15 @@ impl DbBackup {
         // another backup cannot race this copy and overwrite a completed archive.
         fs::create_dir(destination_dir).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_backup_dir_at",
-                    path = destination_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_backup_dir_at",
+                        path = destination_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -390,24 +430,30 @@ impl DbBackup {
                 );
             }
             return Err(StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_backup_dir_at",
-                    path = destination_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_backup_dir_at",
+                        path = destination_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             ));
         }
 
         fs::remove_dir_all(source_dir).map_err(|e| {
             error!("Failed to remove copied staged backup directory: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_backup_dir_at",
-                    path = source_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_backup_dir_at",
+                        path = source_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })
     }
@@ -455,12 +501,15 @@ impl DbBackup {
         fs::create_dir(&staging_dir).map_err(|e| {
             error!("Failed to create backup directory: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_backup_dir_at",
-                    path = staging_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_backup_dir_at",
+                        path = staging_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         let staged_backup = Self {
@@ -511,23 +560,29 @@ impl DbBackup {
         let file = File::open(zip_path).map_err(|e| {
             error!("Failed to open zip file: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_open_zip",
-                    path = zip_path.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_open_zip",
+                        path = zip_path.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
         let mut archive = ZipArchive::new(file).map_err(|e| {
             error!("Failed to read zip archive: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_read_zip_archive",
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_read_zip_archive",
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -535,67 +590,85 @@ impl DbBackup {
         fs::create_dir_all(theme_dir).map_err(|e| {
             error!("Failed to create theme directory: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_theme_dir",
-                    path = theme_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_theme_dir",
+                        path = theme_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         fs::create_dir_all(upload_dir).map_err(|e| {
             error!("Failed to create upload directory: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_upload_dir",
-                    path = upload_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_upload_dir",
+                        path = upload_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         fs::create_dir_all(mcp_sessions_dir).map_err(|e| {
             error!("Failed to create MCP sessions directory: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_mcp_sessions_dir",
-                    path = mcp_sessions_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_mcp_sessions_dir",
+                        path = mcp_sessions_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         fs::create_dir_all(schema_dir).map_err(|e| {
             error!("Failed to create schema directory: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_schema_dir",
-                    path = schema_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_schema_dir",
+                        path = schema_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         fs::create_dir_all(shared_dir).map_err(|e| {
             error!("Failed to create shared directory: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_shared_dir",
-                    path = shared_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_shared_dir",
+                        path = shared_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         fs::create_dir_all(static_dir).map_err(|e| {
             error!("Failed to create static directory: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_static_dir",
-                    path = static_dir.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_static_dir",
+                        path = static_dir.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -604,12 +677,15 @@ impl DbBackup {
             let mut file = archive.by_index(i).map_err(|e| {
                 error!("Failed to read zip entry: {}", e);
                 StoreError::IoError(
-                    t!(
-                        "db.backup.failed_to_read_zip_entry",
-                        index = i,
-                        error = e.to_string()
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!(
+                            "db.backup.failed_to_read_zip_entry",
+                            index = i,
+                            error = e.to_string()
+                        )
+                        .to_string(),
                     )
-                    .to_string(),
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 )
             })?;
 
@@ -645,12 +721,15 @@ impl DbBackup {
                 fs::create_dir_all(&outpath).map_err(|e| {
                     error!("Failed to create directory {}: {}", outpath.display(), e);
                     StoreError::IoError(
-                        t!(
-                            "db.backup.failed_to_create_dir_from_zip",
-                            path = outpath.display(),
-                            error = e.to_string()
+                        crate::error_diagnostics::FailureMessage::leaf(
+                            t!(
+                                "db.backup.failed_to_create_dir_from_zip",
+                                path = outpath.display(),
+                                error = e.to_string()
+                            )
+                            .to_string(),
                         )
-                        .to_string(),
+                        .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                     )
                 })?;
             } else {
@@ -658,12 +737,15 @@ impl DbBackup {
                     fs::create_dir_all(p).map_err(|e| {
                         error!("Failed to create parent directory {}: {}", p.display(), e);
                         StoreError::IoError(
-                            t!(
-                                "db.backup.failed_to_create_parent_dir_from_zip",
-                                path = p.display(),
-                                error = e.to_string()
+                            crate::error_diagnostics::FailureMessage::leaf(
+                                t!(
+                                    "db.backup.failed_to_create_parent_dir_from_zip",
+                                    path = p.display(),
+                                    error = e.to_string()
+                                )
+                                .to_string(),
                             )
-                            .to_string(),
+                            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                         )
                     })?;
                 }
@@ -689,12 +771,15 @@ impl DbBackup {
                             // For other errors, fail
                             error!("Failed to write file {}: {}", outpath.display(), e);
                             return Err(StoreError::IoError(
-                                t!(
-                                    "db.backup.failed_to_write_file_from_zip",
-                                    path = outpath.display(),
-                                    error = e.to_string()
+                                crate::error_diagnostics::FailureMessage::leaf(
+                                    t!(
+                                        "db.backup.failed_to_write_file_from_zip",
+                                        path = outpath.display(),
+                                        error = e.to_string()
+                                    )
+                                    .to_string(),
                                 )
-                                .to_string(),
+                                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                             ));
                         }
                     }
@@ -715,12 +800,15 @@ impl DbBackup {
                         // For other errors, fail
                         error!("Failed to create file {}: {}", outpath.display(), e);
                         return Err(StoreError::IoError(
-                            t!(
-                                "db.backup.failed_to_create_file_from_zip",
-                                path = outpath.display(),
-                                error = e.to_string()
+                            crate::error_diagnostics::FailureMessage::leaf(
+                                t!(
+                                    "db.backup.failed_to_create_file_from_zip",
+                                    path = outpath.display(),
+                                    error = e.to_string()
+                                )
+                                .to_string(),
                             )
-                            .to_string(),
+                            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                         ));
                     }
                 }
@@ -735,12 +823,15 @@ impl DbBackup {
                         |e| {
                             error!("Failed to set permissions for {}: {}", outpath.display(), e);
                             StoreError::IoError(
-                                t!(
-                                    "db.backup.failed_to_set_permissions_from_zip",
-                                    path = outpath.display(),
-                                    error = e.to_string()
+                                crate::error_diagnostics::FailureMessage::leaf(
+                                    t!(
+                                        "db.backup.failed_to_set_permissions_from_zip",
+                                        path = outpath.display(),
+                                        error = e.to_string()
+                                    )
+                                    .to_string(),
                                 )
-                                .to_string(),
+                                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                             )
                         },
                     )?;
@@ -784,12 +875,15 @@ impl DbBackup {
         let file = fs::File::create(output_path.clone()).map_err(|e| {
             error!("Failed to create zip file: {}", e);
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_create_zip_for_backup",
-                    path = output_path.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_create_zip_for_backup",
+                        path = output_path.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -810,13 +904,16 @@ impl DbBackup {
                         let relative_path = path.strip_prefix(base_path).map_err(|e| {
                             error!("Failed to strip prefix: {}", e);
                             StoreError::IoError(
-                                t!(
-                                    "db.backup.failed_to_strip_prefix_for_zip",
-                                    base = base_path.display(),
-                                    full = path.display(),
-                                    error = e.to_string()
+                                crate::error_diagnostics::FailureMessage::leaf(
+                                    t!(
+                                        "db.backup.failed_to_strip_prefix_for_zip",
+                                        base = base_path.display(),
+                                        full = path.display(),
+                                        error = e.to_string()
+                                    )
+                                    .to_string(),
                                 )
-                                .to_string(),
+                                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                             )
                         })?;
 
@@ -825,32 +922,41 @@ impl DbBackup {
                         zip.start_file(&zip_path, options).map_err(|e| {
                             error!("Failed to add file to zip: {}", e);
                             StoreError::IoError(
-                                t!(
-                                    "db.backup.failed_to_add_file_to_zip",
-                                    path = zip_path,
-                                    error = e.to_string()
+                                crate::error_diagnostics::FailureMessage::leaf(
+                                    t!(
+                                        "db.backup.failed_to_add_file_to_zip",
+                                        path = zip_path,
+                                        error = e.to_string()
+                                    )
+                                    .to_string(),
                                 )
-                                .to_string(),
+                                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                             )
                         })?;
 
                         let mut file = fs::File::open(path).map_err(|e| {
                             error!("Failed to open file for zip: {}", e);
                             StoreError::IoError(
-                                t!(
-                                    "db.backup.failed_to_open_file_for_zip",
-                                    path = path.display(),
-                                    error = e.to_string()
+                                crate::error_diagnostics::FailureMessage::leaf(
+                                    t!(
+                                        "db.backup.failed_to_open_file_for_zip",
+                                        path = path.display(),
+                                        error = e.to_string()
+                                    )
+                                    .to_string(),
                                 )
-                                .to_string(),
+                                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                             )
                         })?;
 
                         std::io::copy(&mut file, zip).map_err(|e| {
                             error!("Failed to write to zip: {}", e);
                             StoreError::IoError(
-                                t!("db.backup.failed_to_write_to_zip", error = e.to_string())
-                                    .to_string(),
+                                crate::error_diagnostics::FailureMessage::leaf(
+                                    t!("db.backup.failed_to_write_to_zip", error = e.to_string())
+                                        .to_string(),
+                                )
+                                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                             )
                         })?;
                     }
@@ -891,7 +997,10 @@ impl DbBackup {
         zip.finish().map_err(|e| {
             error!("Failed to finish zip file: {}", e);
             StoreError::IoError(
-                t!("db.backup.failed_to_finish_zip", error = e.to_string()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.backup.failed_to_finish_zip", error = e.to_string()).to_string(),
+                )
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -904,7 +1013,31 @@ impl DbBackup {
 mod tests {
     use super::{copy_directory, DbBackup};
     use crate::db::backup_crypto::encrypt_database_streaming;
+    use crate::error_diagnostics::ErrorProjection;
     use std::fs::{self, File};
+
+    #[test]
+    fn backup_zip_wrapper_keeps_legacy_and_typed_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let zip_path = temp.path().join("invalid.zip");
+        fs::write(&zip_path, b"not a zip archive").unwrap();
+        let cause = zip::ZipArchive::new(File::open(&zip_path).unwrap()).unwrap_err();
+        let legacy = rust_i18n::t!(
+            "db.backup.failed_to_read_zip_archive",
+            error = cause.to_string()
+        )
+        .to_string();
+        let error = DbBackup::extract_file(
+            &zip_path,
+            "chatspeed.db",
+            File::create(temp.path().join("output.db")).unwrap(),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), legacy);
+        assert_eq!(serde_json::to_value(&error).unwrap()["message"], legacy);
+        assert_eq!(error.error_origin().message, cause.to_string());
+        assert_eq!(error.user_error().message, cause.to_string());
+    }
 
     fn backup_with_dir(
         backup_dir: std::path::PathBuf,

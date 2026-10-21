@@ -17,7 +17,7 @@ impl IpAddressFilter {
             Regex::new(&format!(r#"\b(?:{}|{})\b"#, ipv4_pattern, ipv6_pattern)).map_err(|e| {
                 SensitiveError::RegexCompilationFailed {
                     pattern: "ip_address_regex".to_string(),
-                    message: e.to_string(),
+                    message: crate::error_diagnostics::FailureMessage::from_error(&e),
                 }
             })?;
         Ok(Self { regex })

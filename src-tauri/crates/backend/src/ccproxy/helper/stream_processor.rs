@@ -1,5 +1,6 @@
 use bytes::BytesMut;
 use reqwest::Response;
+use std::fmt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -7,6 +8,35 @@ use std::sync::{
 use tokio::sync::mpsc;
 
 use crate::ccproxy::types::StreamFormat;
+use crate::error_diagnostics::{ErrorOrigin, FailureMessage};
+
+/// A stream read failure with its typed source captured before stringification.
+#[derive(Debug, Clone)]
+pub struct StreamReadError {
+    message: String,
+    origin: ErrorOrigin,
+}
+
+impl fmt::Display for StreamReadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl From<reqwest::Error> for StreamReadError {
+    fn from(error: reqwest::Error) -> Self {
+        Self {
+            message: error.to_string(),
+            origin: ErrorOrigin::from_error(&error),
+        }
+    }
+}
+
+impl From<StreamReadError> for FailureMessage {
+    fn from(error: StreamReadError) -> Self {
+        FailureMessage::leaf(error.message).with_origin(error.origin)
+    }
+}
 
 /// A processor for handling Server-Sent Events (SSE) streams
 ///
@@ -35,9 +65,9 @@ impl StreamProcessor {
     /// * `response` - The streaming HTTP response containing SSE data
     ///
     /// # Returns
-    /// A channel receiver that yields `Result<Bytes, String>` where:
+    /// A channel receiver that yields `Result<Bytes, StreamReadError>` where:
     /// - `Ok(Bytes)` contains a complete SSE event (including delimiters)
-    /// - `Err(String)` contains error message if chunk reading fails
+    /// - `Err(StreamReadError)` keeps the typed read failure for diagnostics
     ///
     /// # Behavior
     /// - Maintains an 8KB internal buffer for accumulating partial events
@@ -60,7 +90,7 @@ impl StreamProcessor {
         &self,
         mut response: Response,
         format: &StreamFormat,
-    ) -> mpsc::Receiver<Result<bytes::Bytes, String>> {
+    ) -> mpsc::Receiver<Result<bytes::Bytes, StreamReadError>> {
         let (tx, rx) = mpsc::channel(32);
         let stop_flag = self.stop_flag.clone();
 
@@ -109,7 +139,7 @@ impl StreamProcessor {
                         break;
                     }
                     Err(e) => {
-                        let _ = tx.send(Err(e.to_string())).await;
+                        let _ = tx.send(Err(StreamReadError::from(e))).await;
                         break;
                     }
                 }

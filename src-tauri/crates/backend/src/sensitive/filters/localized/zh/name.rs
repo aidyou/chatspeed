@@ -30,7 +30,7 @@ impl NameFilter {
         let name_pattern =
             Regex::new(&pattern).map_err(|e| SensitiveError::RegexCompilationFailed {
                 pattern: "zh_name_pattern".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             })?;
 
         let context_keywords = RegexSet::new(&[
@@ -43,7 +43,7 @@ impl NameFilter {
         ])
         .map_err(|e| SensitiveError::RegexCompilationFailed {
             pattern: "zh_name_context".to_string(),
-            message: e.to_string(),
+            message: crate::error_diagnostics::FailureMessage::from_error(&e),
         })?;
 
         Ok(Self {

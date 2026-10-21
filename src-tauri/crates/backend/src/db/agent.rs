@@ -636,7 +636,7 @@ impl MainStore {
                 |row| row.get(0),
             )?;
             if count > 0 {
-                return Err(StoreError::Query(name_exists_error));
+                return Err(StoreError::Query(crate::error_diagnostics::FailureMessage::leaf(name_exists_error)));
             }
             let sort_index: i32 = transaction.query_row(
                 "SELECT COALESCE(MAX(sort_index), -1) FROM agents",
@@ -694,7 +694,7 @@ impl MainStore {
                 |row| row.get(0),
             )?;
             if count > 0 {
-                return Err(StoreError::Query(duplicate_name_error));
+                return Err(StoreError::Query(crate::error_diagnostics::FailureMessage::leaf(duplicate_name_error)));
             }
             let models = agent
                 .models

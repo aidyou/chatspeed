@@ -11,9 +11,9 @@ pub struct CompanyFilter {
 impl CompanyFilter {
     pub fn new() -> Result<Self, SensitiveError> {
         let context_regex = Regex::new(r#"(?i)(?:Party\s+[A-D]|Contractor|Employer|Tenant|Landlord|Buyer|Seller|Lender|Borrower|Client|Consultant|Vendor|Supplier)[:：]\s*([A-Z][A-Za-z0-9\s&,.'-]{3,})"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_company_context".to_string(), message: e.to_string() })?;
+            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_company_context".to_string(), message: crate::error_diagnostics::FailureMessage::from_error(&e) })?;
         let suffix_regex = Regex::new(r#"\b[A-Z][A-Za-z0-9\s&,.'-]{2,}(?:Inc\.|Ltd\.|Corp\.|LLC|L\.L\.C\.|PLC|P\.L\.C\.|GmbH|S\.A\.|B\.V\.)\b"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_company_suffix".to_string(), message: e.to_string() })?;
+            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_company_suffix".to_string(), message: crate::error_diagnostics::FailureMessage::from_error(&e) })?;
         Ok(Self {
             context_regex,
             suffix_regex,

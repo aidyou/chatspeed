@@ -4,6 +4,7 @@ import { defineStore } from 'pinia';
 import { reactive, ref } from 'vue';
 
 import { sendSyncState } from '@/libs/sync.js';
+import { formatUserError } from '@/libs/error';
 import { useCapabilityStore } from '@/stores/capability.js';
 
 /**
@@ -60,12 +61,11 @@ export const useMcpStore = defineStore('mcp', () => {
 
   const _handleError = async (err) => {
     loading.value = false;
+    error.value = formatUserError(err);
     if (err instanceof FrontendAppError) {
-      error.value = err.toFormattedString();
-      console.error('MCP Store Error:', error.value, err.originalError);
+      console.error('MCP Store Error:', err.toFormattedString(), err.originalError);
     } else {
-      error.value = err.message || String(err);
-      console.error('MCP Store Error:', error.value);
+      console.error('MCP Store Error:', err);
     }
     throw err; // Re-throw for component-level handling if needed
   };

@@ -147,7 +147,10 @@ impl MainStore {
             .transpose()
             .map_err(|e| {
                 StoreError::JsonError(
-                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 )
             })?;
         let (id, cached_models) = self.db_runtime()?.write_blocking(move |conn| {
@@ -229,7 +232,10 @@ impl MainStore {
             .transpose()
             .map_err(|e| {
                 StoreError::JsonError(
-                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 )
             })?;
         let cached_models = self.db_runtime()?.write_blocking(move |conn| {
@@ -341,7 +347,10 @@ impl MainStore {
             .transpose()
             .map_err(|e| {
                 StoreError::JsonError(
-                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 )
             })?;
         let (id, skills) = self.db_runtime()?.write_blocking(move |conn| {
@@ -421,7 +430,10 @@ impl MainStore {
             .transpose()
             .map_err(|e| {
                 StoreError::JsonError(
-                    t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!("db.json_serialize_failed_metadata", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
                 )
             })?;
         let skills = self.db_runtime()?.write_blocking(move |conn| {

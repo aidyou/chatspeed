@@ -1,3 +1,7 @@
+use crate::error_diagnostics::{
+    log_error_diagnostic, project_user_message, ErrorOrigin, ErrorProjection, FailureMessage,
+};
+use chatspeed_contracts::ErrorReason;
 use chrono::{DateTime, Utc};
 use rust_i18n::t;
 use serde::Deserialize;
@@ -37,9 +41,37 @@ fn is_known_non_chat_model(model_id: &str) -> bool {
     .any(|marker| model_id.contains(marker))
 }
 
+/// Describes the real upstream answer without changing the legacy AiError status.
+///
+/// The network layer already records the exact HTTP status and body. The list
+/// models caller keeps its historical retry classification, while the error
+/// origin exposes the safe status and message the UI needs (notably a 405 that
+/// means the provider has no list-models endpoint).
+fn response_error_origin(
+    response: &crate::ai::network::ApiResponse,
+    provider: &str,
+) -> ErrorOrigin {
+    let status_code = response.status_code;
+    let body = response
+        .raw_error_body
+        .as_deref()
+        .unwrap_or(&response.content);
+    let parsed = serde_json::from_str::<Value>(body).unwrap_or(Value::Null);
+    let message = project_user_message(&parsed, format!("{provider} returned HTTP {status_code}"));
+    let reason = (status_code == 405).then_some(ErrorReason::UnsupportedListModels);
+    ErrorOrigin::leaf(message, reason, None, Some(status_code)).context(
+        "ai.network",
+        "list_models",
+        None,
+    )
+}
+
 fn enrich_model_details(mut details: ModelDetails) -> Result<ModelDetails, AiError> {
     let catalog = resolve_model_profile(&details.id).map_err(|error| {
-        AiError::InitFailed(format!("model catalog resolution failed: {error}"))
+        AiError::InitFailed(
+            FailureMessage::leaf(format!("model catalog resolution failed: {error}"))
+                .with_origin(ErrorOrigin::from_error(&error)),
+        )
     })?;
 
     if details.family.is_none() {
@@ -181,23 +213,21 @@ pub async fn openai_list_models(
 
     let client = DefaultApiClient::new(ErrorFormat::OpenAI);
     let response = client
-        .get_request(&config, "/models", None)
+        .get_request_with_origin(&config, "/models", None)
         .await
         .map_err(|e| AiError::ApiRequestFailed {
             provider: "OpenAI".to_string(),
             status_code: 0, // Network/Request failure, not an HTTP error
-            details: e.to_string(),
+            details: e,
         })?;
 
     if response.is_error || response.content.is_empty() {
-        let status_code = response
-            .raw_response
-            .map(|r| r.status().as_u16())
-            .unwrap_or(500); // Default to 500 if no status
+        let origin = response_error_origin(&response, "OpenAI");
         return Err(AiError::ApiRequestFailed {
-            status_code,
+            // Keep the historical fallback so retry classification is unchanged.
+            status_code: 500,
             provider: "OpenAI".to_string(),
-            details: response.content,
+            details: FailureMessage::leaf(response.content).with_origin(origin),
         });
     }
 
@@ -206,15 +236,12 @@ pub async fn openai_list_models(
 
     let models_response: OpenAIListModelsResponse = serde_json::from_str(&response.content)
         .map_err(|e| {
-            log::error!(
-                "Failed to parse OpenAI models response: {}, content:{}",
-                e,
-                &response.content
-            );
-            AiError::ResponseParseFailed {
+            let err = AiError::ResponseParseFailed {
                 provider: "OpenAI".to_string(),
-                details: e.to_string(),
-            }
+                details: FailureMessage::from_error(&e),
+            };
+            log_error_diagnostic(&err.diagnostic());
+            err
         })?;
 
     let model_details: Vec<ModelDetails> = models_response
@@ -280,7 +307,7 @@ pub async fn claude_list_models(
 
     let client = DefaultApiClient::new(ErrorFormat::Claude);
     let response = client
-        .get_request(
+        .get_request_with_origin(
             &ApiConfig::new(
                 Some(api_url.unwrap_or(CALUDE_BASE_URL).to_string()),
                 None,
@@ -293,26 +320,23 @@ pub async fn claude_list_models(
         .await
         .map_err(|network_err| {
             let err = AiError::ApiRequestFailed {
-                provider: "Claude".to_string(),
-                details: network_err.to_string(),
                 status_code: 0, // Network/Request failure, not an HTTP error
+                provider: "Claude".to_string(),
+                details: network_err,
             };
-            log::error!("Claude list_models API request failed: {}", err);
+            log_error_diagnostic(&err.diagnostic());
             err
         })?;
 
     if response.is_error || response.content.is_empty() {
-        let status_code = response
-            .raw_response
-            .map(|r| r.status().as_u16())
-            .unwrap_or(500); // Default to 500 if no status
-
+        let origin = response_error_origin(&response, "Claude");
         let err = AiError::ApiRequestFailed {
-            status_code,
+            // Keep the historical fallback so retry classification is unchanged.
+            status_code: 500,
             provider: "Claude".to_string(),
-            details: response.content,
+            details: FailureMessage::leaf(response.content).with_origin(origin),
         };
-        log::error!("{}", err);
+        log_error_diagnostic(&err.diagnostic());
         return Err(err);
     }
 
@@ -322,9 +346,9 @@ pub async fn claude_list_models(
     let api_response: ClaudeListModelsResponse = from_str(&response.content).map_err(|e| {
         let err = AiError::ResponseParseFailed {
             provider: "Claude".to_string(),
-            details: e.to_string(),
+            details: FailureMessage::from_error(&e),
         };
-        log::error!("Claude list_models response parsing failed: {}", err);
+        log_error_diagnostic(&err.diagnostic());
         err
     })?;
 
@@ -389,24 +413,21 @@ pub async fn gemini_list_models(
 
     let client = DefaultApiClient::new(ErrorFormat::Google);
     let response = client
-        .get_request(&config, &endpoint_with_key, None)
+        .get_request_with_origin(&config, &endpoint_with_key, None)
         .await
         .map_err(|e| AiError::ApiRequestFailed {
             provider: "Gemini".to_string(),
-            details: e.to_string(),
+            details: e,
             status_code: 0, // Network/Request failure, not an HTTP error
         })?;
 
     if response.is_error || response.content.is_empty() {
-        let status_code = response
-            .raw_response
-            .map(|r| r.status().as_u16())
-            .unwrap_or(500); // Default to 500 if no status
-
+        let origin = response_error_origin(&response, "Gemini");
         return Err(AiError::ApiRequestFailed {
-            status_code,
+            // Keep the historical fallback so retry classification is unchanged.
+            status_code: 500,
             provider: "Gemini".to_string(),
-            details: response.content,
+            details: FailureMessage::leaf(response.content).with_origin(origin),
         });
     }
 
@@ -416,7 +437,7 @@ pub async fn gemini_list_models(
     let models_response: GeminiListModelsResponse = serde_json::from_str(&response.content)
         .map_err(|e| AiError::ResponseParseFailed {
             provider: "Gemini".to_string(),
-            details: e.to_string(),
+            details: FailureMessage::from_error(&e),
         })?;
 
     let model_details: Vec<ModelDetails> = models_response
@@ -506,5 +527,63 @@ mod tests {
         let result = enrich_model_details(model).expect("catalog");
         assert_eq!(result.reasoning, Some(false));
         assert_eq!(result.function_call, Some(false));
+    }
+
+    #[tokio::test]
+    async fn openai_list_models_405_keeps_actual_origin_and_legacy_status() {
+        use axum::{routing::get, Router};
+
+        let app = Router::new().route(
+            "/models",
+            get(|| async {
+                (
+                    axum::http::StatusCode::METHOD_NOT_ALLOWED,
+                    [("content-type", "application/json")],
+                    axum::Json(json!({
+                        "error": {
+                            "type": "method_not_allowed",
+                            "message": "list models is not supported"
+                        }
+                    })),
+                )
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
+                .await
+                .unwrap();
+        });
+        let base_url = format!("http://{address}");
+
+        let error = openai_list_models(Some(&base_url), None, None)
+            .await
+            .expect_err("a 405 list-models answer is an error");
+
+        match &error {
+            AiError::ApiRequestFailed {
+                status_code,
+                details,
+                ..
+            } => {
+                // The legacy status keeps the historical retry classification.
+                assert_eq!(*status_code, 500);
+                let origin = details.origin().expect("network error origin");
+                assert_eq!(origin.status, Some(405));
+                assert_eq!(origin.reason, Some(ErrorReason::UnsupportedListModels));
+                assert_eq!(origin.message, "list models is not supported");
+
+                let projection = details.user_error();
+                assert_eq!(projection.upstream_status, Some(405));
+                assert_eq!(projection.reason, Some(ErrorReason::UnsupportedListModels));
+                assert_eq!(projection.message, "list models is not supported");
+                assert_eq!(error.user_error(), projection);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        server.abort();
     }
 }

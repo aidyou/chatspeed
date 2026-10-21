@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use serde_json::{Map, Value};
 use tauri::{command, AppHandle, Manager, Wry};
 
@@ -31,7 +32,7 @@ pub async fn test_scrape(
     request_data: serde_json::Value, // Changed to accept a JSON object
 ) -> Result<String> {
     let request_type = request_data["type"].as_str().ok_or(AppError::General {
-        message: "Missing 'type' in request data".to_string(),
+        message: "Missing 'type' in request data".into(),
     })?;
 
     match request_type {
@@ -44,7 +45,7 @@ pub async fn test_scrape(
             let url = request_data["url"]
                 .as_str()
                 .ok_or(AppError::General {
-                    message: "Missing 'url' for content request".to_string(),
+                    message: "Missing 'url' for content request".into(),
                 })?
                 .to_string();
             let content_format = request_data["format"]
@@ -73,7 +74,8 @@ pub async fn test_scrape(
                 .await
                 .map(|result| serde_json::to_string_pretty(&result).unwrap_or_default())
                 .map_err(|e| AppError::General {
-                    message: e.to_string(),
+                    message: FailureMessage::leaf(e.to_string())
+                        .with_origin(ErrorOrigin::from_error(e.root_cause())),
                 })
         }
         // The desktop WebView hosts these capabilities only as the fixed MCP
@@ -90,7 +92,7 @@ pub async fn test_scrape(
             let supervisor = app_handle
                 .try_state::<Arc<RuntimeSupervisor>>()
                 .ok_or_else(|| AppError::General {
-                    message: "The runtime MCP provider is unavailable".to_string(),
+                    message: "The runtime MCP provider is unavailable".into(),
                 })?;
             runtime_capability::mcp_call(
                 supervisor.inner().as_ref(),
@@ -101,11 +103,15 @@ pub async fn test_scrape(
             .await
             .map(|result| serde_json::to_string_pretty(&result).unwrap_or_default())
             .map_err(|error| AppError::General {
-                message: error.redacted_message(),
+                message: FailureMessage::leaf(error.redacted_message()).with_origin(
+                    error.error_origin().cloned().unwrap_or_else(|| {
+                        ErrorOrigin::leaf(error.redacted_message(), None, None, None)
+                    }),
+                ),
             })
         }
         _ => Err(AppError::General {
-            message: "Invalid request type".to_string(),
+            message: "Invalid request type".into(),
         }),
     }
 }
@@ -117,7 +123,7 @@ fn web_mcp_arguments(tool_name: &str, request_data: &Value) -> Result<Value> {
         let url = request_data["url"]
             .as_str()
             .ok_or_else(|| AppError::General {
-                message: "Missing 'url' for web_fetch request".to_string(),
+                message: "Missing 'url' for web_fetch request".into(),
             })?;
         arguments.insert("url".to_string(), Value::String(url.to_string()));
         for key in ["format", "keep_link", "keep_image"] {
@@ -129,7 +135,7 @@ fn web_mcp_arguments(tool_name: &str, request_data: &Value) -> Result<Value> {
         let query = request_data["query"]
             .as_str()
             .ok_or_else(|| AppError::General {
-                message: "Missing 'query' for web_search request".to_string(),
+                message: "Missing 'query' for web_search request".into(),
             })?;
         arguments.insert("query".to_string(), Value::String(query.to_string()));
         for key in ["provider", "page", "number", "time_period"] {

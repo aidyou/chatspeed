@@ -1,5 +1,6 @@
 use crate::ccproxy::adapter::input::helper::thinking_adapter::normalize_nvidia_nim_thinking_fields_with_adapter;
 use crate::ccproxy::adapter::unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart};
+use crate::ccproxy::diagnostic::{self, RequestContext};
 use crate::ccproxy::helper::{get_tool_id, send_with_retry, RetryConfig};
 use crate::ccproxy::openai::OpenAIUsage;
 use crate::ccproxy::utils::token_estimator::{estimate_tokens, token_usage_is_missing_or_zero};
@@ -171,6 +172,25 @@ pub async fn handle_direct_forward(
                 "Request failed before receiving a response: {}",
                 error
             ));
+            let protocol_label = proxy_model.chat_protocol.to_string();
+            let diagnostic = diagnostic::from_message(
+                "ccproxy",
+                "backend_request",
+                error.to_string(),
+                diagnostic::request_frames(RequestContext {
+                    request_id: &message_id,
+                    client_protocol: &protocol_label,
+                    backend_protocol: &protocol_label,
+                    client_model: &proxy_model.client_alias,
+                    backend_model: &proxy_model.model,
+                    provider_id: proxy_model.provider_id,
+                    provider: &proxy_model.provider,
+                    group: None,
+                    path: "direct",
+                    compat: false,
+                }),
+            );
+            diagnostic::emit(log::Level::Warn, &diagnostic);
             crate::ccproxy::helper::stat_guard::record_error_stat(
                 main_store_arc.as_ref(),
                 CcproxyStat {
@@ -235,15 +255,29 @@ pub async fn handle_direct_forward(
             status_code, error_msg
         ));
 
-        log::warn!(
-            "Backend API error (alias: '{}', model: '{}', provider: '{}'): url={}, status_code={}, response={}",
-            proxy_model.client_alias.clone(),
-            proxy_model.model,
-            proxy_model.provider,
-            &full_url,
+        let protocol_label = proxy_model.chat_protocol.to_string();
+        let mut frames = diagnostic::request_frames(RequestContext {
+            request_id: &message_id,
+            client_protocol: &protocol_label,
+            backend_protocol: &protocol_label,
+            client_model: &proxy_model.client_alias,
+            backend_model: &proxy_model.model,
+            provider_id: proxy_model.provider_id,
+            provider: &proxy_model.provider,
+            group: None,
+            path: "direct",
+            compat: false,
+        });
+        frames.push(("response", Some(format!("status={status_code}"))));
+        let diagnostic = diagnostic::from_upstream(
+            "backend_error",
+            &proxy_model.chat_protocol,
             status_code,
-            error_msg
+            &response_headers,
+            &error_body_bytes,
+            frames,
         );
+        diagnostic::emit(log::Level::Warn, &diagnostic);
 
         crate::ccproxy::helper::stat_guard::record_error_stat(
             main_store_arc.as_ref(),
@@ -328,6 +362,12 @@ pub async fn handle_direct_forward(
         let log_recorder_at_end = log_recorder.clone();
         let chat_protocol_at_end = chat_protocol.clone();
         let sse_status_at_end = sse_status.clone();
+        let stream_request_id = message_id.clone();
+        let stream_protocol = chat_protocol.to_string();
+        let stream_client_model = proxy_model.client_alias.clone();
+        let stream_backend_model = model_name.clone();
+        let stream_provider_id = proxy_model.provider_id;
+        let stream_provider = provider_name.clone();
         let stream = target_response.bytes_stream().map(move |chunk| {
             let sse_status = sse_status.clone();
             let log_recorder = log_recorder_clone.clone();
@@ -351,6 +391,24 @@ pub async fn handle_direct_forward(
                     ))
                 }
                 Err(error) => {
+                    let diagnostic = diagnostic::from_error(
+                        "ccproxy",
+                        "stream_read",
+                        &error,
+                        diagnostic::request_frames(RequestContext {
+                            request_id: &stream_request_id,
+                            client_protocol: &stream_protocol,
+                            backend_protocol: &stream_protocol,
+                            client_model: &stream_client_model,
+                            backend_model: &stream_backend_model,
+                            provider_id: stream_provider_id,
+                            provider: &stream_provider,
+                            group: None,
+                            path: "direct",
+                            compat: false,
+                        }),
+                    );
+                    diagnostic::emit(log::Level::Error, &diagnostic);
                     if let Ok(mut recorder) = log_recorder.lock() {
                         recorder.stream_failed = true;
                     }
@@ -1838,6 +1896,128 @@ mod tests {
             )
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn ccproxy_direct_preserves_backend_error_status_and_body() {
+        let cases: Vec<(u16, Vec<u8>)> = vec![
+            (
+                401,
+                br#"{"error":{"message":"invalid key","type":"authentication_error"}}"#.to_vec(),
+            ),
+            (
+                429,
+                br#"{"error":{"message":"rate limited","type":"rate_limit_error"}}"#.to_vec(),
+            ),
+            (503, b"<html>upstream unavailable</html>".to_vec()),
+            (502, Vec::new()),
+        ];
+
+        for (status, body) in cases {
+            let app = Router::new()
+                .route(
+                    "/chat/completions",
+                    post(
+                        |axum::extract::State((status, body)): axum::extract::State<(
+                            u16,
+                            Vec<u8>,
+                        )>| async move {
+                            Response::builder()
+                                .status(http::StatusCode::from_u16(status).unwrap())
+                                .header("content-type", "application/json")
+                                .header("x-upstream", "kept")
+                                .body(Body::from(body))
+                                .unwrap()
+                        },
+                    ),
+                )
+                .with_state((status, body.clone()));
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app)
+                    .await
+                    .unwrap();
+            });
+            let directory = tempdir().unwrap();
+            let store =
+                Arc::new(MainStore::new(directory.path().join("ccproxy-errors.db")).unwrap());
+
+            let response = handle_direct_forward(
+                HeaderMap::new(),
+                bytes::Bytes::from_static(
+                    br#"{"model":"alias","messages":[{"role":"user","content":"hello"}]}"#,
+                ),
+                proxy_model(format!("http://{address}")),
+                false,
+                store,
+                false,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+            assert!(!response.headers().contains_key("content-length"));
+            let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert_eq!(response_body.as_ref(), body.as_slice());
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn ccproxy_direct_stream_abort_fails_the_client_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 8192];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            let event = b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0}]}\n\n";
+            socket
+                .write_all(format!("{:x}\r\n", event.len()).as_bytes())
+                .await
+                .unwrap();
+            socket.write_all(event).await.unwrap();
+            socket.write_all(b"\r\n").await.unwrap();
+            socket.flush().await.unwrap();
+            // Close without the terminating chunk so the client observes an aborted stream.
+        });
+        let directory = tempdir().unwrap();
+        let store = Arc::new(MainStore::new(directory.path().join("ccproxy-abort.db")).unwrap());
+
+        let response = handle_direct_forward(
+            HeaderMap::new(),
+            bytes::Bytes::from_static(
+                br#"{"model":"alias","messages":[{"role":"user","content":"hello"}],"stream":true}"#,
+            ),
+            proxy_model(format!("http://{address}")),
+            true,
+            store,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert!(
+            axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .is_err(),
+            "a backend stream abort must surface as a body read failure"
+        );
+        server.await.unwrap();
     }
 
     #[test]

@@ -35,6 +35,7 @@ import { useI18n } from 'vue-i18n'
 import { invokeWrapper } from '@/libs/tauri'
 import { writeClipboard } from '@/libs/clipboard'
 import { showMessage } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 
 const { t } = useI18n()
 
@@ -81,7 +82,7 @@ const copyNodePath = async () => {
     showMessage(t('common.copied'), 'success')
   } catch (error) {
     console.error('Failed to copy path:', error)
-    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+    showMessage(t('common.operationFailed', { error: formatUserError(error) }), 'error')
   }
 }
 

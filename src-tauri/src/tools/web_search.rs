@@ -12,6 +12,7 @@ use crate::{
     },
     tools::{web_config::WebToolConfig, ToolCallResult, ToolError},
 };
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use tauri::{AppHandle, Wry};
 
 pub struct Auth {
@@ -57,29 +58,39 @@ impl WebSearch {
         };
 
         let provider_name = SearchProviderName::from_str(&search_engine)
-            .map_err(|e| ToolError::Initialization(e))?;
+            .map_err(|e| ToolError::Initialization(FailureMessage::leaf(e)))?;
 
         let searcher = match provider_name.clone() {
             SearchProviderName::Google => {
                 let auth = Self::get_and_check_auth(&search_engine, self.config.as_ref())?;
                 SearchFactory::Google(
-                    GoogleSearch::new(auth.api_key, auth.cx.unwrap_or_default(), proxy)
-                        .map_err(|e| ToolError::Initialization(e.to_string()))?,
+                    GoogleSearch::new(auth.api_key, auth.cx.unwrap_or_default(), proxy).map_err(
+                        |e| {
+                            ToolError::Initialization(
+                                FailureMessage::leaf(e.to_string())
+                                    .with_origin(ErrorOrigin::from_error(e.as_ref())),
+                            )
+                        },
+                    )?,
                 )
             }
             SearchProviderName::Tavily => {
                 let auth = Self::get_and_check_auth(&search_engine, self.config.as_ref())?;
-                SearchFactory::Tavily(
-                    TavilySearch::new(auth.api_key, proxy)
-                        .map_err(|e| ToolError::Initialization(e.to_string()))?,
-                )
+                SearchFactory::Tavily(TavilySearch::new(auth.api_key, proxy).map_err(|e| {
+                    ToolError::Initialization(
+                        FailureMessage::leaf(e.to_string())
+                            .with_origin(ErrorOrigin::from_error(e.as_ref())),
+                    )
+                })?)
             }
             SearchProviderName::Serper => {
                 let auth = Self::get_and_check_auth(&search_engine, self.config.as_ref())?;
-                SearchFactory::Serper(
-                    SerperSearch::new(auth.api_key, proxy)
-                        .map_err(|e| ToolError::Initialization(e.to_string()))?,
-                )
+                SearchFactory::Serper(SerperSearch::new(auth.api_key, proxy).map_err(|e| {
+                    ToolError::Initialization(
+                        FailureMessage::leaf(e.to_string())
+                            .with_origin(ErrorOrigin::from_error(e.as_ref())),
+                    )
+                })?)
             }
             p @ (SearchProviderName::Bing
             | SearchProviderName::Brave
@@ -99,7 +110,7 @@ impl WebSearch {
         config: &dyn WebToolConfig,
     ) -> Result<Auth, ToolError> {
         let provider_name = SearchProviderName::from_str(search_engine)
-            .map_err(|e| ToolError::Initialization(e))?;
+            .map_err(|e| ToolError::Initialization(FailureMessage::leaf(e)))?;
         let auth = match provider_name {
             SearchProviderName::Google => {
                 let api_key = config.get_string("google_api_key", "");
@@ -234,7 +245,10 @@ impl WebSearch {
 
             let raw_results = searcher.search(&search_params).await.map_err(|e| {
                 log::error!("Failed to fetch search page {}: {}", current_page, e);
-                ToolError::ExecutionFailed(e.to_string())
+                let legacy = e.to_string();
+                ToolError::ExecutionFailed(
+                    FailureMessage::leaf(legacy).with_origin(ErrorOrigin::from_error(e.as_ref())),
+                )
             })?;
 
             if raw_results.is_empty() {

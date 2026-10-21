@@ -11,6 +11,7 @@ use crate::ccproxy::{
         input::from_openai_responses,
         output::{OpenAIResponsesOutputAdapter, OutputAdapterEnum},
     },
+    diagnostic::{self, RequestContext},
     errors::{CCProxyError, ProxyResult},
     handler::chat_handler::{
         execute_unified_chat_request, prepare_unified_request_for_proxy_model,
@@ -281,6 +282,26 @@ async fn direct_forward_responses(
     let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
         Ok(response) => response,
         Err(error) => {
+            let client_protocol_label = ChatProtocol::OpenAI.to_string();
+            let backend_protocol_label = proxy_model.chat_protocol.to_string();
+            let diagnostic = diagnostic::from_message(
+                "ccproxy",
+                "backend_request",
+                error.to_string(),
+                diagnostic::request_frames(RequestContext {
+                    request_id: &message_id,
+                    client_protocol: &client_protocol_label,
+                    backend_protocol: &backend_protocol_label,
+                    client_model: &proxy_model.client_alias,
+                    backend_model: &model_name,
+                    provider_id: proxy_model.provider_id,
+                    provider: &provider_name,
+                    group: None,
+                    path: "direct",
+                    compat: false,
+                }),
+            );
+            diagnostic::emit(log::Level::Warn, &diagnostic);
             return Err(error);
         }
     };
@@ -288,6 +309,23 @@ async fn direct_forward_responses(
     let status_code = target_response.status();
     let response_headers = target_response.headers().clone();
     let body_bytes = target_response.bytes().await.map_err(|e| {
+        let client_protocol_label = ChatProtocol::OpenAI.to_string();
+        let backend_protocol_label = proxy_model.chat_protocol.to_string();
+        let mut frames = diagnostic::request_frames(RequestContext {
+            request_id: &message_id,
+            client_protocol: &client_protocol_label,
+            backend_protocol: &backend_protocol_label,
+            client_model: &proxy_model.client_alias,
+            backend_model: &model_name,
+            provider_id: proxy_model.provider_id,
+            provider: &provider_name,
+            group: None,
+            path: "direct",
+            compat: false,
+        });
+        frames.push(("response", Some(format!("status={status_code}"))));
+        let diagnostic = diagnostic::from_error("ccproxy", "response_read", &e, frames);
+        diagnostic::emit(log::Level::Error, &diagnostic);
         CCProxyError::InternalError(
             t!("network.response_read_error", error = e.to_string()).to_string(),
         )
@@ -341,6 +379,31 @@ async fn direct_forward_responses(
     };
 
     if !status_code.is_success() {
+        let client_protocol_label = ChatProtocol::OpenAI.to_string();
+        let backend_protocol_label = proxy_model.chat_protocol.to_string();
+        let mut frames = diagnostic::request_frames(RequestContext {
+            request_id: &message_id,
+            client_protocol: &client_protocol_label,
+            backend_protocol: &backend_protocol_label,
+            client_model: &proxy_model.client_alias,
+            backend_model: &model_name,
+            provider_id: proxy_model.provider_id,
+            provider: &provider_name,
+            group: None,
+            path: "direct",
+            compat: false,
+        });
+        frames.push(("response", Some(format!("status={status_code}"))));
+        let diagnostic = diagnostic::from_upstream(
+            "backend_error",
+            &proxy_model.chat_protocol,
+            status_code,
+            &response_headers,
+            &body_bytes,
+            frames,
+        );
+        diagnostic::emit(log::Level::Warn, &diagnostic);
+
         crate::ccproxy::helper::stat_guard::record_error_stat(
             main_store_arc.as_ref(),
             CcproxyStat {
@@ -1047,6 +1110,385 @@ data: {"type":"response.completed","response":{"id":"resp_123","status":"complet
                 80,
             )
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn native_responses_http_errors_preserve_status_body_and_filter_headers() {
+        use axum::{extract::State, Router};
+        use std::sync::{Arc, Mutex};
+        use tempfile::tempdir;
+
+        type UpstreamState = Arc<Mutex<(u16, Vec<u8>)>>;
+        let upstream_state: UpstreamState = Arc::new(Mutex::new((
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            Vec::new(),
+        )));
+        let app = Router::new()
+            .fallback(|State(state): State<UpstreamState>| async move {
+                let (status, body) = {
+                    let state = state.lock().expect("upstream state should lock");
+                    state.clone()
+                };
+                Response::builder()
+                    .status(
+                        reqwest::StatusCode::from_u16(status)
+                            .expect("test upstream status should be valid"),
+                    )
+                    .header("content-type", "application/json")
+                    .header("content-length", body.len().to_string())
+                    .header("x-upstream", "kept")
+                    .header("x-request-id", "upstream-request")
+                    .body(Body::from(body))
+                    .expect("test upstream response should build")
+            })
+            .with_state(upstream_state.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should be nonblocking");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                tokio::net::TcpListener::from_std(listener).expect("tokio listener should convert"),
+                app,
+            )
+            .await
+            .expect("mock upstream should serve");
+        });
+
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("responses-errors.db"))
+                .expect("test store should initialize"),
+        );
+        let upstream_body =
+            br#"{"error":{"message":"responses rejected","type":"invalid_request_error","code":"bad_request"}}"#.to_vec();
+
+        for status in [401_u16, 429, 503] {
+            *upstream_state.lock().expect("upstream state should lock") =
+                (status, upstream_body.clone());
+            let proxy_model = ProxyModel {
+                base_url: format!("http://{address}"),
+                ..proxy_model_with_metadata(Some(json!({
+                    "supports_responses_api": true
+                })))
+            };
+            let response = direct_forward_responses(
+                reqwest::header::HeaderMap::new(),
+                bytes::Bytes::from_static(br#"{"model":"alias","input":[]}"#),
+                proxy_model,
+                store.clone(),
+                false,
+            )
+            .await
+            .expect("native Responses errors should return the upstream response");
+
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+            assert_eq!(
+                response.headers().get("x-request-id").unwrap(),
+                "upstream-request"
+            );
+            for name in [
+                "content-length",
+                "transfer-encoding",
+                "connection",
+                "content-encoding",
+                "keep-alive",
+            ] {
+                assert!(
+                    !response.headers().contains_key(name),
+                    "transport header {name} must be filtered"
+                );
+            }
+            assert!(
+                !response
+                    .headers()
+                    .keys()
+                    .any(|name| name.as_str().starts_with("x-cs-")),
+                "control/diagnostic headers must not leak to the client"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("error body should be readable");
+            assert_eq!(body.as_ref(), upstream_body.as_slice());
+        }
+
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .expect("flush task should join")
+            .expect("error stats should flush");
+        let per_status = runtime
+            .read(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT status_code, COUNT(*) FROM ccproxy_stats GROUP BY status_code ORDER BY status_code",
+                )?;
+                let rows = statement
+                    .query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .expect("error stats query should succeed");
+        assert_eq!(per_status, vec![(401, 1), (429, 1), (503, 1)]);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn native_responses_stream_abort_returns_response_read_error() {
+        use std::sync::Arc;
+        use tempfile::tempdir;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("upstream should accept");
+            let mut request = [0_u8; 8192];
+            socket
+                .read(&mut request)
+                .await
+                .expect("upstream should read request");
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await
+                .expect("upstream should write headers");
+            let event = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n";
+            socket
+                .write_all(format!("{:x}\r\n", event.len()).as_bytes())
+                .await
+                .expect("upstream should write chunk size");
+            socket
+                .write_all(event)
+                .await
+                .expect("upstream should write chunk");
+            socket
+                .write_all(b"\r\n")
+                .await
+                .expect("upstream should finish chunk");
+            socket.flush().await.expect("upstream should flush");
+            // Close without the terminating chunk so the buffering Responses path observes an abort.
+        });
+
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("responses-abort.db"))
+                .expect("test store should initialize"),
+        );
+        let proxy_model = ProxyModel {
+            base_url: format!("http://{address}"),
+            ..proxy_model_with_metadata(Some(json!({
+                "supports_responses_api": true
+            })))
+        };
+        let error = direct_forward_responses(
+            reqwest::header::HeaderMap::new(),
+            bytes::Bytes::from_static(br#"{"model":"alias","input":[],"stream":true}"#),
+            proxy_model,
+            store,
+            false,
+        )
+        .await
+        .expect_err("an aborted native Responses stream must fail");
+
+        match error {
+            crate::ccproxy::errors::CCProxyError::InternalError(message) => {
+                assert!(
+                    !message.is_empty(),
+                    "aborted stream error should be described"
+                );
+            }
+            other => panic!("expected an internal response-read error, got {other:?}"),
+        }
+        server.await.expect("upstream task should join");
+    }
+
+    #[tokio::test]
+    async fn native_responses_stream_http_errors_preserve_status_body_and_filter_headers() {
+        use axum::{extract::State, Router};
+        use std::sync::{Arc, Mutex};
+        use tempfile::tempdir;
+
+        #[derive(Clone, Copy)]
+        struct ErrorBody {
+            content_type: &'static str,
+            body: &'static [u8],
+        }
+
+        const ERROR_BODIES: [ErrorBody; 3] = [
+            ErrorBody {
+                content_type: "application/json",
+                body: br#"{"error":{"message":"responses stream rejected","type":"invalid_request_error","code":"bad_request"}}"#,
+            },
+            ErrorBody {
+                content_type: "text/plain",
+                body: b"",
+            },
+            ErrorBody {
+                content_type: "text/html",
+                body: b"<html><body><h1>Responses stream rejected</h1></body></html>",
+            },
+        ];
+
+        type UpstreamState = Arc<Mutex<(u16, &'static str, &'static [u8])>>;
+        let upstream_state: UpstreamState = Arc::new(Mutex::new((
+            reqwest::StatusCode::UNAUTHORIZED.as_u16(),
+            ERROR_BODIES[0].content_type,
+            ERROR_BODIES[0].body,
+        )));
+        let app = Router::new()
+            .fallback(|State(state): State<UpstreamState>| async move {
+                let (status, content_type, body) = {
+                    let state = state.lock().expect("upstream state should lock");
+                    *state
+                };
+                Response::builder()
+                    .status(
+                        reqwest::StatusCode::from_u16(status)
+                            .expect("test upstream status should be valid"),
+                    )
+                    .header("content-type", content_type)
+                    .header("content-length", body.len().to_string())
+                    .header("x-upstream", "kept")
+                    .header("x-request-id", "upstream-request")
+                    .body(Body::from(body.to_vec()))
+                    .expect("test upstream response should build")
+            })
+            .with_state(upstream_state.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should be nonblocking");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                tokio::net::TcpListener::from_std(listener).expect("tokio listener should convert"),
+                app,
+            )
+            .await
+            .expect("mock upstream should serve");
+        });
+
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("responses-stream-errors.db"))
+                .expect("test store should initialize"),
+        );
+
+        for status in [
+            reqwest::StatusCode::UNAUTHORIZED.as_u16(),
+            reqwest::StatusCode::TOO_MANY_REQUESTS.as_u16(),
+            reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+        ] {
+            for variant in ERROR_BODIES {
+                *upstream_state.lock().expect("upstream state should lock") =
+                    (status, variant.content_type, variant.body);
+                let proxy_model = ProxyModel {
+                    base_url: format!("http://{address}"),
+                    ..proxy_model_with_metadata(Some(json!({
+                        "supports_responses_api": true
+                    })))
+                };
+                let response = direct_forward_responses(
+                    reqwest::header::HeaderMap::new(),
+                    bytes::Bytes::from_static(br#"{"model":"alias","input":[],"stream":true}"#),
+                    proxy_model,
+                    store.clone(),
+                    false,
+                )
+                .await
+                .expect("native Responses stream errors should return the upstream response");
+
+                assert_eq!(response.status().as_u16(), status);
+                assert_eq!(
+                    response.headers().get("content-type").unwrap(),
+                    variant.content_type
+                );
+                assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+                assert_eq!(
+                    response.headers().get("x-request-id").unwrap(),
+                    "upstream-request"
+                );
+                for name in [
+                    "content-length",
+                    "transfer-encoding",
+                    "connection",
+                    "content-encoding",
+                    "keep-alive",
+                ] {
+                    assert!(
+                        !response.headers().contains_key(name),
+                        "transport header {name} must be filtered"
+                    );
+                }
+                assert!(
+                    !response
+                        .headers()
+                        .keys()
+                        .any(|name| name.as_str().starts_with("x-cs-")),
+                    "control/diagnostic headers must not leak to the client"
+                );
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("error body should be readable");
+                assert_eq!(body.as_ref(), variant.body);
+            }
+        }
+
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .expect("flush task should join")
+            .expect("error stats should flush");
+        let stats = runtime
+            .read(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT status_code, error_message, input_tokens, output_tokens
+                     FROM ccproxy_stats",
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, i32>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .expect("error stats query should succeed");
+
+        assert_eq!(stats.len(), 9);
+        for status in [401_i32, 429, 503] {
+            let mut bodies = stats
+                .iter()
+                .filter(|(stat_status, _, _, _)| *stat_status == status)
+                .map(|(_, error_message, input_tokens, output_tokens)| {
+                    assert_eq!((*input_tokens, *output_tokens), (0, 0));
+                    error_message
+                        .clone()
+                        .expect("Responses stream errors should record a body")
+                })
+                .collect::<Vec<_>>();
+            let mut expected_bodies = ERROR_BODIES
+                .iter()
+                .map(|variant| String::from_utf8_lossy(variant.body).to_string())
+                .collect::<Vec<_>>();
+            bodies.sort();
+            expected_bodies.sort();
+            assert_eq!(bodies, expected_bodies, "status {status} error bodies");
+        }
         server.abort();
     }
 }

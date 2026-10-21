@@ -11,9 +11,9 @@ pub struct AddressFilter {
 impl AddressFilter {
     pub fn new() -> Result<Self, SensitiveError> {
         let us_address_regex = Regex::new(r#"\b\d+\s+[A-Za-z0-9\s.,]+(?:St|Ave|Blvd|Rd|Ln|Dr|Way|Ct|Plz|Pl)\.?\s*,?\s*[A-Za-z\s]+,?\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?\b"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_address_pattern".to_string(), message: e.to_string() })?;
+            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_address_pattern".to_string(), message: crate::error_diagnostics::FailureMessage::from_error(&e) })?;
         let address_context_regex = Regex::new(r#"(?i)(?:Address|Registered\s+Office|Located\s+at|Principal\s+Place\s+of\s+Business)[:：]\s*([^\n\r]+)"#)
-            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_address_context".to_string(), message: e.to_string() })?;
+            .map_err(|e| SensitiveError::RegexCompilationFailed { pattern: "en_address_context".to_string(), message: crate::error_diagnostics::FailureMessage::from_error(&e) })?;
         Ok(Self {
             us_address_regex,
             address_context_regex,

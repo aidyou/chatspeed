@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
+import { formatUserError } from '@/libs/error';
 import { sendSyncState } from '@/libs/sync';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 
@@ -25,7 +26,7 @@ export const useSensitiveStore = defineStore('sensitive', () => {
       return true;
     } catch (error) {
       console.error(`Failed to fetch sensitive status (retry ${retryCount}):`, error);
-      status.value = { healthy: false, error: String(error) };
+      status.value = { healthy: false, error: formatUserError(error) };
       
       // Retry if backend is still initializing (max 5 retries over 2.5 seconds)
       if (retryCount < 5) {

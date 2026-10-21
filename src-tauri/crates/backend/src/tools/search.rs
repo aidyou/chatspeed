@@ -70,12 +70,18 @@ fn validate_search_path(
         ));
     }
     if let Some(path_guard) = path_guard {
-        let guard = path_guard
-            .read()
-            .map_err(|e| ToolError::ExecutionFailed(format!("PathGuard lock poisoned: {}", e)))?;
-        guard
-            .validate_for_listing(path, false)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Security Error: {}", e)))?;
+        let guard = path_guard.read().map_err(|e| {
+            ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
+                "PathGuard lock poisoned: {}",
+                e
+            )))
+        })?;
+        guard.validate_for_listing(path, false).map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!("Security Error: {}", e))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
+        })?;
     }
     Ok(())
 }
@@ -91,12 +97,17 @@ fn is_search_path_allowed(
     let Some(path_guard) = path_guard else {
         return Ok(true);
     };
-    let guard = path_guard
-        .read()
-        .map_err(|error| ToolError::ExecutionFailed(format!("PathGuard lock poisoned: {error}")))?;
-    guard
-        .is_chatspeed_allowed(path, is_dir)
-        .map_err(|error| ToolError::ExecutionFailed(format!("Security Error: {error}")))
+    let guard = path_guard.read().map_err(|error| {
+        ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
+            "PathGuard lock poisoned: {error}"
+        )))
+    })?;
+    guard.is_chatspeed_allowed(path, is_dir).map_err(|error| {
+        ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(format!("Security Error: {error}"))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )
+    })
 }
 
 fn configure_search_walker(base_path: &Path) -> ignore::Walk {

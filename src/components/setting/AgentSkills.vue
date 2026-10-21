@@ -380,6 +380,7 @@ import { useI18n } from 'vue-i18n';
 import { ElMessage } from 'element-plus';
 
 import { mutationOutcomes, verdictAllowsInstall } from '@/libs/capability.js';
+import { formatUserError } from '@/libs/error';
 import { useCapabilityStore } from '@/stores/capability';
 
 const { t, te } = useI18n();
@@ -557,7 +558,7 @@ async function rescan() {
   try {
     await store.loadInventory();
   } catch (error) {
-    showOperationError(error.message);
+    showOperationError(formatUserError(error, t('settings.agentSkills.operationFailed')));
   }
 }
 
@@ -565,7 +566,7 @@ async function runDoctor() {
   try {
     await store.loadDoctor();
   } catch (error) {
-    showOperationError(error.message);
+    showOperationError(formatUserError(error, t('settings.agentSkills.operationFailed')));
   }
 }
 
@@ -574,7 +575,7 @@ async function runReconcile() {
     await store.reconcile();
     ElMessage.success(t('settings.agentSkills.reconcileDone'));
   } catch (error) {
-    showOperationError(error.message);
+    showOperationError(formatUserError(error, t('settings.agentSkills.operationFailed')));
   }
 }
 
@@ -582,7 +583,7 @@ async function check() {
   try {
     await store.checkSource(sourceDocument.value);
   } catch (error) {
-    showOperationError(error.message);
+    showOperationError(formatUserError(error, t('settings.agentSkills.operationFailed')));
   }
 }
 
@@ -599,7 +600,7 @@ async function install() {
     }
     ElMessage.success(t('settings.agentSkills.installDone'));
   } catch (error) {
-    showOperationError(error.message);
+    showOperationError(formatUserError(error, t('settings.agentSkills.operationFailed')));
   }
 }
 
@@ -629,7 +630,7 @@ async function confirmUninstall() {
     ElMessage.success(t('settings.agentSkills.uninstallDone'));
   } catch (error) {
     uninstallDialogVisible.value = false;
-    showOperationError(error.message);
+    showOperationError(formatUserError(error, t('settings.agentSkills.operationFailed')));
   }
 }
 

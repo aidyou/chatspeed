@@ -4,6 +4,8 @@ use crate::libs::fs::{get_file_name, save_thumbnail_image};
 use crate::HTTP_SERVER;
 use crate::HTTP_SERVER_TMP_DIR;
 use crate::HTTP_SERVER_UPLOAD_DIR;
+use chatspeed_contracts::ErrorReason;
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use rust_i18n::t;
 use std::borrow::Cow;
 use std::fs;
@@ -53,16 +55,25 @@ pub struct EditorFileContent {
 
 fn metadata_modified_at_ms(metadata: &fs::Metadata) -> Result<u64> {
     let modified = metadata.modified().map_err(|e| AppError::General {
-        message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+        message: FailureMessage::leaf(
+            t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+        )
+        .with_origin(ErrorOrigin::from_error(&e)),
     })?;
     let duration = modified
         .duration_since(UNIX_EPOCH)
         .map_err(|e| AppError::General {
-            message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         })?;
 
     u64::try_from(duration.as_millis()).map_err(|e| AppError::General {
-        message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+        message: FailureMessage::leaf(
+            t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+        )
+        .with_origin(ErrorOrigin::from_error(&e)),
     })
 }
 
@@ -89,12 +100,15 @@ fn editor_file_info_from_metadata(
 
 fn ensure_editor_file(file_path: &str) -> Result<fs::Metadata> {
     let metadata = fs::metadata(file_path).map_err(|e| AppError::General {
-        message: t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+        message: FailureMessage::leaf(
+            t!("command.fs.file_info_failed", error = e.to_string()).to_string(),
+        )
+        .with_origin(ErrorOrigin::from_error(&e)),
     })?;
 
     if !metadata.is_file() {
         return Err(AppError::General {
-            message: t!("command.fs.not_a_file").to_string(),
+            message: FailureMessage::leaf(t!("command.fs.not_a_file").to_string()),
         });
     }
 
@@ -109,12 +123,18 @@ fn resolve_editor_max_bytes(max_bytes: Option<u64>) -> u64 {
 
 fn ensure_editor_file_size(metadata: &fs::Metadata, max_bytes: u64) -> Result<()> {
     if metadata.len() > max_bytes {
+        let legacy = t!(
+            "command.fs.file_too_large",
+            max = EDITOR_MAX_FILE_BYTES.to_string()
+        )
+        .to_string();
         return Err(AppError::General {
-            message: t!(
-                "command.fs.file_too_large",
-                max = EDITOR_MAX_FILE_BYTES.to_string()
-            )
-            .to_string(),
+            message: FailureMessage::leaf(legacy.clone()).with_origin(ErrorOrigin::leaf(
+                legacy,
+                Some(ErrorReason::FileTooLarge),
+                None,
+                None,
+            )),
         });
     }
 
@@ -176,7 +196,8 @@ fn get_repo_root(path: &str) -> Result<Option<String>> {
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => {
             return Err(AppError::General {
-                message: format!("Failed to execute git: {}", e),
+                message: FailureMessage::leaf(format!("Failed to execute git: {}", e))
+                    .with_origin(ErrorOrigin::from_error(&e)),
             })
         }
     };
@@ -207,7 +228,8 @@ pub async fn get_git_status(path: &str) -> Result<HashMap<String, String>> {
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(HashMap::new()),
         Err(e) => {
             return Err(AppError::General {
-                message: format!("Failed to execute git: {}", e),
+                message: FailureMessage::leaf(format!("Failed to execute git: {}", e))
+                    .with_origin(ErrorOrigin::from_error(&e)),
             })
         }
     };
@@ -274,7 +296,8 @@ pub async fn read_git_base_text_file(file_path: &str) -> Result<Option<String>> 
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => {
             return Err(AppError::General {
-                message: format!("Failed to execute git: {}", e),
+                message: FailureMessage::leaf(format!("Failed to execute git: {}", e))
+                    .with_origin(ErrorOrigin::from_error(&e)),
             })
         }
     };
@@ -361,7 +384,10 @@ pub async fn read_text_file(file_path: &str) -> Result<String> {
     let content = fs::read_to_string(file_path).map_err(|e| {
         log::error!("Failed to read text file '{}': {}", file_path, e);
         AppError::General {
-            message: t!("command.fs.read_file_failed", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("command.fs.read_file_failed", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         }
     })?;
 
@@ -392,7 +418,10 @@ pub async fn read_text_file_for_editor(
     let content = fs::read_to_string(file_path).map_err(|e| {
         log::error!("Failed to read editor text file '{}': {}", file_path, e);
         AppError::General {
-            message: t!("command.fs.read_file_failed", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("command.fs.read_file_failed", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e)),
         }
     })?;
 
@@ -417,13 +446,22 @@ pub async fn write_text_file_for_editor(
     let current_modified_at_ms = metadata_modified_at_ms(&metadata)?;
 
     if metadata.len() != expected_size || current_modified_at_ms != expected_modified_at_ms {
+        let legacy = t!("command.fs.file_changed_on_disk").to_string();
         return Err(AppError::General {
-            message: t!("command.fs.file_changed_on_disk").to_string(),
+            message: FailureMessage::leaf(legacy.clone()).with_origin(ErrorOrigin::leaf(
+                legacy,
+                Some(ErrorReason::FileChangedOnDisk),
+                None,
+                None,
+            )),
         });
     }
 
     fs::write(file_path, content).map_err(|e| AppError::General {
-        message: t!("command.fs.write_file_failed", error = e.to_string()).to_string(),
+        message: FailureMessage::leaf(
+            t!("command.fs.write_file_failed", error = e.to_string()).to_string(),
+        )
+        .with_origin(ErrorOrigin::from_error(&e)),
     })?;
 
     let updated_metadata = ensure_editor_file(file_path)?;
@@ -436,7 +474,7 @@ pub async fn open_path_in_file_manager(path: &str) -> Result<()> {
 
     if !target.exists() {
         return Err(AppError::General {
-            message: format!("Path does not exist: {}", path),
+            message: FailureMessage::leaf(format!("Path does not exist: {}", path)),
         });
     }
 
@@ -463,15 +501,16 @@ pub async fn open_path_in_file_manager(path: &str) -> Result<()> {
     };
 
     let status = command.status().map_err(|e| AppError::General {
-        message: format!("Failed to open path '{}': {}", path, e),
+        message: FailureMessage::leaf(format!("Failed to open path '{}': {}", path, e))
+            .with_origin(ErrorOrigin::from_error(&e)),
     })?;
 
     if !status.success() {
         return Err(AppError::General {
-            message: format!(
+            message: FailureMessage::leaf(format!(
                 "Failed to open path '{}': command exited with {}",
                 path, status
-            ),
+            )),
         });
     }
 
@@ -502,7 +541,9 @@ pub async fn image_preview(
         preview_height,
     )
     .map_err(|e| AppError::General {
-        message: t!("command.fs.image_preview_failed", error = e.to_string()).to_string(),
+        message: FailureMessage::leaf(
+            t!("command.fs.image_preview_failed", error = e.to_string()).to_string(),
+        ),
     })?;
 
     // Get the file name from the saved path
@@ -526,22 +567,24 @@ pub async fn image_source_url(image_path: &std::path::Path) -> Result<String> {
     let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
     let original_dir = Path::new(&upload_dir).join("workflow-source");
     std::fs::create_dir_all(&original_dir).map_err(|e| AppError::General {
-        message: format!(
+        message: FailureMessage::leaf(format!(
             "Failed to create workflow source image directory '{}': {}",
             original_dir.display(),
             e
-        ),
+        ))
+        .with_origin(ErrorOrigin::from_error(&e)),
     })?;
 
     let file_name = get_file_name(image_path);
     let save_path = original_dir.join(file_name.clone());
     std::fs::copy(image_path, &save_path).map_err(|e| AppError::General {
-        message: format!(
+        message: FailureMessage::leaf(format!(
             "Failed to copy source image '{}' to '{}': {}",
             image_path.display(),
             save_path.display(),
             e
-        ),
+        ))
+        .with_origin(ErrorOrigin::from_error(&e)),
     })?;
 
     let mut http_server = HTTP_SERVER.read().clone();
@@ -594,7 +637,13 @@ mod tests {
         let result = read_text_file_for_editor(path.to_str().expect("utf8 path"), Some(5)).await;
 
         assert!(result.is_err(), "file over provided limit must be rejected");
-        let error = result.err().expect("expected error").to_string();
+        let error = result.err().expect("expected error");
+        assert_eq!(
+            error.error_origin().reason,
+            Some(ErrorReason::FileTooLarge),
+            "file-size rejection must carry its typed source reason"
+        );
+        let error = error.to_string();
         assert!(
             error.contains("too") || error.contains("大") || error.contains("Maximum"),
             "expected size-limit error, got: {error}"
@@ -620,7 +669,12 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_err(), "changed file must not be overwritten");
+        let error = result.err().expect("expected error");
+        assert_eq!(
+            error.error_origin().reason,
+            Some(ErrorReason::FileChangedOnDisk),
+            "file-conflict rejection must carry its typed source reason"
+        );
         let disk_content = fs::read_to_string(&path).expect("read disk content");
         assert_eq!(disk_content, "let value = 123;\n");
     }

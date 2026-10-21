@@ -36,11 +36,14 @@ pub fn encrypt_database_streaming(
     // Open input file
     let input_file = File::open(input_path).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_open_database_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_open_database_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
     let mut reader = BufReader::new(input_file);
@@ -48,11 +51,14 @@ pub fn encrypt_database_streaming(
     // Create output file
     let output_file = File::create(output_path).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_create_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_create_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
     let mut writer = BufWriter::new(output_file);
@@ -66,11 +72,24 @@ pub fn encrypt_database_streaming(
     // Generate key and cipher
     let key_str = generate_encryption_key(backup_dir_name, &random_key);
     let key_bytes = hex::decode(&key_str).map_err(|e| {
-        StoreError::IoError(t!("db.backup.failed_to_decode_key", error = e.to_string()).to_string())
+        StoreError::IoError(
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!("db.backup.failed_to_decode_key", error = e.to_string()).to_string(),
+            )
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+        )
     })?;
     let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| {
         StoreError::IoError(
-            t!("db.backup.failed_to_create_cipher", error = e.to_string()).to_string(),
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!("db.backup.failed_to_create_cipher", error = e.to_string()).to_string(),
+            )
+            .with_origin(crate::error_diagnostics::ErrorOrigin::leaf(
+                e.to_string(),
+                None,
+                None,
+                None,
+            )),
         )
     })?;
 
@@ -84,11 +103,14 @@ pub fn encrypt_database_streaming(
     loop {
         let bytes_read = reader.read(&mut buffer).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_read_database_file",
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_read_database_file",
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -108,7 +130,15 @@ pub fn encrypt_database_streaming(
         // Encrypt chunk
         let ciphertext = cipher.encrypt(&chunk_nonce.into(), chunk).map_err(|e| {
             StoreError::IoError(
-                t!("db.backup.failed_to_encrypt_data", error = e.to_string()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.backup.failed_to_encrypt_data", error = e.to_string()).to_string(),
+                )
+                .with_origin(crate::error_diagnostics::ErrorOrigin::leaf(
+                    e.to_string(),
+                    None,
+                    None,
+                    None,
+                )),
             )
         })?;
 
@@ -117,20 +147,26 @@ pub fn encrypt_database_streaming(
             .write_all(&(ciphertext.len() as u32).to_le_bytes())
             .map_err(|e| {
                 StoreError::IoError(
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!(
+                            "db.backup.failed_to_write_encrypted_file",
+                            error = e.to_string()
+                        )
+                        .to_string(),
+                    )
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                )
+            })?;
+        writer.write_all(&ciphertext).map_err(|e| {
+            StoreError::IoError(
+                crate::error_diagnostics::FailureMessage::leaf(
                     t!(
                         "db.backup.failed_to_write_encrypted_file",
                         error = e.to_string()
                     )
                     .to_string(),
                 )
-            })?;
-        writer.write_all(&ciphertext).map_err(|e| {
-            StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_write_encrypted_file",
-                    error = e.to_string()
-                )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -140,21 +176,27 @@ pub fn encrypt_database_streaming(
     // Write end marker (0 size)
     writer.write_all(&0u32.to_le_bytes()).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_write_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_write_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
     writer.flush().map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_write_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_write_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
@@ -170,11 +212,14 @@ pub fn decrypt_database_streaming(
     // Open input file
     let input_file = File::open(input_path).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_open_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_open_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
     let mut reader = BufReader::new(input_file);
@@ -182,12 +227,15 @@ pub fn decrypt_database_streaming(
     // Create output file
     let output_file = File::create(output_path).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_open_dest_db",
-                path = output_path.display(),
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_open_dest_db",
+                    path = output_path.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
     let mut writer = BufWriter::new(output_file);
@@ -198,11 +246,24 @@ pub fn decrypt_database_streaming(
     // Generate key and cipher
     let key_str = generate_encryption_key(backup_dir_name, &random_key);
     let key_bytes = hex::decode(&key_str).map_err(|e| {
-        StoreError::IoError(t!("db.backup.failed_to_decode_key", error = e.to_string()).to_string())
+        StoreError::IoError(
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!("db.backup.failed_to_decode_key", error = e.to_string()).to_string(),
+            )
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+        )
     })?;
     let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|e| {
         StoreError::IoError(
-            t!("db.backup.failed_to_create_cipher", error = e.to_string()).to_string(),
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!("db.backup.failed_to_create_cipher", error = e.to_string()).to_string(),
+            )
+            .with_origin(crate::error_diagnostics::ErrorOrigin::leaf(
+                e.to_string(),
+                None,
+                None,
+                None,
+            )),
         )
     })?;
 
@@ -214,11 +275,14 @@ pub fn decrypt_database_streaming(
         let mut size_bytes = [0u8; 4];
         reader.read_exact(&mut size_bytes).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_read_encrypted_file",
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_read_encrypted_file",
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -233,11 +297,14 @@ pub fn decrypt_database_streaming(
         let mut encrypted_chunk = vec![0u8; chunk_size as usize];
         reader.read_exact(&mut encrypted_chunk).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_read_encrypted_file",
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_read_encrypted_file",
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -252,19 +319,30 @@ pub fn decrypt_database_streaming(
             .decrypt(&chunk_nonce.into(), encrypted_chunk.as_ref())
             .map_err(|e| {
                 StoreError::IoError(
-                    t!("db.backup.failed_to_decrypt_data", error = e.to_string()).to_string(),
+                    crate::error_diagnostics::FailureMessage::leaf(
+                        t!("db.backup.failed_to_decrypt_data", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::leaf(
+                        e.to_string(),
+                        None,
+                        None,
+                        None,
+                    )),
                 )
             })?;
 
         // Write decrypted data
         writer.write_all(&decrypted_chunk).map_err(|e| {
             StoreError::IoError(
-                t!(
-                    "db.backup.failed_to_write_temp_db",
-                    path = output_path.display(),
-                    error = e.to_string()
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!(
+                        "db.backup.failed_to_write_temp_db",
+                        path = output_path.display(),
+                        error = e.to_string()
+                    )
+                    .to_string(),
                 )
-                .to_string(),
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
 
@@ -273,12 +351,15 @@ pub fn decrypt_database_streaming(
 
     writer.flush().map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_write_temp_db",
-                path = output_path.display(),
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_write_temp_db",
+                    path = output_path.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
@@ -294,44 +375,56 @@ fn write_encrypted_file_header<W: Write>(
     // Write magic number
     writer.write_all(MAGIC).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_write_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_write_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
     // Write version
     writer.write_all(&1u32.to_le_bytes()).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_write_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_write_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
     // Write random key
     writer.write_all(random_key).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_write_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_write_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
     // Write nonce
     writer.write_all(nonce).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_write_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_write_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
@@ -344,17 +437,22 @@ fn read_encrypted_file_header<R: Read>(reader: &mut R) -> Result<([u8; 8], [u8; 
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_read_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_read_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
     if magic != *MAGIC {
         return Err(StoreError::IoError(
-            t!("db.backup.invalid_magic_number").to_string(),
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!("db.backup.invalid_magic_number").to_string(),
+            ),
         ));
     }
 
@@ -362,18 +460,23 @@ fn read_encrypted_file_header<R: Read>(reader: &mut R) -> Result<([u8; 8], [u8; 
     let mut version_bytes = [0u8; 4];
     reader.read_exact(&mut version_bytes).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_read_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_read_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
     let version = u32::from_le_bytes(version_bytes);
     if version != 1 {
         return Err(StoreError::IoError(
-            t!("db.backup.unsupported_version").to_string(),
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!("db.backup.unsupported_version").to_string(),
+            ),
         ));
     }
 
@@ -381,11 +484,14 @@ fn read_encrypted_file_header<R: Read>(reader: &mut R) -> Result<([u8; 8], [u8; 
     let mut random_key = [0u8; 8];
     reader.read_exact(&mut random_key).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_read_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_read_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
@@ -393,11 +499,14 @@ fn read_encrypted_file_header<R: Read>(reader: &mut R) -> Result<([u8; 8], [u8; 
     let mut nonce = [0u8; 12];
     reader.read_exact(&mut nonce).map_err(|e| {
         StoreError::IoError(
-            t!(
-                "db.backup.failed_to_read_encrypted_file",
-                error = e.to_string()
+            crate::error_diagnostics::FailureMessage::leaf(
+                t!(
+                    "db.backup.failed_to_read_encrypted_file",
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
         )
     })?;
 
@@ -407,9 +516,69 @@ fn read_encrypted_file_header<R: Read>(reader: &mut R) -> Result<([u8; 8], [u8; 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_diagnostics::ErrorProjection;
+    use std::error::Error;
     use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
+
+    #[test]
+    fn backup_crypto_io_wrapper_keeps_legacy_and_typed_root() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("missing.db");
+        let cause = File::open(&missing).unwrap_err();
+        let error =
+            encrypt_database_streaming(&missing, &temp_dir.path().join("encrypted.db"), "backup")
+                .unwrap_err();
+        let legacy = t!(
+            "db.backup.failed_to_open_database_file",
+            error = cause.to_string()
+        )
+        .to_string();
+        assert_eq!(error.to_string(), legacy);
+        assert_eq!(serde_json::to_value(&error).unwrap()["message"], legacy);
+        assert_eq!(error.error_origin().message, cause.to_string());
+        assert_eq!(error.user_error().message, cause.to_string());
+    }
+
+    #[test]
+    fn backup_crypto_header_wrapper_retains_nested_io_source() {
+        #[derive(Debug)]
+        struct DeviceError(std::io::Error);
+        impl std::fmt::Display for DeviceError {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("device wrapper")
+            }
+        }
+        impl Error for DeviceError {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        struct FailingWriter;
+        impl Write for FailingWriter {
+            fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other(DeviceError(std::io::Error::other(
+                    "device unavailable",
+                ))))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let cause = FailingWriter.write(&[]).unwrap_err();
+        let root = cause.source().unwrap().to_string();
+        let error = write_encrypted_file_header(&mut FailingWriter, &[0; 8], &[0; 12]).unwrap_err();
+        let legacy = t!(
+            "db.backup.failed_to_write_encrypted_file",
+            error = cause.to_string()
+        )
+        .to_string();
+        assert_eq!(error.to_string(), legacy);
+        assert_eq!(error.error_origin().message, root);
+        assert_eq!(error.user_error().message, root);
+        assert!(!error.error_origin().sources.is_empty());
+    }
 
     #[test]
     fn test_generate_encryption_key_consistency() {

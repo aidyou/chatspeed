@@ -417,6 +417,8 @@ import { useI18n } from 'vue-i18n'
 import { useMcpStore } from '@/stores/mcp'
 import { useCapabilityStore } from '@/stores/capability'
 import { mcpDisplayState } from '@/libs/capability.js'
+import { formatUserError } from '@/libs/error'
+import { FrontendAppError } from '@/libs/tauri'
 import { openUrl } from '@/libs/util'
 import { ElMessageBox, ElTooltip } from 'element-plus'
 import McpExecuteDialog from './McpExecuteDialog.vue'
@@ -764,10 +766,16 @@ const handleSubmit = async () => {
   } catch (e) {
     let langKey = isEditMode.value ? 'settings.mcp.updateFailed' : 'settings.mcp.addFailed'
     if (e instanceof FrontendAppError) {
-      showMessage(t(langKey, { error: e.toFormattedString() }), 'error')
+      showMessage(
+        t(langKey, { error: formatUserError(e, t('common.errorFallback')) }),
+        'error'
+      )
       console.error('Error saving MCP server:', e.originalError)
     } else {
-      showMessage(t(langKey, { error: e.message || String(e) }), 'error')
+      showMessage(
+        t(langKey, { error: formatUserError(e, t('common.errorFallback')) }),
+        'error'
+      )
       console.error('Error saving MCP server:', e)
     }
   } finally {
@@ -806,10 +814,20 @@ const executeDeleteServer = async () => {
     serverToOperateOn.value = null
   } catch (e) {
     if (e instanceof FrontendAppError) {
-      showMessage(t('settings.mcp.operationFailed', { error: e.toFormattedString() }), 'error')
+      showMessage(
+        t('settings.mcp.operationFailed', {
+          error: formatUserError(e, t('common.errorFallback'))
+        }),
+        'error'
+      )
       console.error('Error deleting MCP server:', e.originalError)
     } else {
-      showMessage(t('settings.mcp.operationFailed', { error: e.message || String(e) }), 'error')
+      showMessage(
+        t('settings.mcp.operationFailed', {
+          error: formatUserError(e, t('common.errorFallback'))
+        }),
+        'error'
+      )
       console.error('Error deleting MCP server:', e)
     }
   }
@@ -838,10 +856,22 @@ const toggleServerStatus = async server => {
     server.disabled = originalDisabled
     const langKey = originalDisabled ? 'settings.mcp.enableFailed' : 'settings.mcp.disableFailed'
     if (e instanceof FrontendAppError) {
-      showMessageBox(t(langKey, { error: e.toFormattedString(), name: server.name }), 'error')
+      showMessageBox(
+        t(langKey, {
+          error: formatUserError(e, t('common.errorFallback')),
+          name: server.name
+        }),
+        'error'
+      )
       console.error('Error toggling server status:', e.originalError)
     } else {
-      showMessageBox(t(langKey, { error: e.message || String(e), name: server.name }), 'error')
+      showMessageBox(
+        t(langKey, {
+          error: formatUserError(e, t('common.errorFallback')),
+          name: server.name
+        }),
+        'error'
+      )
       console.error('Error toggling server status:', e)
     }
   } finally {
@@ -861,7 +891,7 @@ const restartMcpServer = async server => {
     if (e instanceof FrontendAppError) {
       showMessage(
         t('settings.mcp.restartFailed', {
-          error: e.toFormattedString(),
+          error: formatUserError(e, t('common.errorFallback')),
           name: server.name
         }),
         'error'
@@ -870,7 +900,7 @@ const restartMcpServer = async server => {
     } else {
       showMessage(
         t('settings.mcp.restartFailed', {
-          error: e.message || String(e),
+          error: formatUserError(e, t('common.errorFallback')),
           name: server.name
         }),
         'error'
@@ -899,10 +929,20 @@ const toggleServerToolsExpansion = async server => {
       await mcpStore.fetchMcpServerTools(server.id)
     } catch (e) {
       if (e instanceof FrontendAppError) {
-        showMessage(t('settings.mcp.fetchToolsFailed', { error: e.toFormattedString() }), 'error') // Pass 'error' as type
+        showMessage(
+          t('settings.mcp.fetchToolsFailed', {
+            error: formatUserError(e, t('common.errorFallback'))
+          }),
+          'error'
+        ) // Pass 'error' as type
         console.error('Error fetching MCP server tools:', e.originalError)
       } else {
-        showMessage(t('settings.mcp.fetchToolsFailed', { error: e.message || String(e) }), 'error') // Pass 'error' as type
+        showMessage(
+          t('settings.mcp.fetchToolsFailed', {
+            error: formatUserError(e, t('common.errorFallback'))
+          }),
+          'error'
+        ) // Pass 'error' as type
         console.error('Error fetching MCP server tools:', e)
       }
       uiState.expanded = false // Collapse on error
@@ -973,10 +1013,20 @@ const toggleDisableTool = (serverId, tool) => {
     mcpStore.toggleDisableTool(serverId, tool)
   } catch (e) {
     if (e instanceof FrontendAppError) {
-      showMessage(t('settings.mcp.operationFailed', { error: e.toFormattedString() }), 'error')
+      showMessage(
+        t('settings.mcp.operationFailed', {
+          error: formatUserError(e, t('common.errorFallback'))
+        }),
+        'error'
+      )
       console.error('Error toggling tool status:', e.originalError)
     } else {
-      showMessage(t('settings.mcp.operationFailed', { error: e.message || String(e) }), 'error')
+      showMessage(
+        t('settings.mcp.operationFailed', {
+          error: formatUserError(e, t('common.errorFallback'))
+        }),
+        'error'
+      )
       console.error('Error toggling tool status:', e)
     }
   }
@@ -1001,13 +1051,10 @@ const loadPresetMcps = async () => {
   } catch (error) {
     if (error instanceof FrontendAppError) {
       console.error(`Failed to load preset MCPs: ${error.toFormattedString()}`, error.originalError)
-      showMessage(t('settings.mcp.loadPresetError', { error: error.toFormattedString() }), 'error')
+      showMessage(formatUserError(error, t('settings.mcp.loadPresetError')), 'error')
     } else {
       console.error('Failed to load preset MCPs:', error)
-      showMessage(
-        t('settings.mcp.loadPresetError', { error: error.message || String(error) }),
-        'error'
-      )
+      showMessage(formatUserError(error, t('settings.mcp.loadPresetError')), 'error')
     }
     presetMcps.value = [] // Clear on error
   } finally {

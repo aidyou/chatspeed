@@ -1869,7 +1869,7 @@ mod tests {
         assert!(LlmProcessor::should_retry_ai_error(
             &crate::ai::error::AiError::StreamProcessingFailed {
                 provider: "provider".to_string(),
-                details: "connection reset".to_string(),
+                details: "connection reset".to_string().into(),
             }
         ));
     }

@@ -1,3 +1,6 @@
+use crate::error_diagnostics::{
+    log_error_diagnostic, ErrorOrigin, ErrorProjection, FailureMessage,
+};
 use async_trait::async_trait;
 use reqwest::Response;
 use serde::Serialize;
@@ -23,6 +26,7 @@ use crate::db::{AiModel, ModelConfig};
 use crate::{
     ai::error::AiError, constants::INTERNAL_CCPROXY_API_KEY, db::MainStore, impl_stoppable,
 };
+use chatspeed_contracts::UserErrorPresentation;
 
 use super::codex_header_helper;
 use super::openai_responses::{self, ResponsesRequestContext};
@@ -75,10 +79,27 @@ fn chat_error_payload(response: &crate::ai::network::ApiResponse) -> String {
         .unwrap_or_else(|| response.content.clone())
 }
 
-fn chat_error_metadata(metadata: &ChatMetadata, status_code: u16) -> Option<Value> {
-    let mut value = metadata.to_value().unwrap_or_else(|| json!({}));
+/// Attaches the canonical opaque user projection to an error chunk.
+///
+/// The request metadata is optional: an error that happens before any metadata
+/// exists still carries a safe `user_error`, so the UI never falls back to the
+/// legacy diagnostic text.
+fn chat_error_metadata(
+    metadata: Option<&ChatMetadata>,
+    upstream_status_code: Option<u16>,
+    user_error: UserErrorPresentation,
+) -> Option<Value> {
+    let mut value = metadata
+        .and_then(ChatMetadata::to_value)
+        .unwrap_or_else(|| json!({}));
+    if !value.is_object() {
+        value = json!({});
+    }
     if let Some(object) = value.as_object_mut() {
-        object.insert("upstream_status_code".to_string(), json!(status_code));
+        if let Some(status_code) = upstream_status_code {
+            object.insert("upstream_status_code".to_string(), json!(status_code));
+        }
+        object.insert("user_error".to_string(), json!(user_error));
     }
     Some(value)
 }
@@ -402,9 +423,10 @@ impl OpenAIChat {
                 let err = AiError::ApiRequestFailed {
                     status_code: 500,
                     provider: provider_name.clone(),
-                    details: format!("Failed to read response body: {}", e),
+                    details: FailureMessage::leaf(format!("Failed to read response body: {}", e))
+                        .with_origin(ErrorOrigin::from_error(&e)),
                 };
-                log::error!("{} response reading error: {}", provider_name, err);
+                log_error_diagnostic(&err.diagnostic());
                 err
             })?;
             return self
@@ -447,9 +469,9 @@ impl OpenAIChat {
                     let chunks = self.client.process_stream_chunk(chunk).await.map_err(|e| {
                         let err = AiError::StreamProcessingFailed {
                             provider: provider_name.clone(),
-                            details: e.to_string(),
+                            details: e.into(),
                         };
-                        log::error!("{} stream processing error: {}", provider_name, err);
+                        log_error_diagnostic(&err.diagnostic());
 
                         let error_payload = JsonErrorPayload {
                             status: 500, // Internal processing error
@@ -462,7 +484,7 @@ impl OpenAIChat {
                             chat_id.clone(),
                             chunk,
                             MessageType::Error,
-                            metadata_option.as_ref().and_then(|m| m.to_value()),
+                            chat_error_metadata(metadata_option.as_ref(), None, err.user_error()),
                             Some(FinishReason::Error),
                         ));
                         err
@@ -507,17 +529,22 @@ impl OpenAIChat {
                             if !content.is_empty() {
                                 let msg_type = chunk.msg_type.clone().unwrap_or(MessageType::Text);
                                 if msg_type == MessageType::Error {
+                                    let err = AiError::StreamProcessingFailed {
+                                        provider: provider_name.clone(),
+                                        details: content.clone().into(),
+                                    };
                                     callback(ChatResponse::new_with_arc(
                                         chat_id.clone(),
-                                        content.clone(),
+                                        content,
                                         MessageType::Error,
-                                        metadata_option.as_ref().and_then(|m| m.to_value()),
+                                        chat_error_metadata(
+                                            metadata_option.as_ref(),
+                                            None,
+                                            err.user_error(),
+                                        ),
                                         Some(FinishReason::Error),
                                     ));
-                                    return Err(AiError::StreamProcessingFailed {
-                                        provider: provider_name.clone(),
-                                        details: content,
-                                    });
+                                    return Err(err);
                                 }
 
                                 let (visible_content, inline_reasoning_chunk) =
@@ -607,9 +634,9 @@ impl OpenAIChat {
                 Err(e) => {
                     let err = AiError::StreamProcessingFailed {
                         provider: provider_name.clone(),
-                        details: e.to_string(),
+                        details: e.into(),
                     };
-                    log::error!("{} stream event error: {}", provider_name, err);
+                    log_error_diagnostic(&err.diagnostic());
 
                     let error_payload = JsonErrorPayload {
                         status: 500, // Internal processing error
@@ -622,7 +649,7 @@ impl OpenAIChat {
                         chat_id.clone(),
                         chunk,
                         MessageType::Error,
-                        metadata_option.as_ref().and_then(|m| m.to_value()),
+                        chat_error_metadata(metadata_option.as_ref(), None, err.user_error()),
                         None,
                     ));
                     return Err(err);
@@ -721,9 +748,10 @@ impl OpenAIChat {
             let err = AiError::ApiRequestFailed {
                 status_code: 500,
                 provider: provider_name.clone(),
-                details: format!("Failed to parse response: {}", e),
+                details: FailureMessage::leaf(format!("Failed to parse response: {}", e))
+                    .with_origin(ErrorOrigin::from_error(&e)),
             };
-            log::error!("{} response parsing error: {}", provider_name, err);
+            log_error_diagnostic(&err.diagnostic());
             err
         })?;
 
@@ -896,9 +924,9 @@ impl OpenAIChat {
             }
             Err(e) => {
                 let err = AiError::ToolCallSerializationFailed {
-                    details: e.to_string(),
+                    details: FailureMessage::from_error(&e),
                 };
-                log::error!("Failed to serialize AssistantAction message: {}", err);
+                log_error_diagnostic(&err.diagnostic());
 
                 let error_payload = JsonErrorPayload {
                     status: 500,
@@ -911,7 +939,7 @@ impl OpenAIChat {
                     chat_id.to_string(),
                     chunk,
                     MessageType::Error,
-                    metadata_option.as_ref().and_then(|m| m.to_value()),
+                    chat_error_metadata(metadata_option.as_ref(), None, err.user_error()),
                     Some(FinishReason::Error),
                 ));
                 return;
@@ -936,14 +964,9 @@ impl OpenAIChat {
                 }
                 Err(e) => {
                     let err = AiError::ToolCallSerializationFailed {
-                        details: e.to_string(),
+                        details: FailureMessage::from_error(&e),
                     };
-                    log::error!(
-                        "{} tool call serialization error for tool {:?}: {}",
-                        provider_name,
-                        trimmed_tcd.name,
-                        err
-                    );
+                    log_error_diagnostic(&err.diagnostic());
                     let error_payload = JsonErrorPayload {
                         status: 500,
                         message: &err.to_string(),
@@ -954,7 +977,7 @@ impl OpenAIChat {
                         chat_id.to_string(),
                         chunk,
                         MessageType::Error,
-                        metadata_option.as_ref().and_then(|m| m.to_value()),
+                        chat_error_metadata(metadata_option.as_ref(), None, err.user_error()),
                         Some(FinishReason::Error),
                     ));
                 }
@@ -1186,14 +1209,16 @@ fn responses_reasoning_summary(model_config: Option<&ModelConfig>) -> Option<&'s
 #[cfg(test)]
 mod tests {
     use super::{
-        api_error_details, api_request_error, build_prompt_cache_key,
+        api_error_details, api_request_error, build_prompt_cache_key, chat_error_metadata,
         extract_inline_reasoning_content, extract_reasoning_from_openai_message,
         responses_reasoning_summary, sanitize_reasoning_content, should_emit_reasoning_chunk,
         EmptyHtmlCommentStreamState, InlineThinkStreamState, OpenAIChat,
     };
     use crate::ai::error::AiError;
     use crate::ai::network::{ApiResponse, ResponseError};
+    use crate::ai::traits::chat::ChatMetadata;
     use crate::db::ModelConfig;
+    use crate::error_diagnostics::ErrorProjection;
     use serde_json::json;
 
     #[test]
@@ -1221,6 +1246,68 @@ mod tests {
                 ..
             } if details == raw_body
         ));
+    }
+
+    #[test]
+    fn raw_api_error_keeps_legacy_body_and_projects_safe_user_error() {
+        let raw_body = r#"{"error":{"type":"quota_exceeded","message":"quota exhausted\nAuthorization: Bearer CANARY"}}"#;
+        let response = ApiResponse {
+            content: serde_json::to_string(&ResponseError::new(
+                Some(429),
+                Some("quota_exceeded".to_string()),
+                "quota exhausted".to_string(),
+            ))
+            .unwrap(),
+            raw_error_body: Some(raw_body.to_string()),
+            is_error: true,
+            status_code: 429,
+            raw_response: None,
+        };
+        let error = api_request_error(&response, "provider".to_string());
+        assert!(matches!(
+            &error,
+            AiError::RawApiRequestFailed { details, .. } if details == raw_body
+        ));
+        assert_eq!(error.to_string(), raw_body);
+
+        let metadata = chat_error_metadata(
+            Some(&ChatMetadata::default()),
+            Some(response.status_code),
+            error.user_error(),
+        )
+        .expect("error metadata");
+        assert_eq!(metadata["upstream_status_code"], json!(429));
+        assert_eq!(metadata["user_error"]["upstream_status"], json!(429));
+        let message = metadata["user_error"]["message"]
+            .as_str()
+            .expect("safe user message");
+        assert!(message.starts_with("quota exhausted"));
+        assert!(!message.contains("CANARY"));
+    }
+
+    #[test]
+    fn error_metadata_is_present_without_request_metadata_or_upstream_status() {
+        let error = AiError::StreamProcessingFailed {
+            provider: "provider".to_string(),
+            details: "socket closed".into(),
+        };
+        let missing = chat_error_metadata(None, None, error.user_error())
+            .expect("metadata even without a request payload");
+        assert_eq!(missing, json!({ "user_error": error.user_error() }));
+        assert!(missing.get("upstream_status_code").is_none());
+
+        let existing = chat_error_metadata(
+            Some(&ChatMetadata {
+                window_label: Some("main".to_string()),
+                ..Default::default()
+            }),
+            None,
+            error.user_error(),
+        )
+        .expect("metadata with request payload");
+        assert_eq!(existing["windowLabel"], json!("main"));
+        assert_eq!(existing["user_error"], json!(error.user_error()));
+        assert!(existing.get("upstream_status_code").is_none());
     }
 
     #[test]
@@ -1680,7 +1767,7 @@ impl AiChatTrait for OpenAIChat {
                 .config
                 .get_ai_model_by_id(provider_id)
                 .map_err(|e| {
-                    let err = AiError::InitFailed(e.to_string());
+                    let err = AiError::InitFailed(FailureMessage::from_error(&e));
                     let error_payload = JsonErrorPayload {
                         status: 500,
                         message: &err.to_string(),
@@ -1691,7 +1778,7 @@ impl AiChatTrait for OpenAIChat {
                         chat_id.clone(),
                         chunk,
                         MessageType::Error,
-                        metadata.as_ref().and_then(|m| m.to_value()),
+                        chat_error_metadata(metadata.as_ref(), None, err.user_error()),
                         Some(FinishReason::Error),
                     ));
                     err
@@ -1957,7 +2044,7 @@ impl AiChatTrait for OpenAIChat {
         let mut transient_retries = 0;
         let response = loop {
             if self.should_stop().await {
-                break Err("chat request stopped".to_string());
+                break Err(FailureMessage::leaf("chat request stopped"));
             }
 
             match self
@@ -1988,7 +2075,7 @@ impl AiChatTrait for OpenAIChat {
                         delay_seconds
                     );
                     if !self.wait_for_transient_retry(delay_seconds).await {
-                        break Err("chat request stopped".to_string());
+                        break Err(FailureMessage::leaf("chat request stopped"));
                     }
                     continue;
                 }
@@ -2008,7 +2095,7 @@ impl AiChatTrait for OpenAIChat {
                         error
                     );
                     if !self.wait_for_transient_retry(delay_seconds).await {
-                        break Err("chat request stopped".to_string());
+                        break Err(FailureMessage::leaf("chat request stopped"));
                     }
                     continue;
                 }
@@ -2033,7 +2120,7 @@ impl AiChatTrait for OpenAIChat {
                 chat_id.clone(),
                 chunk,
                 MessageType::Error,
-                merged_metadata.to_value(),
+                chat_error_metadata(Some(&merged_metadata), None, err.user_error()),
                 Some(FinishReason::Error),
             ));
             err
@@ -2048,7 +2135,7 @@ impl AiChatTrait for OpenAIChat {
                 chat_id.clone(),
                 chunk,
                 MessageType::Error,
-                chat_error_metadata(&merged_metadata, status_code),
+                chat_error_metadata(Some(&merged_metadata), Some(status_code), err.user_error()),
                 Some(FinishReason::Error),
             ));
             return Err(err);

@@ -85,11 +85,14 @@ Activation will inject the skill's specific instructions into your context."#
 
             Ok(ToolCallResult::success(Some(result_content), None))
         } else {
-            Err(ToolError::ExecutionFailed(format!(
-                "Skill '{}' not found. Available skills: {:?}",
-                skill_name,
-                self.available_skills.keys().collect::<Vec<_>>()
-            )))
+            Err(ToolError::ExecutionFailed(
+                format!(
+                    "Skill '{}' not found. Available skills: {:?}",
+                    skill_name,
+                    self.available_skills.keys().collect::<Vec<_>>()
+                )
+                .into(),
+            ))
         }
     }
 }
@@ -166,9 +169,9 @@ mod tests {
 
         match result.unwrap_err() {
             ToolError::ExecutionFailed(msg) => {
-                assert!(msg.contains("Skill 'nonexistent' not found"));
-                assert!(msg.contains("pdf"));
-                assert!(msg.contains("commit"));
+                assert!(msg.as_str().contains("Skill 'nonexistent' not found"));
+                assert!(msg.as_str().contains("pdf"));
+                assert!(msg.as_str().contains("commit"));
             }
             _ => panic!("Expected ExecutionFailed error"),
         }
@@ -199,7 +202,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             ToolError::ExecutionFailed(msg) => {
-                assert!(msg.contains("Skill '' not found"));
+                assert!(msg.as_str().contains("Skill '' not found"));
             }
             _ => panic!("Expected ExecutionFailed error"),
         }

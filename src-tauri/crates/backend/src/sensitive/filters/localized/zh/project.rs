@@ -12,7 +12,7 @@ impl ProjectFilter {
         let regex = Regex::new(r#"(?:项目名称|工程名称|课题名称|项目|标段名称)[:：]\s*([^\n\r]+)"#)
             .map_err(|e| SensitiveError::RegexCompilationFailed {
                 pattern: "zh_project_regex".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             })?;
         Ok(Self { regex })
     }

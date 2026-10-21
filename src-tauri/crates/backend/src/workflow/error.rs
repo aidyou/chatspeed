@@ -80,7 +80,9 @@ impl From<crate::tools::ToolError> for WorkflowError {
     fn from(err: crate::tools::ToolError) -> Self {
         match err {
             crate::tools::ToolError::Config(msg) => WorkflowError::Config(msg),
-            crate::tools::ToolError::Initialization(msg) => WorkflowError::Initialization(msg),
+            crate::tools::ToolError::Initialization(msg) => {
+                WorkflowError::Initialization(msg.to_string())
+            }
             crate::tools::ToolError::FunctionNotFound(name) => {
                 WorkflowError::Execution(format!("Function not found: {}", name))
             }
@@ -98,7 +100,9 @@ impl From<crate::tools::ToolError> for WorkflowError {
             crate::tools::ToolError::AuthError(msg) => {
                 WorkflowError::Execution(format!("Auth Error: {}", msg))
             }
-            crate::tools::ToolError::ExecutionFailed(msg) => WorkflowError::Execution(msg),
+            crate::tools::ToolError::ExecutionFailed(msg) => {
+                WorkflowError::Execution(msg.to_string())
+            }
             crate::tools::ToolError::SandboxFailure(failure) => WorkflowError::Execution(
                 serde_json::to_string(&failure).unwrap_or_else(|_| failure.message),
             ),

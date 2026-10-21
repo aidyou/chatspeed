@@ -43,6 +43,7 @@ use crate::ai::traits::chat::ModelDetails;
 use crate::error::AppError;
 use crate::libs::lang::{get_available_lang, lang_to_iso_639_1};
 use crate::runtime_client::RuntimeSupervisor;
+use chatspeed_runtime_backend::error_diagnostics::FailureMessage;
 use rust_i18n::t;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -132,14 +133,18 @@ pub fn detect_language(text: &str) -> crate::error::Result<Value> {
 
     if let Some(info) = detected_lang {
         let languages = get_available_lang().map_err(|e| AppError::General {
-            message: t!("chat.failed_to_get_available_languages", error = e).to_string(),
+            message: FailureMessage::leaf(
+                t!("chat.failed_to_get_available_languages", error = e).to_string(),
+            ),
         })?;
         let lang_code = lang_to_iso_639_1(&info.lang().code()).map_err(|e| AppError::General {
-            message: t!(
-                "chat.failed_to_convert_language_code",
-                error = e.to_string()
-            )
-            .to_string(),
+            message: FailureMessage::leaf(
+                t!(
+                    "chat.failed_to_convert_language_code",
+                    error = e.to_string()
+                )
+                .to_string(),
+            ),
         })?;
 
         if let Some(lang_name) = languages.get(lang_code) {
@@ -149,7 +154,7 @@ pub fn detect_language(text: &str) -> crate::error::Result<Value> {
         }
     } else {
         Err(AppError::General {
-            message: t!("chat.failed_to_detect_language").to_string(),
+            message: t!("chat.failed_to_detect_language").to_string().into(),
         })
     }
 }

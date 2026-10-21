@@ -62,17 +62,20 @@ pub(crate) fn contains_builtin_cscli_command(command: &str) -> bool {
 }
 
 fn bundled_cscli_path() -> Result<std::path::PathBuf, ToolError> {
-    let executable =
-        std::env::current_exe().map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+    let executable = std::env::current_exe().map_err(|error| {
+        ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(error.to_string())
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )
+    })?;
     let directory = executable.parent().ok_or_else(|| {
         ToolError::ExecutionFailed("Application executable has no parent directory".into())
     })?;
     let cli = directory.join(if cfg!(windows) { "cscli.exe" } else { "cscli" });
     if !cli.is_file() {
-        return Err(ToolError::ExecutionFailed(format!(
-            "Bundled CLI not found: {}",
-            cli.display()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("Bundled CLI not found: {}", cli.display()).into(),
+        ));
     }
     Ok(cli)
 }
@@ -1716,7 +1719,7 @@ impl ToolDefinition for ShellExecute {
         let execution_plan = self.execution_plan_for_params(tool_id, command_str).await?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(
-                Self::execution_plan_denied_message(&execution_plan),
+                Self::execution_plan_denied_message(&execution_plan).into(),
             ));
         }
         let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
@@ -1960,9 +1963,12 @@ async fn run_host_output_with_timeout(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     configure_process_group(&mut command);
-    let child = command
-        .spawn()
-        .map_err(|error| ToolError::ExecutionFailed(format!("Spawn failed: {error}")))?;
+    let child = command.spawn().map_err(|error| {
+        ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(format!("Spawn failed: {error}"))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )
+    })?;
     let mut process_guard = StageProcessGuard::new_owned(&child, cancel);
 
     match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
@@ -1976,12 +1982,15 @@ async fn run_host_output_with_timeout(
             process_guard.disarm();
             Ok(output)
         }
-        Ok(Err(error)) => Err(ToolError::ExecutionFailed(format!(
-            "Failed to wait for command: {error}"
-        ))),
-        Err(_) => Err(ToolError::ExecutionFailed(format!(
-            "Command timed out after {timeout_ms}ms"
-        ))),
+        Ok(Err(error)) => Err(ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(format!(
+                "Failed to wait for command: {error}"
+            ))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )),
+        Err(_) => Err(ToolError::ExecutionFailed(
+            format!("Command timed out after {timeout_ms}ms").into(),
+        )),
     }
 }
 
@@ -2119,9 +2128,9 @@ async fn run_stage_with_deadline(
 
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        return Err(ToolError::ExecutionFailed(format!(
-            "Command timed out after {timeout_ms}ms"
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("Command timed out after {timeout_ms}ms").into(),
+        ));
     }
 
     let mut command = Command::new("sh");
@@ -2132,18 +2141,23 @@ async fn run_stage_with_deadline(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     configure_process_group(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|error| ToolError::ExecutionFailed(format!("Failed to spawn stage: {error}")))?;
+    let mut child = command.spawn().map_err(|error| {
+        ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(format!(
+                "Failed to spawn stage: {error}"
+            ))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+        )
+    })?;
     let mut process_guard = StageProcessGuard::new(&child);
     let mut stdout = child
         .stdout
         .take()
-        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stage stdout".to_string()))?;
+        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stage stdout".into()))?;
     let mut stderr = child
         .stderr
         .take()
-        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stage stderr".to_string()))?;
+        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stage stderr".into()))?;
     let stdout_task = tokio::spawn(async move {
         let mut output = Vec::new();
         stdout.read_to_end(&mut output).await.map(|_| output)
@@ -2155,30 +2169,59 @@ async fn run_stage_with_deadline(
 
     let status = match timeout(remaining, child.wait()).await {
         Ok(result) => result.map_err(|error| {
-            ToolError::ExecutionFailed(format!("Failed to wait for stage process: {error}"))
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to wait for stage process: {error}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+            )
         })?,
         Err(_) => {
             terminate_stage_process(&mut child, &mut process_guard).await;
             stdout_task.abort();
             stderr_task.abort();
-            return Err(ToolError::ExecutionFailed(format!(
-                "Command timed out after {timeout_ms}ms"
-            )));
+            return Err(ToolError::ExecutionFailed(
+                format!("Command timed out after {timeout_ms}ms").into(),
+            ));
         }
     };
     let remaining = deadline.saturating_duration_since(Instant::now());
     let readers = async {
         let stdout = stdout_task
             .await
-            .map_err(|error| ToolError::ExecutionFailed(format!("stdout reader failed: {error}")))?
             .map_err(|error| {
-                ToolError::ExecutionFailed(format!("Failed to read stdout: {error}"))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "stdout reader failed: {error}"
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                )
+            })?
+            .map_err(|error| {
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to read stdout: {error}"
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                )
             })?;
         let stderr = stderr_task
             .await
-            .map_err(|error| ToolError::ExecutionFailed(format!("stderr reader failed: {error}")))?
             .map_err(|error| {
-                ToolError::ExecutionFailed(format!("Failed to read stderr: {error}"))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "stderr reader failed: {error}"
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                )
+            })?
+            .map_err(|error| {
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to read stderr: {error}"
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                )
             })?;
         Ok::<_, ToolError>((stdout, stderr))
     };
@@ -2186,9 +2229,9 @@ async fn run_stage_with_deadline(
         Ok(result) => result?,
         Err(_) => {
             process_guard.kill_group();
-            return Err(ToolError::ExecutionFailed(format!(
-                "Command timed out after {timeout_ms}ms"
-            )));
+            return Err(ToolError::ExecutionFailed(
+                format!("Command timed out after {timeout_ms}ms").into(),
+            ));
         }
     };
     process_guard.disarm();
@@ -2292,7 +2335,12 @@ impl ShellExecute {
         let mut cwd = match working_dir {
             Some(path) => path,
             None => std::env::current_dir().map_err(|error| {
-                ToolError::ExecutionFailed(format!("Failed to resolve working directory: {error}"))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to resolve working directory: {error}"
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                )
             })?,
         };
 
@@ -2308,9 +2356,7 @@ impl ShellExecute {
                     .policy_engine
                     .path_guard
                     .read()
-                    .map_err(|_| {
-                        ToolError::ExecutionFailed("Path guard lock is poisoned".to_string())
-                    })?
+                    .map_err(|_| ToolError::ExecutionFailed("Path guard lock is poisoned".into()))?
                     .validate(&requested, self.planning_mode, false, false)
                     .map_err(|error| ToolError::Security(error.to_string()))?;
                 Some(validated)
@@ -2319,9 +2365,12 @@ impl ShellExecute {
         };
 
         let mut writer = ToolOutputWriter::create().map_err(|error| {
-            ToolError::ExecutionFailed(format!(
-                "Failed to create compound command output file: {error}"
-            ))
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to create compound command output file: {error}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+            )
         })?;
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let mut records = Vec::with_capacity(plan.stages.len());
@@ -2355,7 +2404,7 @@ impl ShellExecute {
                         .as_ref()
                         .ok_or_else(|| {
                             ToolError::ExecutionFailed(
-                                "Validated navigation target is missing".to_string(),
+                                "Validated navigation target is missing".into(),
                             )
                         })?
                         .clone();
@@ -2379,9 +2428,9 @@ impl ShellExecute {
                             &stderr,
                         ))
                         .map_err(|error| {
-                            ToolError::ExecutionFailed(format!(
+                            ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
                                 "Failed to persist compound command output after execution started: {error}"
-                            ))
+                            )).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)))
                         })?;
                     records.push(CompoundShellStageResult {
                         index,
@@ -2411,9 +2460,9 @@ impl ShellExecute {
                             &stderr,
                         ))
                         .map_err(|error| {
-                            ToolError::ExecutionFailed(format!(
+                            ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
                                 "Failed to persist compound command output after execution started: {error}"
-                            ))
+                            )).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)))
                         })?;
                     prepared.raw_content.clear();
                     records.push(CompoundShellStageResult {
@@ -2432,9 +2481,12 @@ impl ShellExecute {
         }
 
         let persisted = writer.finalize().map_err(|error| {
-            ToolError::ExecutionFailed(format!(
-                "Failed to finalize compound command output after execution started: {error}"
-            ))
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to finalize compound command output after execution started: {error}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+            )
         })?;
         Ok(build_compound_shell_tool_result(
             final_exit_code,
@@ -2458,7 +2510,12 @@ impl ShellExecute {
         let mut cwd = match working_dir {
             Some(path) => path,
             None => std::env::current_dir().map_err(|error| {
-                ToolError::ExecutionFailed(format!("Failed to resolve working directory: {error}"))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to resolve working directory: {error}"
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                )
             })?,
         };
         let validated_navigation = match plan.stages.first() {
@@ -2474,7 +2531,7 @@ impl ShellExecute {
                         .path_guard
                         .read()
                         .map_err(|_| {
-                            ToolError::ExecutionFailed("Path guard lock is poisoned".to_string())
+                            ToolError::ExecutionFailed("Path guard lock is poisoned".into())
                         })?
                         .validate(&requested, self.planning_mode, false, false)
                         .map_err(|error| ToolError::Security(error.to_string()))?,
@@ -2483,9 +2540,12 @@ impl ShellExecute {
             _ => None,
         };
         let mut writer = ToolOutputWriter::create().map_err(|error| {
-            ToolError::ExecutionFailed(format!(
-                "Failed to create compound command output file: {error}"
-            ))
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to create compound command output file: {error}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+            )
         })?;
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let mut records = Vec::with_capacity(plan.stages.len());
@@ -2531,7 +2591,7 @@ impl ShellExecute {
                         .as_ref()
                         .ok_or_else(|| {
                             ToolError::ExecutionFailed(
-                                "Validated navigation target is missing".to_string(),
+                                "Validated navigation target is missing".into(),
                             )
                         })?
                         .clone();
@@ -2564,9 +2624,9 @@ impl ShellExecute {
                             &stderr,
                         ))
                         .map_err(|error| {
-                            ToolError::ExecutionFailed(format!(
+                            ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
                                 "Failed to persist compound command output after execution started: {error}"
-                            ))
+                            )).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)))
                         })?;
                     prepared.raw_content.clear();
                     records.push(CompoundShellStageResult {
@@ -2598,9 +2658,9 @@ impl ShellExecute {
                             &stderr,
                         ))
                         .map_err(|error| {
-                            ToolError::ExecutionFailed(format!(
+                            ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
                                 "Failed to persist compound command output after execution started: {error}"
-                            ))
+                            )).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)))
                         })?;
                     prepared.raw_content.clear();
                     records.push(CompoundShellStageResult {
@@ -2626,9 +2686,12 @@ impl ShellExecute {
         )
         .await;
         let persisted = writer.finalize().map_err(|error| {
-            ToolError::ExecutionFailed(format!(
-                "Failed to finalize compound command output after execution started: {error}"
-            ))
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to finalize compound command output after execution started: {error}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+            )
         })?;
         Ok(build_compound_shell_tool_result(
             final_exit_code,
@@ -2661,15 +2724,22 @@ impl ShellExecute {
             .kill_on_drop(true);
         configure_process_group(&mut command);
         let mut child = command.spawn().map_err(|error| {
-            ToolError::ExecutionFailed(format!("Failed to spawn stage: {error}"))
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to spawn stage: {error}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+            )
         })?;
         let mut process_guard = StageProcessGuard::new(&child);
-        let stdout = child.stdout.take().ok_or_else(|| {
-            ToolError::ExecutionFailed("Failed to capture stage stdout".to_string())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            ToolError::ExecutionFailed("Failed to capture stage stderr".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stage stdout".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stage stderr".into()))?;
         let mut stdout_reader = BufReader::new(stdout).lines();
         let mut stderr_reader = BufReader::new(stderr).lines();
         let mut full_stdout = String::new();
@@ -2687,22 +2757,25 @@ impl ShellExecute {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 terminate_stage_process(&mut child, &mut process_guard).await;
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Command timed out after {timeout_ms}ms"
-                )));
+                return Err(ToolError::ExecutionFailed(
+                    format!("Command timed out after {timeout_ms}ms").into(),
+                ));
             }
             if stdout_eof && stderr_eof {
                 let status = match timeout(remaining, child.wait()).await {
                     Ok(result) => result.map_err(|error| {
-                        ToolError::ExecutionFailed(format!(
-                            "Failed to wait for stage process: {error}"
-                        ))
+                        ToolError::ExecutionFailed(
+                            crate::error_diagnostics::FailureMessage::leaf(format!(
+                                "Failed to wait for stage process: {error}"
+                            ))
+                            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                        )
                     })?,
                     Err(_) => {
                         terminate_stage_process(&mut child, &mut process_guard).await;
-                        return Err(ToolError::ExecutionFailed(format!(
-                            "Command timed out after {timeout_ms}ms"
-                        )));
+                        return Err(ToolError::ExecutionFailed(
+                            format!("Command timed out after {timeout_ms}ms").into(),
+                        ));
                     }
                 };
                 let exit_code = status.code().unwrap_or(-1);
@@ -2744,9 +2817,9 @@ impl ShellExecute {
                         Ok(None) => stdout_eof = true,
                         Err(error) => {
                             terminate_stage_process(&mut child, &mut process_guard).await;
-                            return Err(ToolError::ExecutionFailed(format!(
+                            return Err(ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
                                 "Failed to read stage stdout: {error}"
-                            )));
+                            )).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))));
                         }
                     }
                 }
@@ -2784,9 +2857,9 @@ impl ShellExecute {
                         Ok(None) => stderr_eof = true,
                         Err(error) => {
                             terminate_stage_process(&mut child, &mut process_guard).await;
-                            return Err(ToolError::ExecutionFailed(format!(
+                            return Err(ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
                                 "Failed to read stage stderr: {error}"
-                            )));
+                            )).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))));
                         }
                     }
                 }
@@ -2840,7 +2913,7 @@ impl ShellExecute {
         if let Some(plan) = self.approved_shell_execution_plan(tool_call_id) {
             if plan.tool_call_id != tool_call_id || plan.command != command_str {
                 return Err(ToolError::ExecutionFailed(
-                    "Approved shell execution plan is bound to a different tool call or command; re-approval is required".to_string(),
+                    "Approved shell execution plan is bound to a different tool call or command; re-approval is required".into(),
                 ));
             }
             let current = self
@@ -2848,7 +2921,7 @@ impl ShellExecute {
                 .await?;
             if plan != current {
                 return Err(ToolError::ExecutionFailed(
-                    "Approved shell execution plan no longer matches current sandbox resolution; re-approval is required".to_string(),
+                    "Approved shell execution plan no longer matches current sandbox resolution; re-approval is required".into(),
                 ));
             }
             return Ok(plan);
@@ -2881,7 +2954,12 @@ impl ShellExecute {
         })
         .await
         .map_err(|error| {
-            ToolError::ExecutionFailed(format!("Sandbox runtime detection failed: {error}"))
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Sandbox runtime detection failed: {error}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+            )
         })?;
 
         if let Ok(mut cache) = self.sandbox_runtime_status_cache.lock() {
@@ -2968,17 +3046,23 @@ impl ShellExecute {
                     format!("Failed to spawn sandbox command: {}", e),
                 )
             } else {
-                ToolError::ExecutionFailed(format!("Failed to spawn command: {}", e))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to spawn command: {}",
+                        e
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                )
             }
         })?;
         let mut process_guard = StageProcessGuard::new_owned(&child, self.owned_processes.as_ref());
         let mut sandbox_cleanup_guard = SandboxCleanupGuard::new(execution_plan.clone());
 
         let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
-            "Failed to capture stdout".to_string(),
+            "Failed to capture stdout".into(),
         ))?;
         let stderr = child.stderr.take().ok_or(ToolError::ExecutionFailed(
-            "Failed to capture stderr".to_string(),
+            "Failed to capture stderr".into(),
         ))?;
 
         let mut stdout_reader = BufReader::new(stdout).lines();
@@ -3005,13 +3089,21 @@ impl ShellExecute {
                         format!("Command timed out after {}ms", timeout_ms),
                     )
                 } else {
-                    ToolError::ExecutionFailed(format!("Command timed out after {}ms", timeout_ms))
+                    ToolError::ExecutionFailed(
+                        format!("Command timed out after {}ms", timeout_ms).into(),
+                    )
                 });
             }
 
             if stdout_eof && stderr_eof {
                 if let Some(status) = child.try_wait().map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Failed to check process status: {}", e))
+                    ToolError::ExecutionFailed(
+                        crate::error_diagnostics::FailureMessage::leaf(format!(
+                            "Failed to check process status: {}",
+                            e
+                        ))
+                        .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                    )
                 })? {
                     let exit_code = status.code().unwrap_or(-1);
                     let _ = gateway
@@ -3103,7 +3195,7 @@ impl ShellExecute {
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    if let Some(status) = child.try_wait().map_err(|e| ToolError::ExecutionFailed(format!("Failed to check process status: {}", e)))? {
+                    if let Some(status) = child.try_wait().map_err(|e| ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!("Failed to check process status: {}", e)).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e))))? {
                         let exit_code = status.code().unwrap_or(-1);
                         let _ = gateway.send(session_id, GatewayPayload::ToolStream {
                             tool_id: tool_id.to_string(),
@@ -3145,10 +3237,10 @@ impl ShellExecute {
         use std::process::Stdio;
 
         let configured_gateway = self.gateway.as_ref().ok_or(ToolError::ExecutionFailed(
-            "Gateway not configured for streaming".to_string(),
+            "Gateway not configured for streaming".into(),
         ))?;
         let session_id = self.session_id.as_ref().ok_or(ToolError::ExecutionFailed(
-            "Session ID not configured for streaming".to_string(),
+            "Session ID not configured for streaming".into(),
         ))?;
 
         // Use tool_call_id from params (injected by workflow engine) or generate one
@@ -3168,7 +3260,7 @@ impl ShellExecute {
             .await?;
         if execution_plan.status != crate::tools::ShellExecutionPlanStatus::Ready {
             return Err(ToolError::ExecutionFailed(
-                Self::execution_plan_denied_message(&execution_plan),
+                Self::execution_plan_denied_message(&execution_plan).into(),
             ));
         }
         let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
@@ -3206,16 +3298,19 @@ impl ShellExecute {
         }
         #[cfg(not(target_os = "windows"))]
         configure_process_group(&mut command);
-        let mut child = command
-            .spawn()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn: {}", e)))?;
+        let mut child = command.spawn().map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!("Failed to spawn: {}", e))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
+        })?;
         let mut process_guard = StageProcessGuard::new_owned(&child, self.owned_processes.as_ref());
 
         let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
-            "Failed to capture stdout".to_string(),
+            "Failed to capture stdout".into(),
         ))?;
         let stderr = child.stderr.take().ok_or(ToolError::ExecutionFailed(
-            "Failed to capture stderr".to_string(),
+            "Failed to capture stderr".into(),
         ))?;
 
         let mut stdout_reader = BufReader::new(stdout).lines();
@@ -3240,10 +3335,9 @@ impl ShellExecute {
                 timeout_ms.saturating_sub(start_time.elapsed().as_millis() as u64);
             if timeout_remaining == 0 {
                 terminate_stage_process(&mut child, &mut process_guard).await;
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Command timed out after {}ms",
-                    timeout_ms
-                )));
+                return Err(ToolError::ExecutionFailed(
+                    format!("Command timed out after {}ms", timeout_ms).into(),
+                ));
             }
 
             // Check if both streams reached EOF and process has exited
@@ -3311,10 +3405,13 @@ impl ShellExecute {
                         continue;
                     }
                     Err(e) => {
-                        return Err(ToolError::ExecutionFailed(format!(
-                            "Failed to check process status: {}",
-                            e
-                        )));
+                        return Err(ToolError::ExecutionFailed(
+                            crate::error_diagnostics::FailureMessage::leaf(format!(
+                                "Failed to check process status: {}",
+                                e
+                            ))
+                            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                        ));
                     }
                 }
             }
@@ -3489,10 +3586,10 @@ impl ShellExecute {
                             // Process still running, continue
                         }
                         Err(e) => {
-                            return Err(ToolError::ExecutionFailed(format!(
+                            return Err(ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
                                 "Failed to check process status: {}",
                                 e
-                            )));
+                            )).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e))));
                         }
                     }
                 }
@@ -4739,7 +4836,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 150ms"))
+            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.as_str().contains("timed out after 150ms"))
         );
         assert_recorded_child_stopped(&project_root).await;
     }
@@ -4763,7 +4860,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 150ms"))
+            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.as_str().contains("timed out after 150ms"))
         );
         assert_recorded_child_stopped(&project_root).await;
     }
@@ -5193,7 +5290,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 150ms"))
+            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.as_str().contains("timed out after 150ms"))
         );
         assert_recorded_child_stopped(&project_root).await;
     }
@@ -5404,7 +5501,7 @@ mod tests {
             .await;
 
         assert!(
-            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.contains("timed out after 120ms"))
+            matches!(result, Err(ToolError::ExecutionFailed(message)) if message.as_str().contains("timed out after 120ms"))
         );
         assert!(started.elapsed() < Duration::from_millis(400));
     }

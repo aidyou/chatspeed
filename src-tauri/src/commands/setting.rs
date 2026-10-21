@@ -18,6 +18,7 @@ use crate::runtime_data::{
 use crate::tray::create_tray;
 use crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR;
 
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use rust_i18n::{set_locale, t};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -364,7 +365,10 @@ pub async fn update_shortcut(
 
     crate::shortcut::update_shortcut(&app, &shortcut_value, key).map_err(|e| {
         AppError::General {
-            message: t!("setting.failed_to_update_shortcut", error = e.to_string()).to_string(),
+            message: FailureMessage::leaf(
+                t!("setting.failed_to_update_shortcut", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(e.as_ref())),
         }
     })?;
 
@@ -388,7 +392,9 @@ fn upload_logo(image_path: String) -> AppResult<String> {
     let file = Path::new(&image_path);
     if !file.exists() {
         return Err(AppError::General {
-            message: t!("setting.file_not_exists", file_path = image_path).to_string(),
+            message: t!("setting.file_not_exists", file_path = image_path)
+                .to_string()
+                .into(),
         });
     }
 
@@ -397,12 +403,15 @@ fn upload_logo(image_path: String) -> AppResult<String> {
     let upload_dir = HTTP_SERVER_UPLOAD_DIR.read().clone();
     let upload_file_dir = Path::new(&upload_dir).join(month);
     std::fs::create_dir_all(&upload_file_dir).map_err(|e| AppError::General {
-        message: t!(
-            "setting.failed_to_create_upload_dir",
-            path = upload_file_dir.display(),
-            error = e.to_string()
+        message: FailureMessage::leaf(
+            t!(
+                "setting.failed_to_create_upload_dir",
+                path = upload_file_dir.display(),
+                error = e.to_string()
+            )
+            .to_string(),
         )
-        .to_string(),
+        .with_origin(ErrorOrigin::from_error(&e)),
     })?;
 
     let http_server_dir = HTTP_SERVER_DIR.read().clone();
@@ -418,13 +427,16 @@ fn upload_logo(image_path: String) -> AppResult<String> {
         let upload_file_path = upload_file_dir.join(&save_name);
         // Move the temporary file to upload directory
         std::fs::rename(&tmp_file_path, &upload_file_path).map_err(|e| AppError::General {
-            message: t!(
-                "setting.failed_to_move_logo_file",
-                from = tmp_file_path.display(),
-                to = upload_file_path.display(),
-                error = e.to_string()
+            message: FailureMessage::leaf(
+                t!(
+                    "setting.failed_to_move_logo_file",
+                    from = tmp_file_path.display(),
+                    to = upload_file_path.display(),
+                    error = e.to_string()
+                )
+                .to_string(),
             )
-            .to_string(),
+            .with_origin(ErrorOrigin::from_error(&e)),
         })?;
         return Ok(upload_file_path
             .to_string_lossy()
@@ -440,11 +452,13 @@ fn upload_logo(image_path: String) -> AppResult<String> {
         Some(DEFAULT_THUMBNAIL_HEIGHT),
     )
     .map_err(|e| AppError::General {
-        message: t!(
-            "setting.failed_to_save_logo_thumbnail",
-            error = e.to_string()
-        )
-        .to_string(),
+        message: FailureMessage::leaf(
+            t!(
+                "setting.failed_to_save_logo_thumbnail",
+                error = e.to_string()
+            )
+            .to_string(),
+        ),
     })?;
 
     Ok(save_path
@@ -499,7 +513,7 @@ pub fn update_tray(app: AppHandle) -> AppResult<()> {
     log::debug!("update_tray");
 
     create_tray(&app, Some(TRAY_ID.to_string())).map_err(|e| AppError::General {
-        message: e.to_string(),
+        message: FailureMessage::leaf(e),
     })
 }
 

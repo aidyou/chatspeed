@@ -12,6 +12,7 @@ chat:
     response_parse_failed: 'Failed to parse response from %{provider}: %{details}'
     stream_processing_failed: 'Error processing stream from %{provider}: %{details}'
     tool_call_serialization_failed: 'Tool call serialization failed: %{details}'
+  error_feedback: An unexpected error occurred. Please try again later.
   failed_to_convert_language_code: 'Failed to convert language code: %{error}'
   failed_to_create_file: 'Failed to create file: %{error}'
   failed_to_detect_language: Failed to detect language
@@ -280,6 +281,12 @@ setting:
   failed_to_save_logo_thumbnail: 'Failed to save logo thumbnail: %{error}'
   failed_to_update_shortcut: 'Failed to update shortcut: %{error}'
   file_not_exists: 'File does not exist: %{file_path}'
+terminal:
+  forbidden: You do not have permission to control this terminal session.
+  invalid_size: The requested terminal size is outside the supported range.
+  session_exited: This terminal session has already exited. Open a new terminal.
+  session_not_found: This terminal session no longer exists.
+  shell_unavailable: No supported shell is available on this system.
 tools:
   error:
     auth_error: Authentication error

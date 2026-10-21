@@ -647,7 +647,9 @@
                     <div
                       v-if="isSubAgentResultExpanded(message)"
                       class="sub-agent-card__result-body">
-                      <MarkdownSimple v-link :content="message.subAgentCard.resultMarkdown" />
+                      <MarkdownSimple
+                        v-link
+                        :content="message.subAgentCard.userError?.display || message.subAgentCard.resultMarkdown" />
                     </div>
                   </div>
 
@@ -1243,6 +1245,7 @@ import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useWorkflowMessageScroll } from '@/composables/workflow/useWorkflowMessageScroll'
 import { useI18n } from 'vue-i18n'
 import { writeClipboard } from '@/libs/clipboard'
+import { formatUserError } from '@/libs/error'
 import { showMessage } from '@/libs/util'
 import hljs from 'highlight.js'
 import {
@@ -1257,6 +1260,7 @@ import {
   isWorkflowMessagePendingApproval,
   isWorkflowToolAwaitingExecution,
   normalizeWorkflowErrorAlertContent,
+  resolveWorkflowErrorDisplay,
   isWorkflowToolRunningForDisplay,
   projectWorkflowMessageList,
   shouldRenderSubAgentCard
@@ -2152,7 +2156,10 @@ const getErrorAlertTitle = message => {
 }
 
 const getErrorAlertContent = message => {
-  const content = normalizeWorkflowErrorAlertContent(message?.message)
+  const content =
+    typeof resolveWorkflowErrorDisplay === 'function'
+      ? resolveWorkflowErrorDisplay(message, message?.message).display
+      : normalizeWorkflowErrorAlertContent(message?.message)
   const metadata = message?.metadata || {}
   if (metadata.retry_exhausted !== true) return content
 
@@ -2367,7 +2374,7 @@ const copyRawPlan = async message => {
     showMessage(t('common.copied'), 'success')
   } catch (error) {
     console.error('Failed to copy raw plan:', error)
-    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+    showMessage(t('common.operationFailed', { error: formatUserError(error) }), 'error')
   }
 }
 
@@ -2651,8 +2658,9 @@ const getSubAgentStatusBadgeClass = message => {
 }
 
 const getSubAgentResultPreview = message => {
+  const userError = message?.subAgentCard?.userError
   const result = props
-    .removeSystemReminder(message?.subAgentCard?.result || '')
+    .removeSystemReminder(userError?.display || message?.subAgentCard?.result || '')
     .replace(/\s+/g, ' ')
   if (!result) return ''
   return result.length > 96 ? `${result.slice(0, 96)}...` : result
@@ -2669,7 +2677,7 @@ const copyAiOutput = async content => {
     showMessage(t('common.copied'), 'success')
   } catch (error) {
     console.error('Failed to copy AI output:', error)
-    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+    showMessage(t('common.operationFailed', { error: formatUserError(error) }), 'error')
   }
 }
 
@@ -2679,12 +2687,15 @@ const copySubAgentContent = async content => {
     showMessage(t('common.copied'), 'success')
   } catch (error) {
     console.error('Failed to copy sub-agent content:', error)
-    showMessage(t('common.operationFailed', { error: String(error) }), 'error')
+    showMessage(t('common.operationFailed', { error: formatUserError(error) }), 'error')
   }
 }
 
 const copySubAgentTask = message => copySubAgentContent(message?.subAgentCard?.task)
-const copySubAgentResult = message => copySubAgentContent(message?.subAgentCard?.result)
+const copySubAgentResult = message =>
+  copySubAgentContent(
+    message?.subAgentCard?.userError?.displayCopy || message?.subAgentCard?.result
+  )
 
 const getSubAgentTaskExpandId = message => `${message?.displayId || message?.id || ''}:task`
 const getSubAgentResultExpandId = message => `${message?.displayId || message?.id || ''}:result`

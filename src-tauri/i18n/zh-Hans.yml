@@ -12,6 +12,7 @@ chat:
     response_parse_failed: '解析来自 %{provider} 的响应失败: %{details}'
     stream_processing_failed: '处理来自 %{provider} 的数据流时发生错误: %{details}'
     tool_call_serialization_failed: '工具调用序列化失败: %{details}'
+  error_feedback: 发生未知错误，请稍后重试
   failed_to_convert_language_code: '转换语言代码失败: %{error}'
   failed_to_create_file: 创建文件失败：%{error}
   failed_to_detect_language: 检测语言失败
@@ -274,6 +275,12 @@ setting:
   failed_to_save_logo_thumbnail: '保存Logo缩略图失败: %{error}'
   failed_to_update_shortcut: '更新快捷方式失败: %{error}'
   file_not_exists: 文件不存在：%{file_path}
+terminal:
+  forbidden: 你没有权限操作此终端会话。
+  invalid_size: 请求的终端尺寸超出支持范围。
+  session_exited: 此终端会话已退出，请新建终端。
+  session_not_found: 此终端会话不存在或已关闭。
+  shell_unavailable: 当前系统没有可用的受支持 Shell。
 tools:
   error:
     auth_error: 认证错误

@@ -1,3 +1,4 @@
+use crate::error_diagnostics::{ErrorProjection, FailureMessage};
 use crate::libs::ai_temp::{
     persist_tool_output, PersistedToolOutput, LARGE_TOOL_OUTPUT_CHAR_LIMIT,
 };
@@ -12,7 +13,7 @@ use crate::workflow::react::file_preview::{
     attach_display_context, merge_tool_result_into_preview_args,
 };
 use crate::workflow::react::security::PathGuard;
-use chatspeed_contracts::{WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
+use chatspeed_contracts::{UserErrorPresentation, WEB_FETCH_TOOL, WEB_SEARCH_TOOL};
 
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,9 @@ pub struct ReinforcedResult {
     pub display_type: String,            // "default", "diff", "text"
     pub approval_status: Option<String>, // "pending", "approved", "rejected", None
     pub observation_kind: Option<ObservationKind>,
+    /// UI-only safe projection of a tool failure. It never replaces `content`
+    /// or `llm_content`, so the model-facing observation stays byte-identical.
+    pub user_error: Option<UserErrorPresentation>,
 }
 
 fn value_to_text(value: &Value) -> String {
@@ -75,6 +79,23 @@ fn line_based_preview(value: &str, max_chars: usize) -> (String, usize) {
     } else {
         (preview, included_lines)
     }
+}
+
+fn structured_error_user_error(value: &Value) -> Option<UserErrorPresentation> {
+    if !value
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let message = value
+        .get("structured_content")
+        .and_then(|structured| structured.get("message"))
+        .and_then(Value::as_str)
+        .or_else(|| value.get("content").and_then(Value::as_str))?;
+    Some(FailureMessage::leaf(message).user_error())
 }
 
 impl ObservationReinforcer {
@@ -156,6 +177,7 @@ impl ObservationReinforcer {
 
         match result {
             Ok(val) => {
+                let structured_user_error = structured_error_user_error(val);
                 let mut llm_content_override = val
                     .get("structured_content")
                     .and_then(|structured| structured.get("llm_content"))
@@ -318,6 +340,7 @@ impl ObservationReinforcer {
                         display_type: display_type.to_string(),
                         approval_status: None,
                         observation_kind: None,
+                                user_error: structured_user_error.clone(),
                     }
                 } else if tool_name == TOOL_BASH && persisted_output.is_some() {
                     let (file_path, file_size, persistence_reason) =
@@ -374,6 +397,7 @@ impl ObservationReinforcer {
                         display_type: display_type.to_string(),
                         approval_status: None,
                         observation_kind: None,
+                                user_error: structured_user_error.clone(),
                     }
                 } else if !matches!(
                     tool_name,
@@ -410,6 +434,7 @@ impl ObservationReinforcer {
                                 display_type: display_type.to_string(),
                                 approval_status: None,
                                 observation_kind: None,
+                                user_error: structured_user_error.clone(),
                             }
                         }
                         Err(error) => {
@@ -431,6 +456,7 @@ impl ObservationReinforcer {
                                 display_type: display_type.to_string(),
                                 approval_status: None,
                                 observation_kind: None,
+                                user_error: structured_user_error.clone(),
                             }
                         }
                     }
@@ -445,6 +471,7 @@ impl ObservationReinforcer {
                         display_type: display_type.to_string(),
                         approval_status: None,
                         observation_kind: None,
+                        user_error: structured_user_error.clone(),
                     }
                 }
             }
@@ -475,6 +502,7 @@ impl ObservationReinforcer {
                     display_type: "text".to_string(),
                     approval_status: None,
                     observation_kind: None,
+                    user_error: Some(err.user_error()),
                 }
             }
         }
@@ -818,6 +846,7 @@ impl ObservationReinforcer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_diagnostics::ErrorOrigin;
     use crate::libs::ai_temp::{persist_tool_output, resolve_ai_temp_path};
     use serde_json::json;
     use std::fs;
@@ -1304,5 +1333,72 @@ mod tests {
         assert_eq!(details["old_string"].as_str(), Some("original content"));
         assert_eq!(details["content"].as_str(), Some("new content"));
         assert_eq!(details["overwritten"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn typed_tool_error_preserves_observation_text_and_projects_user_error() {
+        let tool_call = json!({
+            "function": {
+                "name": "custom_tool",
+                "arguments": {}
+            }
+        });
+        let error = ToolError::ExecutionFailed(FailureMessage::leaf("legacy wrapper").with_origin(
+            ErrorOrigin::leaf("socket closed token=CANARY", None, None, Some(503)),
+        ));
+
+        let reinforced =
+            ObservationReinforcer::reinforce_with_context(&tool_call, &Err(error), None, None);
+
+        assert_eq!(
+            reinforced.content,
+            "Error: Tool execution failed: legacy wrapper"
+        );
+        assert_eq!(
+            reinforced.summary,
+            "Error: Tool execution failed: legacy wrapper"
+        );
+        assert!(reinforced.is_error);
+        let user_error = reinforced.user_error.expect("typed user error");
+        assert_eq!(user_error.upstream_status, Some(503));
+        assert!(user_error.message.starts_with("socket closed"));
+        assert!(!user_error.message.contains("CANARY"));
+        assert!(!reinforced.content.contains("CANARY"));
+    }
+
+    #[test]
+    fn structured_ok_error_projects_leaf_user_error_without_rewriting_content() {
+        let tool_call = json!({
+            "function": {
+                "name": "custom_tool",
+                "arguments": {}
+            }
+        });
+        let content = json!({
+            "code": "capability_error",
+            "message": "bridge unavailable"
+        })
+        .to_string();
+
+        let reinforced = ObservationReinforcer::reinforce_with_context(
+            &tool_call,
+            &Ok(json!({
+                "content": content.clone(),
+                "structured_content": {
+                    "code": "capability_error",
+                    "message": "bridge unavailable"
+                },
+                "is_error": true
+            })),
+            None,
+            None,
+        );
+
+        assert_eq!(reinforced.content, content);
+        assert!(!reinforced.is_error);
+        assert_eq!(
+            reinforced.user_error.expect("structured leaf").message,
+            "bridge unavailable"
+        );
     }
 }

@@ -5,7 +5,7 @@
 //! `chatspeed-runtime-client` calls and relays runtime SSE events to the workflow
 //! window. Runtime loss is fail-closed and resets the local presentation.
 
-use crate::runtime_client::RuntimeSupervisor;
+use crate::runtime_client::{client_error_wire, runtime_error_wire, RuntimeSupervisor};
 use chatspeed_contracts::{
     TerminalCreateRequest, TerminalResizeRequest, TerminalStreamEvent, TerminalWriteRequest,
 };
@@ -23,7 +23,7 @@ async fn connected_terminal(
     supervisor
         .terminal_connection()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(runtime_error_wire)
 }
 
 pub(crate) async fn list_shells(
@@ -211,12 +211,14 @@ async fn forward_terminal_events(window: Window, mut stream: TerminalEventStream
 }
 
 fn client_message(error: ClientError) -> String {
-    error.to_string()
+    client_error_wire(error)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chatspeed_contracts::{ErrorReason, UserErrorPresentation};
+    use chatspeed_runtime_client::ClientResponseError;
 
     #[tokio::test]
     async fn disconnected_runtime_fails_closed_without_a_local_pty() {
@@ -225,5 +227,27 @@ mod tests {
             .await
             .expect_err("disconnected runtime must reject terminal access");
         assert!(error.contains("not connected"), "error was {error}");
+    }
+
+    #[test]
+    fn structured_rejection_keeps_its_presentation_on_the_ipc_wire() {
+        let presentation = UserErrorPresentation {
+            schema_version: 1,
+            message: "The runtime is stopping".to_string(),
+            reason: Some(ErrorReason::RuntimeStopping),
+            upstream_status: Some(503),
+        };
+        let wire = client_message(ClientError::Server(ClientResponseError {
+            legacy_display: "503 runtime_stopping: The runtime is stopping".to_string(),
+            status: 503,
+            code: "runtime_stopping".to_string(),
+            message: "The runtime is stopping".to_string(),
+            presentation: Some(presentation),
+        }));
+        let value: serde_json::Value = serde_json::from_str(&wire).expect("structured wire");
+        assert_eq!(value["error"]["code"], "runtime_stopping");
+        assert_eq!(value["error"]["message"], "The runtime is stopping");
+        assert_eq!(value["error"]["presentation"]["reason"], "runtime_stopping");
+        assert_eq!(value["status"], 503);
     }
 }

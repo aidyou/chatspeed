@@ -13,6 +13,7 @@ use http::HeaderName;
 
 use super::stream::StreamParser;
 use super::{types::*, StreamChunk};
+use crate::error_diagnostics::{ErrorOrigin, FailureMessage};
 use crate::libs::util::urlencode;
 
 #[async_trait]
@@ -24,7 +25,7 @@ pub trait ApiClient: Send + Sync {
     ///
     /// # Returns
     /// A Result containing either the configured Client or an error message
-    async fn create_client(&self, proxy_type: &ProxyType) -> Result<Client, String>;
+    async fn create_client(&self, proxy_type: &ProxyType) -> Result<Client, FailureMessage>;
 
     /// Sends a POST request with the given configuration, supporting both regular and streaming responses
     ///
@@ -69,7 +70,7 @@ pub trait ApiClient: Send + Sync {
         endpoint: &str,
         body: Value,
         stream: bool,
-    ) -> Result<ApiResponse, String>;
+    ) -> Result<ApiResponse, FailureMessage>;
 
     /// Sends a GET request with the given configuration
     ///
@@ -85,7 +86,18 @@ pub trait ApiClient: Send + Sync {
         config: &ApiConfig,
         endpoint: &str,
         param: Option<Value>,
-    ) -> Result<ApiResponse, String>;
+    ) -> Result<ApiResponse, String> {
+        self.get_request_with_origin(config, endpoint, param)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn get_request_with_origin(
+        &self,
+        config: &ApiConfig,
+        endpoint: &str,
+        param: Option<Value>,
+    ) -> Result<ApiResponse, FailureMessage>;
 
     /// Process a streaming response chunk with specified format
     ///
@@ -130,7 +142,7 @@ impl DefaultApiClient {
     ///
     /// # Returns
     /// A Result containing either the HeaderMap or an error message
-    fn build_headers(&self, config: &ApiConfig) -> Result<HeaderMap, String> {
+    fn build_headers(&self, config: &ApiConfig) -> Result<HeaderMap, FailureMessage> {
         let mut headers = HeaderMap::new();
 
         // Add API key if present and not empty
@@ -141,17 +153,30 @@ impl DefaultApiClient {
                 .and_then(|k| if k.is_empty() { None } else { Some(k) })
         {
             headers.insert(
-                HeaderName::from_bytes(b"Authorization")
-                    .map_err(|e| t!("network.header_error", error = e.to_string()).to_string())?,
-                HeaderValue::from_str(&format!("Bearer {}", api_key))
-                    .map_err(|e| t!("network.header_error", error = e.to_string()).to_string())?,
+                HeaderName::from_bytes(b"Authorization").map_err(|e| {
+                    FailureMessage::leaf(
+                        t!("network.header_error", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(ErrorOrigin::from_error(&e))
+                    .context("ai.network", "build_headers", None)
+                })?,
+                HeaderValue::from_str(&format!("Bearer {}", api_key)).map_err(|e| {
+                    FailureMessage::leaf(
+                        t!("network.header_error", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(ErrorOrigin::from_error(&e))
+                    .context("ai.network", "build_headers", None)
+                })?,
             );
         }
 
         // Add content-type by default
         headers.insert(
-            HeaderName::from_bytes(b"Content-Type")
-                .map_err(|e| t!("network.header_error", error = e.to_string()).to_string())?,
+            HeaderName::from_bytes(b"Content-Type").map_err(|e| {
+                FailureMessage::leaf(t!("network.header_error", error = e.to_string()).to_string())
+                    .with_origin(ErrorOrigin::from_error(&e))
+                    .context("ai.network", "build_headers", None)
+            })?,
             HeaderValue::from_static("application/json"),
         );
 
@@ -162,13 +187,29 @@ impl DefaultApiClient {
                     if let Some(value_str) = value.as_str() {
                         // Convert the key to a static string to avoid lifetime issues
                         let header_name = HeaderName::from_bytes(key.as_bytes()).map_err(|e| {
-                            t!("network.header_error", error = e.to_string()).to_string()
+                            FailureMessage::leaf(
+                                t!("network.header_error", error = e.to_string()).to_string(),
+                            )
+                            .with_origin(ErrorOrigin::from_error(&e))
+                            .context(
+                                "ai.network",
+                                "build_headers",
+                                None,
+                            )
                         })?;
 
                         headers.insert(
                             header_name,
                             HeaderValue::from_str(value_str).map_err(|e| {
-                                t!("network.header_error", error = e.to_string()).to_string()
+                                FailureMessage::leaf(
+                                    t!("network.header_error", error = e.to_string()).to_string(),
+                                )
+                                .with_origin(ErrorOrigin::from_error(&e))
+                                .context(
+                                    "ai.network",
+                                    "build_headers",
+                                    None,
+                                )
                             })?,
                         );
                     }
@@ -179,14 +220,20 @@ impl DefaultApiClient {
         // Site URL for rankings on openrouter.ai
         headers.insert(
             "HTTP-Referer",
-            HeaderValue::from_str("https://github.com/aidyou/chatspeed")
-                .map_err(|e| t!("network.header_error", error = e.to_string()).to_string())?,
+            HeaderValue::from_str("https://github.com/aidyou/chatspeed").map_err(|e| {
+                FailureMessage::leaf(t!("network.header_error", error = e.to_string()).to_string())
+                    .with_origin(ErrorOrigin::from_error(&e))
+                    .context("ai.network", "build_headers", None)
+            })?,
         );
         // Site title for rankings on openrouter.ai
         headers.insert(
             "X-Title",
-            HeaderValue::from_str("Chatspeed")
-                .map_err(|e| t!("network.header_error", error = e.to_string()).to_string())?,
+            HeaderValue::from_str("Chatspeed").map_err(|e| {
+                FailureMessage::leaf(t!("network.header_error", error = e.to_string()).to_string())
+                    .with_origin(ErrorOrigin::from_error(&e))
+                    .context("ai.network", "build_headers", None)
+            })?,
         );
 
         Ok(headers)
@@ -204,7 +251,7 @@ impl DefaultApiClient {
         &self,
         response: Response,
         stream: bool,
-    ) -> Result<ApiResponse, String> {
+    ) -> Result<ApiResponse, FailureMessage> {
         let status = response.status();
 
         if !status.is_success() {
@@ -215,24 +262,34 @@ impl DefaultApiClient {
             Ok(ApiResponse::success_stream(response))
         } else {
             let content = response.text().await.map_err(|e| {
-                t!("network.response_read_error", error = e.to_string()).to_string()
+                FailureMessage::leaf(
+                    t!("network.response_read_error", error = e.to_string()).to_string(),
+                )
+                .with_origin(ErrorOrigin::from_error(&e))
+                .context("ai.network", "read_response", None)
             })?;
 
             Ok(ApiResponse::success(content))
         }
     }
 
-    async fn process_error_response(&self, response: Response) -> Result<ApiResponse, String> {
+    async fn process_error_response(
+        &self,
+        response: Response,
+    ) -> Result<ApiResponse, FailureMessage> {
         let status_code = response.status().as_u16();
         let inner_type = response
             .status()
             .canonical_reason()
             .unwrap_or("Unknown")
             .to_owned();
-        let error_text = response
-            .text()
-            .await
-            .map_err(|e| t!("network.response_read_error", error = e.to_string()).to_string())?;
+        let error_text = response.text().await.map_err(|e| {
+            FailureMessage::leaf(
+                t!("network.response_read_error", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e))
+            .context("ai.network", "read_response", None)
+        })?;
 
         let (error_message, error_type) =
             if let Some((mut error_type, message)) = self.error_format.parse_error(&error_text) {
@@ -263,7 +320,7 @@ impl DefaultApiClient {
 
 #[async_trait]
 impl ApiClient for DefaultApiClient {
-    async fn create_client(&self, proxy_type: &ProxyType) -> Result<Client, String> {
+    async fn create_client(&self, proxy_type: &ProxyType) -> Result<Client, FailureMessage> {
         let mut client_builder = Client::builder().connect_timeout(Duration::from_secs(15));
 
         match proxy_type {
@@ -274,8 +331,13 @@ impl ApiClient for DefaultApiClient {
                 // Use system proxy settings (default behavior)
             }
             ProxyType::Http(proxy_url, proxy_username, proxy_password) => {
-                let mut proxy = reqwest::Proxy::all(proxy_url)
-                    .map_err(|e| t!("network.proxy_error", error = e.to_string()).to_string())?;
+                let mut proxy = reqwest::Proxy::all(proxy_url).map_err(|e| {
+                    FailureMessage::leaf(
+                        t!("network.proxy_error", error = e.to_string()).to_string(),
+                    )
+                    .with_origin(ErrorOrigin::from_error(&e))
+                    .context("ai.network", "configure_proxy", None)
+                })?;
                 let username = proxy_username.as_deref().unwrap_or_default();
                 let password = proxy_password.as_deref().unwrap_or_default();
                 if !username.is_empty() && !password.is_empty() {
@@ -285,9 +347,13 @@ impl ApiClient for DefaultApiClient {
             }
         }
 
-        client_builder
-            .build()
-            .map_err(|e| t!("network.client_build_error", error = e.to_string()).to_string())
+        client_builder.build().map_err(|e| {
+            FailureMessage::leaf(
+                t!("network.client_build_error", error = e.to_string()).to_string(),
+            )
+            .with_origin(ErrorOrigin::from_error(&e))
+            .context("ai.network", "create_client", None)
+        })
     }
 
     async fn post_request(
@@ -296,7 +362,7 @@ impl ApiClient for DefaultApiClient {
         endpoint: &str,
         body: Value,
         stream: bool,
-    ) -> Result<ApiResponse, String> {
+    ) -> Result<ApiResponse, FailureMessage> {
         let client = self.create_client(&config.proxy_type).await?;
         let headers = self.build_headers(config)?;
 
@@ -324,7 +390,13 @@ impl ApiClient for DefaultApiClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| t!("network.request_failed", error = e.to_string()).to_string())?;
+            .map_err(|e| {
+                FailureMessage::leaf(
+                    t!("network.request_failed", error = e.to_string()).to_string(),
+                )
+                .with_origin(ErrorOrigin::from_error(&e))
+                .context("ai.network", "send_request", None)
+            })?;
 
         if !response.status().is_success() {
             return self.process_error_response(response).await;
@@ -333,12 +405,12 @@ impl ApiClient for DefaultApiClient {
         self.process_response(response, stream).await
     }
 
-    async fn get_request(
+    async fn get_request_with_origin(
         &self,
         config: &ApiConfig,
         endpoint: &str,
         param: Option<Value>,
-    ) -> Result<ApiResponse, String> {
+    ) -> Result<ApiResponse, FailureMessage> {
         let client = self.create_client(&config.proxy_type).await?;
         let headers = self.build_headers(config)?;
 
@@ -383,12 +455,11 @@ impl ApiClient for DefaultApiClient {
         #[cfg(debug_assertions)]
         log::debug!("GET Request URL: {}", url);
 
-        let response = client
-            .get(url)
-            .headers(headers)
-            .send()
-            .await
-            .map_err(|e| t!("network.request_failed", error = e.to_string()).to_string())?;
+        let response = client.get(url).headers(headers).send().await.map_err(|e| {
+            FailureMessage::leaf(t!("network.request_failed", error = e.to_string()).to_string())
+                .with_origin(ErrorOrigin::from_error(&e))
+                .context("ai.network", "send_request", None)
+        })?;
         self.process_response(response, false).await // GET requests are typically not streamed for list_models
     }
 }

@@ -64,6 +64,24 @@ impl CliError {
         CliError::Budget(message.into())
     }
 
+    /// Safe one-line text for terminal output.
+    ///
+    /// `map_client_error` materializes the runtime's optional presentation into
+    /// the message field, so this never returns the shared client's classifying
+    /// display (`server error ...`, `authentication failed: ...`).
+    pub fn user_message(&self) -> &str {
+        match self {
+            CliError::Discovery(message)
+            | CliError::Transport(message)
+            | CliError::Auth(message)
+            | CliError::Protocol(message)
+            | CliError::Budget(message)
+            | CliError::Io(message)
+            | CliError::Usage(message)
+            | CliError::Server { message, .. } => message,
+        }
+    }
+
     /// Stable process exit code for this error.
     pub fn exit_code(&self) -> i32 {
         match self {
@@ -91,7 +109,16 @@ impl fmt::Display for CliError {
                 status,
                 code,
                 message,
-            } => write!(f, "server error {}: {} ({})", status, message, code),
+            } => {
+                // Local callers may construct a server category without text;
+                // keep the typed status/code visible instead of printing an
+                // empty line. Normal wire errors always carry user-safe text.
+                if message.is_empty() {
+                    write!(f, "server error {} ({})", status, code)
+                } else {
+                    f.write_str(message)
+                }
+            }
         }
     }
 }
@@ -132,5 +159,31 @@ mod tests {
     fn budget_message_is_protocol_safe() {
         let error = CliError::budget("budget admission rejected (budget_exceeded)");
         assert!(error.to_string().contains("budget_exceeded"));
+    }
+
+    #[test]
+    fn server_display_uses_the_safe_message() {
+        let error = CliError::Server {
+            status: 503,
+            code: "runtime_unavailable".into(),
+            message: "The runtime is stopping; retry shortly".into(),
+        };
+        assert_eq!(
+            error.user_message(),
+            "The runtime is stopping; retry shortly"
+        );
+        assert_eq!(error.to_string(), error.user_message());
+        assert!(!error.to_string().contains("server error"));
+        assert!(!error.to_string().contains("runtime_unavailable"));
+    }
+
+    #[test]
+    fn empty_server_message_still_exposes_typed_status_and_code() {
+        let error = CliError::Server {
+            status: 502,
+            code: "gateway_unavailable".into(),
+            message: String::new(),
+        };
+        assert_eq!(error.to_string(), "server error 502 (gateway_unavailable)");
     }
 }

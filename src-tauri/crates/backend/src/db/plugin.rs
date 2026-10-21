@@ -63,12 +63,13 @@ impl MainStore {
             .transpose()
             .map_err(|e| {
                 StoreError::JsonError(
-                    t!(
+                crate::error_diagnostics::FailureMessage::leaf(
+                                        t!(
                         "db.plugin_json_serialize_failed_input_schema",
                         error = e.to_string()
-                    )
-                    .to_string(),
-                )
+                    ).to_string(),
+                ).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
             })?;
 
         let output_schema = plugin
@@ -78,12 +79,13 @@ impl MainStore {
             .transpose()
             .map_err(|e| {
                 StoreError::JsonError(
-                    t!(
+                crate::error_diagnostics::FailureMessage::leaf(
+                                        t!(
                         "db.plugin_json_serialize_failed_output_schema",
                         error = e.to_string()
-                    )
-                    .to_string(),
-                )
+                    ).to_string(),
+                ).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
             })?;
 
         self.conn.execute(
@@ -149,12 +151,13 @@ impl MainStore {
                             .transpose()
                             .map_err(|e| {
                                 StoreError::JsonError(
-                                    t!(
+                crate::error_diagnostics::FailureMessage::leaf(
+                                                        t!(
                                         "db.plugin_json_deserialize_failed_input_schema",
                                         error = e.to_string()
-                                    )
-                                    .to_string(),
-                                )
+                                    ).to_string(),
+                ).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
                             })?,
                         output_schema: row
                             .get::<_, Option<String>>("output_schema")?
@@ -162,12 +165,13 @@ impl MainStore {
                             .transpose()
                             .map_err(|e| {
                                 StoreError::JsonError(
-                                    t!(
+                crate::error_diagnostics::FailureMessage::leaf(
+                                                        t!(
                                         "db.plugin_json_deserialize_failed_output_schema",
                                         error = e.to_string()
-                                    )
-                                    .to_string(),
-                                )
+                                    ).to_string(),
+                ).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
                             })?,
                         icon: row.get("icon")?,
                         readme: row.get("readme")?,
@@ -245,12 +249,13 @@ impl MainStore {
             .transpose()
             .map_err(|e| {
                 StoreError::JsonError(
-                    t!(
+                crate::error_diagnostics::FailureMessage::leaf(
+                                        t!(
                         "db.plugin_json_serialize_failed_input_schema",
                         error = e.to_string()
-                    )
-                    .to_string(),
-                )
+                    ).to_string(),
+                ).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
             })?;
 
         let output_schema = plugin
@@ -260,12 +265,13 @@ impl MainStore {
             .transpose()
             .map_err(|e| {
                 StoreError::JsonError(
-                    t!(
+                crate::error_diagnostics::FailureMessage::leaf(
+                                        t!(
                         "db.plugin_json_serialize_failed_output_schema",
                         error = e.to_string()
-                    )
-                    .to_string(),
-                )
+                    ).to_string(),
+                ).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
             })?;
 
         let affected = self.conn.execute(

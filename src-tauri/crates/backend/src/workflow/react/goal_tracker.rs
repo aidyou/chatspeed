@@ -9,9 +9,10 @@ use crate::ai::chat::openai::OpenAIChat;
 use crate::ai::interaction::chat_completion::{AiChatEnum, ChatState};
 use crate::ai::traits::chat::{ChatMetadata, WorkflowUsageAttribution};
 use crate::db::WorkflowMessage;
+use crate::error_diagnostics::ErrorOrigin;
 use crate::libs::util::format_json_str;
 use crate::workflow::react::context::ContextManager;
-use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::error::{CompressionFailure, WorkflowEngineError};
 use crate::workflow::react::prompts::GOAL_TRACKING_PROMPT;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -221,13 +222,26 @@ impl GoalTracker {
             .count();
         let mut payload = Self::serialize_payload(&base_payload);
         let mut last_error = String::new();
+        let mut last_origin: Option<ErrorOrigin> = None;
 
         for attempt in 1..=MAX_TRACKING_ATTEMPTS {
             match self.call_tracking_model(&payload).await {
                 Ok(reply) => match Self::parse_goals(&reply, user_count) {
                     Ok(goals) => return Ok(Self::assign_goal_ids(goals, carry, next_goal_index)),
                     Err(error) => {
-                        last_error = error;
+                        // A parse failure replaces the previous API cause: the last failure is
+                        // the one that explains why tracking never produced a valid goal.
+                        let origin = ErrorOrigin::leaf(error.clone(), None, None, None).context(
+                            "workflow",
+                            "parse_goals",
+                            None,
+                        );
+                        Self::record_tracking_failure(
+                            &mut last_error,
+                            &mut last_origin,
+                            error,
+                            origin,
+                        );
                         let mut retry_payload = base_payload.clone();
                         retry_payload["correction"] = serde_json::json!(format!(
                             "Your previous answer was rejected. Reason: {last_error}. Every goal must own at least one position, each position from 1 to {user_count} must appear exactly once, and reuse the supplied goal ids for carry-overs. Re-answer."
@@ -236,7 +250,15 @@ impl GoalTracker {
                     }
                 },
                 Err(error) => {
-                    last_error = error.to_string();
+                    let origin = error
+                        .error_origin()
+                        .unwrap_or_else(|| ErrorOrigin::leaf(error.to_string(), None, None, None));
+                    Self::record_tracking_failure(
+                        &mut last_error,
+                        &mut last_origin,
+                        error.to_string(),
+                        origin,
+                    );
                 }
             }
             if attempt < MAX_TRACKING_ATTEMPTS {
@@ -255,9 +277,34 @@ impl GoalTracker {
             MAX_TRACKING_ATTEMPTS,
             last_error
         );
-        Err(WorkflowEngineError::CompressionFailed(format!(
+        Err(WorkflowEngineError::CompressionFailed(
+            Self::compression_failure(&last_error, last_origin),
+        ))
+    }
+
+    /// A failed attempt updates both carriers together so the legacy message and its typed
+    /// origin always describe the same, latest failure.
+    fn record_tracking_failure(
+        last_error: &mut String,
+        last_origin: &mut Option<ErrorOrigin>,
+        error: String,
+        origin: ErrorOrigin,
+    ) {
+        *last_error = error;
+        *last_origin = Some(origin);
+    }
+
+    fn compression_failure(
+        last_error: &str,
+        last_origin: Option<ErrorOrigin>,
+    ) -> CompressionFailure {
+        let mut failure = CompressionFailure::leaf(format!(
             "Goal tracking failed after {MAX_TRACKING_ATTEMPTS} attempts: {last_error}"
-        )))
+        ));
+        if let Some(origin) = last_origin {
+            failure = failure.with_origin(origin.context("workflow", "goal_tracking", None));
+        }
+        failure
     }
 
     fn payload_value(carry: &[TrackedGoal], chunk: &[GoalWindowItem]) -> Value {
@@ -696,6 +743,52 @@ mod tests {
             Some("settled")
         );
         assert_eq!(GoalTracker::current_goal(&[]), None);
+    }
+
+    #[test]
+    fn last_tracking_origin_is_replaced_by_the_latest_failure() {
+        let mut last_error = String::new();
+        let mut last_origin = None;
+        GoalTracker::record_tracking_failure(
+            &mut last_error,
+            &mut last_origin,
+            "provider returned HTTP 503".to_string(),
+            ErrorOrigin::leaf("provider returned HTTP 503", None, None, Some(503)).context(
+                "ai",
+                "api_request",
+                None,
+            ),
+        );
+        GoalTracker::record_tracking_failure(
+            &mut last_error,
+            &mut last_origin,
+            "reply must contain a goals array".to_string(),
+            ErrorOrigin::leaf("reply must contain a goals array", None, None, None).context(
+                "workflow",
+                "parse_goals",
+                None,
+            ),
+        );
+
+        let failure = GoalTracker::compression_failure(&last_error, last_origin);
+        assert_eq!(
+            failure.to_string(),
+            "Goal tracking failed after 5 attempts: reply must contain a goals array"
+        );
+        let origin = failure.origin().expect("latest failure origin");
+        assert_eq!(origin.message, "reply must contain a goals array");
+        assert_eq!(
+            origin.status, None,
+            "a previous API status must not leak into the parse cause"
+        );
+        assert!(origin
+            .frames
+            .iter()
+            .any(|frame| frame.operation == "parse_goals"));
+        assert!(origin
+            .frames
+            .iter()
+            .any(|frame| frame.operation == "goal_tracking"));
     }
 
     #[test]

@@ -259,10 +259,13 @@ impl ToolDefinition for McpToolWrapper {
             .call(&self.tool_decl.name, params)
             .await
             .map_err(|e| {
-                ToolError::ExecutionFailed(format!(
-                    "MCP call to server '{}' tool '{}' failed: {}",
-                    self.server_name, self.tool_decl.name, e
-                ))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "MCP call to server '{}' tool '{}' failed: {}",
+                        self.server_name, self.tool_decl.name, e
+                    ))
+                    .with_origin(e.error_origin()),
+                )
             })?;
 
         // MCP results often come back as a JSON object with a 'content' field for display
@@ -753,7 +756,12 @@ impl ToolManager {
             args: Some(vec!["-la".to_string()]),
             ..Default::default()
         })
-        .map_err(|error| ToolError::Initialization(error.to_string()))?;
+        .map_err(|error| {
+            ToolError::Initialization(
+                crate::error_diagnostics::FailureMessage::leaf(error.to_string())
+                    .with_origin(error.error_origin()),
+            )
+        })?;
         client.set_test_status(McpStatus::Connected).await;
         let client: Arc<dyn McpClient> = Arc::new(client);
 
@@ -899,10 +907,9 @@ impl ToolManager {
                     "unknown panic payload".to_string()
                 };
                 log::error!("Native tool '{}' panicked: {}", name, panic_message);
-                Err(ToolError::ExecutionFailed(format!(
-                    "Tool '{}' panicked: {}",
-                    name, panic_message
-                )))
+                Err(ToolError::ExecutionFailed(
+                    format!("Tool '{}' panicked: {}", name, panic_message).into(),
+                ))
             }
         };
         (result, true)
@@ -1045,7 +1052,10 @@ impl ToolManager {
                     server_name,
                     crate::capability::redaction::redact_text(&error.to_string())
                 );
-                ToolError::ExecutionFailed(mcp_call_error_detail(&error))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(mcp_call_error_detail(&error))
+                        .with_origin(error.error_origin()),
+                )
             })
     }
 
@@ -1242,7 +1252,7 @@ impl ToolManager {
         let client_result: Result<Arc<dyn McpClient>, crate::mcp::McpError> =
             match mcp_server_config.protocol_type {
                 McpProtocolType::Sse => Err(crate::mcp::McpError::ClientConfigError(
-                    t!("mcp.config.sse_removed_in_rmcp_v1").to_string(),
+                    t!("mcp.config.sse_removed_in_rmcp_v1").to_string().into(),
                 )),
                 McpProtocolType::Stdio => StdioClient::new(mcp_server_config.clone())
                     .map(|c| Arc::new(c) as Arc<dyn McpClient>),
@@ -1311,7 +1321,10 @@ impl ToolManager {
                 McpStatus::Error(error.to_string()),
             )
             .await;
-            return Err(ToolError::Initialization(error.to_string()));
+            return Err(ToolError::Initialization(
+                crate::error_diagnostics::FailureMessage::leaf(error.to_string())
+                    .with_origin(error.error_origin()),
+            ));
         }
         log::info!("MCP client {} started successfully.", &name);
 
@@ -1420,10 +1433,13 @@ impl ToolManager {
         let server_name = client.name().await;
         let status = client.status().await;
         if status != McpStatus::Connected && status != McpStatus::Running {
-            let error = ToolError::Initialization(format!(
-                "MCP server {} is not running (status: {:?})",
-                server_name, status
-            ));
+            let error = ToolError::Initialization(
+                format!(
+                    "MCP server {} is not running (status: {:?})",
+                    server_name, status
+                )
+                .into(),
+            );
             if fail_closed {
                 return Err(error);
             }
@@ -1446,17 +1462,20 @@ impl ToolManager {
             }
             Err(error) => {
                 if fail_closed {
-                    return Err(ToolError::Initialization(format!(
-                        "Failed to list tools for MCP server {}: {}",
-                        server_name, error
-                    )));
+                    return Err(ToolError::Initialization(
+                        crate::error_diagnostics::FailureMessage::leaf(format!(
+                            "Failed to list tools for MCP server {}: {}",
+                            server_name, error
+                        ))
+                        .with_origin(error.error_origin()),
+                    ));
                 }
                 log::error!(
                     "Failed to list tools for MCP server {}: {}",
                     server_name,
                     error
                 );
-                return Err(ToolError::ExecutionFailed(error.to_string()));
+                return Err(ToolError::from(error));
             }
         };
 
@@ -1670,7 +1689,7 @@ impl ToolManager {
                     McpStatus::Error("list_failed".into()),
                 )
                 .await;
-                Err(ToolError::ExecutionFailed(e.to_string()))
+                Err(ToolError::from(e))
             }
         }
     }
@@ -1835,17 +1854,17 @@ fn mcp_call_error_detail(error: &McpError) -> String {
         | McpError::ClientConfigError(detail)
         | McpError::ClientStartError(detail)
         | McpError::ClientStopError(detail)
-        | McpError::ClientStatusError(detail)
         | McpError::ServerInitializationError(detail)
+        | McpError::Io(detail)
+        | McpError::Serialization(detail)
+        | McpError::Timeout(detail)
+        | McpError::General(detail) => detail.as_str(),
+        McpError::ClientStatusError(detail)
         | McpError::ServerToolExecutionError(detail)
         | McpError::ServerInternalError(detail)
         | McpError::ServerUnknownError(detail)
-        | McpError::Io(detail)
-        | McpError::Serialization(detail)
         | McpError::Store(detail)
-        | McpError::StateChangeFailed(detail)
-        | McpError::Timeout(detail)
-        | McpError::General(detail) => detail,
+        | McpError::StateChangeFailed(detail) => detail.as_str(),
         McpError::ServerToolNotFound(name) | McpError::NotFound(name) => name,
     };
     let detail = serde_json::from_str::<Value>(raw_detail)
@@ -1988,7 +2007,7 @@ mod tests {
             "message": "https://user:secret@example.com token=abc123",
         })
         .to_string();
-        let detail = mcp_call_error_detail(&McpError::ClientCallError(message));
+        let detail = mcp_call_error_detail(&McpError::ClientCallError(message.into()));
         assert!(detail.starts_with("MCP tool call failed:"));
         assert!(detail.contains("config_unavailable"));
         assert!(detail.contains("[redacted]@example.com"));
@@ -2000,19 +2019,21 @@ mod tests {
     #[test]
     fn provider_error_detail_is_visible_without_secrets() {
         let detail = mcp_call_error_detail(&McpError::ClientCallError(
-            json!({"code": "provider_private_code", "message": "raw provider failure"}).to_string(),
+            json!({"code": "provider_private_code", "message": "raw provider failure"})
+                .to_string()
+                .into(),
         ));
         assert!(detail.contains("provider_private_code"));
         assert!(detail.contains("raw provider failure"));
         assert_eq!(
-            mcp_call_error_detail(&McpError::Timeout("timed out".to_string())),
+            mcp_call_error_detail(&McpError::Timeout("timed out".into())),
             "MCP tool call failed: timed out"
         );
     }
 
     #[test]
     fn provider_error_detail_is_bounded() {
-        let detail = mcp_call_error_detail(&McpError::General("x".repeat(5000)));
+        let detail = mcp_call_error_detail(&McpError::General("x".repeat(5000).into()));
         assert!(detail.chars().count() <= 1622);
     }
 
@@ -3064,7 +3085,7 @@ mod tests {
             async fn perform_connect(
                 &self,
             ) -> McpClientResult<RunningService<RoleClient, InitializeRequestParams>> {
-                Err(McpError::General("mock client cannot connect".to_string()))
+                Err(McpError::General("mock client cannot connect".into()))
             }
 
             async fn stop_bounded(&self, _budget: Duration) -> McpStopOutcome {

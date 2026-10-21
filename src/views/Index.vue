@@ -581,6 +581,7 @@ import {
 import { getModelLogo } from '@/libs/logo'
 import { getLanguageByCode } from '@/i18n/langUtils'
 import { isEmpty, showMessage, csGetStorage, csSetStorage, Uuid } from '@/libs/util'
+import { formatUserError } from '@/libs/error'
 import { parseFileContent } from '@/libs/file-parser'
 
 import { useChatStore } from '@/stores/chat'
@@ -1442,7 +1443,7 @@ const dispatchChatCompletion = async (messageId = null) => {
         inputMessage.value = backupMessage
         attachments.value = backupAttachments
         chatErrorMessage.value = t('chat.errorOnAddAttachment', {
-          error: error.message || 'Vision failed'
+          error: formatUserError(error, t('common.errorFallback'))
         })
         isChatting.value = false
         isPreparingSubmission.value = false
@@ -1580,7 +1581,9 @@ const dispatchChatCompletion = async (messageId = null) => {
           }
         })
       } catch (error) {
-        chatErrorMessage.value = t('chat.errorOnSendMessage', { error: String(error) })
+        chatErrorMessage.value = t('chat.errorOnSendMessage', {
+          error: formatUserError(error, t('common.errorFallback'))
+        })
         isChatting.value = false
         isPreparingSubmission.value = false
       }
@@ -1589,7 +1592,9 @@ const dispatchChatCompletion = async (messageId = null) => {
       // 如果存数据库失败，也要尝试回滚 UI
       inputMessage.value = backupMessage
       attachments.value = backupAttachments
-      chatErrorMessage.value = t('chat.errorOnSaveMessage', { error: String(error) })
+      chatErrorMessage.value = t('chat.errorOnSaveMessage', {
+        error: formatUserError(error, t('common.errorFallback'))
+      })
       isChatting.value = false
       isPreparingSubmission.value = false
     })
@@ -1819,11 +1824,21 @@ const handleChatMessage = async payload => {
             genTitleByAi()
           }
         } catch (error) {
-          chatErrorMessage.value = t('chat.errorOnSaveMessage', { error })
+          chatErrorMessage.value = t('chat.errorOnSaveMessage', {
+            error: formatUserError(error, t('common.errorFallback'))
+          })
         }
       }
     }
   )
+
+  // Only the displayed copy is normalized; the stream payload and saved tool content stay as sent.
+  if (payload?.type === 'error' && payload?.chunk) {
+    chatErrorMessage.value = formatUserError(
+      { presentation: payload.metadata?.user_error, message: payload.chunk },
+      t('common.errorFallback')
+    )
+  }
 
   // Handle model metadata
   chatState.value.model = payload?.metadata?.model || currentModel.value.defaultModel || ''
@@ -1962,7 +1977,9 @@ onMounted(async () => {
           })
         })
         .catch(error => {
-          chatErrorMessage.value = t('chat.errorOnLoadMessages', { error })
+          chatErrorMessage.value = t('chat.errorOnLoadMessages', {
+            error: formatUserError(error, t('common.errorFallback'))
+          })
         })
       inputRef.value?.focus()
     } else if (event?.payload?.type === 'sensitive_config_changed') {
@@ -2038,7 +2055,13 @@ const onFavouriteConversation = id => {
     return
   }
   chatStore.updateConversation(id, null, !conversation.isFavorite).catch(error => {
-    showMessage(t('chat.errorOnUpdateConversation', { error }), 'error', 3000)
+    showMessage(
+      t('chat.errorOnUpdateConversation', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error',
+      3000
+    )
   })
 }
 
@@ -2069,7 +2092,13 @@ const onSaveEditConversation = () => {
       showMessage(t('chat.conversationTitleUpdated'), 'success', 1000)
     })
     .catch(error => {
-      showMessage(t('chat.errorOnUpdateConversation', { error }), 'error', 3000)
+      showMessage(
+        t('chat.errorOnUpdateConversation', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
+        'error',
+        3000
+      )
     })
 }
 /**
@@ -2097,7 +2126,13 @@ const onDeleteConversation = id => {
         }
       })
       .catch(error => {
-        showMessage(t('chat.errorOnDeleteConversation', { error }), 'error', 3000)
+        showMessage(
+          t('chat.errorOnDeleteConversation', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
+          'error',
+          3000
+        )
       })
   })
 }
@@ -2111,21 +2146,16 @@ const onOpenSettingWindow = async type => {
         `Error opening setting window: ` + error.toFormattedString(),
         error.originalError
       )
-      showMessage(
-        t('chat.errorOnOpenSettingWindow', {
-          error: error.toFormattedString()
-        }),
-        'error',
-        3000
-      )
     } else {
       console.error('Error opening setting window:', error)
-      showMessage(
-        t('chat.errorOnOpenSettingWindow', { error: error.message || String(error) }),
-        'error',
-        3000
-      )
     }
+    showMessage(
+      t('chat.errorOnOpenSettingWindow', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error',
+      3000
+    )
   }
 }
 
@@ -2152,31 +2182,29 @@ const onStopChat = () => {
           )
           .catch(error => {
             if (error instanceof FrontendAppError) {
-              chatErrorMessage.value = t('chat.errorOnSaveMessage', {
-                error: error.toFormattedString()
-              })
               console.error('error on save message:', error.originalError)
             } else {
-              chatErrorMessage.value = t('chat.errorOnSaveMessage', {
-                error: error.message || String(error)
-              })
               console.error('error on save message:', error)
             }
+            chatErrorMessage.value = t('chat.errorOnSaveMessage', {
+              error: formatUserError(error, t('common.errorFallback'))
+            })
           })
       }
     })
     .catch(error => {
       if (error instanceof FrontendAppError) {
-        showMessage(t('chat.errorOnStopChat', { error: error.toFormattedString() }), 'error', 3000)
         console.error('error on stop chat:', error.originalError)
       } else {
-        showMessage(
-          t('chat.errorOnStopChat', { error: error.message || String(error) }),
-          'error',
-          3000
-        )
         console.error('error on stop chat:', error)
       }
+      showMessage(
+        t('chat.errorOnStopChat', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
+        'error',
+        3000
+      )
     })
     .finally(() => {
       lastChatId.value = ''
@@ -2219,7 +2247,13 @@ const onCopyMessage = id => {
     navigator.clipboard.writeText(content)
     showMessage(t('chat.messageCopied'), 'success', 1000)
   } catch (error) {
-    showMessage(t('chat.errorOnCopyMessage', { error }), 'error', 3000)
+    showMessage(
+      t('chat.errorOnCopyMessage', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error',
+      3000
+    )
   }
 }
 
@@ -2259,7 +2293,13 @@ const onDeleteMessage = id => {
         scrollToBottomIfNeeded()
       })
       .catch(error => {
-        showMessage(t('chat.errorOnDeleteMessage', { error }), 'error', 3000)
+        showMessage(
+          t('chat.errorOnDeleteMessage', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
+          'error',
+          3000
+        )
       })
   })
 }
@@ -2338,7 +2378,13 @@ const onClearContext = async () => {
     await loadMessagesForObserver()
     showMessage(t('chat.clearContextDone'), 'success', 2000)
   } catch (error) {
-    showMessage(t('chat.clearContextFailed', { error: String(error) }), 'error', 3000)
+    showMessage(
+      t('chat.clearContextFailed', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error',
+      3000
+    )
   }
 }
 
@@ -2471,14 +2517,24 @@ const handleImageFile = async file => {
       }
       reader.onerror = error => {
         console.error('FileReader error:', error)
-        showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read image' }), 'error')
+        showMessage(
+          t('chat.errorOnAddAttachment', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
+          'error'
+        )
         reject(error)
       }
       reader.readAsDataURL(rawFile)
     })
   } catch (error) {
     console.error('Error handling image file:', error)
-    showMessage(t('chat.errorOnAddAttachment', { error: error.message }), 'error')
+    showMessage(
+      t('chat.errorOnAddAttachment', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
+      'error'
+    )
   }
 }
 
@@ -2503,7 +2559,12 @@ const handleTextFile = async file => {
       }
       reader.onerror = error => {
         console.error('FileReader error:', error)
-        showMessage(t('chat.errorOnAddAttachment', { error: 'Failed to read text file' }), 'error')
+        showMessage(
+          t('chat.errorOnAddAttachment', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
+          'error'
+        )
         reject(error)
       }
       reader.readAsText(rawFile)
@@ -2511,7 +2572,9 @@ const handleTextFile = async file => {
   } catch (error) {
     console.error('Error handling text file:', error)
     showMessage(
-      t('chat.errorOnAddAttachment', { error: error.message || 'Failed to read file' }),
+      t('chat.errorOnAddAttachment', {
+        error: formatUserError(error, t('common.errorFallback'))
+      }),
       'error'
     )
   }
@@ -2585,7 +2648,9 @@ const onFileSelect = async file => {
     } catch (error) {
       console.error('Error parsing file:', error)
       showMessage(
-        t('chat.errorOnAddAttachment', { error: error.message || 'Parse failed' }),
+        t('chat.errorOnAddAttachment', {
+          error: formatUserError(error, t('common.errorFallback'))
+        }),
         'error'
       )
     }
@@ -2681,7 +2746,13 @@ const onSaveTakeNote = async () => {
           showMessage(t('chat.noteSaved'), 'success', 3000)
         })
         .catch(error => {
-          showMessage(t('chat.noteSaveFailed', { error }), 'error', 5000)
+          showMessage(
+            t('chat.noteSaveFailed', {
+              error: formatUserError(error, t('common.errorFallback'))
+            }),
+            'error',
+            5000
+          )
           console.log(error)
         })
     }

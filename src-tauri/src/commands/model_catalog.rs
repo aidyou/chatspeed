@@ -54,5 +54,7 @@ pub async fn resolve_model_profile(
         },
     )
     .await
-    .map_err(|message| AppError::General { message })
+    .map_err(|message| AppError::General {
+        message: message.into(),
+    })
 }

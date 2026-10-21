@@ -150,7 +150,7 @@
               <div class="inspector-section" v-if="task.errorType || task.status === 'final_error'">
                 <div class="section-title error">{{ t('workflow.taskLedger.error') || 'Error' }}</div>
                 <div class="section-content">
-                  <div class="error-message">{{ task.errorType || 'Execution failed' }}</div>
+                  <div class="error-message">{{ getTaskErrorDisplay(task) || t('workflow.taskLedger.error') || 'Error' }}</div>
                 </div>
               </div>
 
@@ -199,6 +199,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { resolveWorkflowErrorDisplay } from '@/composables/workflow/messageProjectionRules'
 
 const props = defineProps({
   /** 任务列表 */
@@ -323,6 +324,9 @@ const truncateResult = (result) => {
   if (result.length <= 500) return result
   return result.substring(0, 500) + '\n... (truncated)'
 }
+
+const getTaskErrorDisplay = task =>
+  task?.errorDisplay || resolveWorkflowErrorDisplay(task, task?.result).display
 
 const formatTime = (timestamp) => {
   if (!timestamp) return '-'

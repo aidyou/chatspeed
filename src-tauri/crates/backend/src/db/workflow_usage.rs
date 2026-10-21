@@ -310,7 +310,12 @@ impl MainStore {
         summary: &WorkflowUsageSummary,
     ) -> Result<(), StoreError> {
         let summary_json = serde_json::to_string(summary).map_err(|error| {
-            StoreError::Query(format!("serialize workflow usage summary: {error}"))
+            StoreError::Query(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "serialize workflow usage summary: {error}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+            )
         })?;
         let runtime = self.db_runtime()?;
         let session_id = session_id.to_string();
@@ -371,7 +376,12 @@ impl MainStore {
             summary_json
                 .map(|summary_json| {
                     serde_json::from_str(&summary_json).map_err(|error| {
-                        StoreError::Query(format!("deserialize workflow usage summary: {error}"))
+                        StoreError::Query(
+                            crate::error_diagnostics::FailureMessage::leaf(format!(
+                                "deserialize workflow usage summary: {error}"
+                            ))
+                            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                        )
                     })
                 })
                 .transpose()

@@ -299,7 +299,7 @@ pub struct MainStore {
 
 struct RuntimeSlot {
     runtime: Option<std::sync::Arc<DbRuntime>>,
-    failure: Option<String>,
+    failure: Option<crate::error_diagnostics::FailureMessage>,
 }
 
 impl Drop for MainStore {
@@ -331,7 +331,10 @@ impl MainStore {
         let mut conn = Connection::open(&db_path).map_err(|e| {
             let err = t!("db.failed_to_open_db_connection", error = e.to_string()).to_string();
             log::error!("{}", err);
-            StoreError::Query(err)
+            StoreError::Query(
+                crate::error_diagnostics::FailureMessage::leaf(err)
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
         })?;
 
         // Enable WAL mode for better concurrency in production
@@ -346,7 +349,10 @@ impl MainStore {
         Self::init_db(&mut conn).map_err(|e| {
             let err = t!("db.failed_to_initialize_database", error = e.to_string()).to_string();
             log::error!("{}", err);
-            StoreError::Query(err)
+            StoreError::Query(
+                crate::error_diagnostics::FailureMessage::leaf(err)
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
         })?;
         super::api_key_crypto::migrate_to_configured_key_if_available(&mut conn)?;
         let config = Self::load_config(&conn)?;
@@ -389,7 +395,10 @@ impl MainStore {
         };
         if let Some(runtime) = runtime {
             if let Err(error) = runtime.shutdown_for_maintenance() {
-                self.mark_runtime_failed(error.to_string());
+                self.mark_runtime_failed(
+                    crate::error_diagnostics::FailureMessage::leaf(error.to_string())
+                        .with_origin(error.error_origin()),
+                );
                 return Err(error);
             }
         }
@@ -405,14 +414,17 @@ impl MainStore {
             slot.failure = None;
         }
         self.runtime_changed.notify_all();
-        *self
-            .runtime_path
-            .lock()
-            .map_err(|e| StoreError::LockError(e.to_string()))? = db_path;
+        *self.runtime_path.lock().map_err(|e| {
+            StoreError::LockError(
+                crate::error_diagnostics::FailureMessage::leaf(e.to_string()).with_origin(
+                    crate::error_diagnostics::ErrorOrigin::leaf(e.to_string(), None, None, None),
+                ),
+            )
+        })? = db_path;
         Ok(())
     }
 
-    fn mark_runtime_failed(&self, error: String) {
+    fn mark_runtime_failed(&self, error: crate::error_diagnostics::FailureMessage) {
         let mut slot = self.runtime.lock();
         if slot.runtime.is_none() {
             slot.failure = Some(error);
@@ -535,7 +547,10 @@ impl MainStore {
         )
         .map_err(|e| {
             StoreError::Query(
-                t!("db.failed_to_open_db_connection", error = e.to_string()).to_string(),
+                crate::error_diagnostics::FailureMessage::leaf(
+                    t!("db.failed_to_open_db_connection", error = e.to_string()).to_string(),
+                )
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
             )
         })?;
         let _ = new_conn.query_row("PRAGMA journal_mode=WAL;", [], |_| Ok(()));
@@ -584,11 +599,23 @@ impl MainStore {
             super::DbBackup::cleanup_sqlite_temporaries(main_db_path);
             if main_db_path.exists() {
                 std::fs::remove_file(main_db_path).map_err(|e| {
-                    StoreError::IoError(format!("Failed to remove restored database: {}", e))
+                    StoreError::IoError(
+                        crate::error_diagnostics::FailureMessage::leaf(format!(
+                            "Failed to remove restored database: {}",
+                            e
+                        ))
+                        .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                    )
                 })?;
             }
             std::fs::rename(&rollback_path, main_db_path).map_err(|e| {
-                StoreError::IoError(format!("Failed to restore original database: {}", e))
+                StoreError::IoError(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to restore original database: {}",
+                        e
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                )
             })?;
             store.reopen(main_db_path)?;
             store.reload_config()
@@ -603,8 +630,10 @@ impl MainStore {
                 ),
                 None => format!("Failed to stage original database: {}", e),
             };
-            self.mark_runtime_failed(message.clone());
-            StoreError::IoError(message)
+            let failure = crate::error_diagnostics::FailureMessage::leaf(message.clone())
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e));
+            self.mark_runtime_failed(failure.clone());
+            StoreError::IoError(failure)
         })?;
 
         if let Err(error) = std::fs::rename(temp_db_path, main_db_path) {
@@ -616,8 +645,10 @@ impl MainStore {
                 ),
                 None => format!("Failed to install restored database: {}", error),
             };
-            self.mark_runtime_failed(message.clone());
-            return Err(StoreError::IoError(message));
+            let failure = crate::error_diagnostics::FailureMessage::leaf(message)
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error));
+            self.mark_runtime_failed(failure.clone());
+            return Err(StoreError::IoError(failure));
         }
 
         let restore_result = (|| -> Result<(), StoreError> {
@@ -637,8 +668,10 @@ impl MainStore {
                 ),
                 None => format!("Failed to finalize restored database: {}", error),
             };
-            self.mark_runtime_failed(message.clone());
-            return Err(StoreError::IoError(message));
+            let failure = crate::error_diagnostics::FailureMessage::leaf(message)
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error));
+            self.mark_runtime_failed(failure.clone());
+            return Err(StoreError::IoError(failure));
         }
 
         if let Err(error) = std::fs::remove_file(&rollback_path) {
@@ -765,7 +798,7 @@ impl MainStore {
                             } else {
                                 // Other errors (like IO errors, theoretically won't happen), return default value or error
                                 error!("Unexpected error parsing 'models' field for AI Model (id: {:?}): {}. Error: {}", row.get::<_, Option<i64>>("id").unwrap_or_default(), s, e);
-                                Err(rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(StoreError::JsonError(t!("db.json_parse_failed_models", error = e.to_string()).to_string()))))
+                                Err(rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(StoreError::JsonError(crate::error_diagnostics::FailureMessage::leaf(t!("db.json_parse_failed_models", error = e.to_string()).to_string()).with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e))))))
                             }
                         }
                     })
@@ -896,6 +929,52 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn cached_runtime_failure_preserves_the_direct_error_projection_and_legacy_shapes() {
+        use crate::db::StoreError;
+        use crate::error_diagnostics::{ErrorOrigin, ErrorProjection, FailureMessage};
+        let store = MainStore::new(":memory:").unwrap();
+        store.pause_runtime().unwrap();
+        let failure = FailureMessage::leaf("Failed to install restored database: legacy cause")
+            .with_origin(
+                ErrorOrigin::leaf(
+                    "permission denied: https://disk.test/path\nretry token=CANARY",
+                    None,
+                    Some("permission_denied".to_string()),
+                    None,
+                )
+                .context("db", "install_restore", None),
+            );
+        let direct = StoreError::IoError(failure.clone());
+        let legacy_direct = serde_json::to_value(&direct).unwrap();
+        store.mark_runtime_failed(failure);
+        let cached = match store.db_runtime() {
+            Ok(_) => panic!("a failed paused runtime must reject lookups"),
+            Err(error) => error,
+        };
+        assert!(matches!(&cached, StoreError::WorkerFailed(_)));
+        assert_eq!(cached.user_error(), direct.user_error());
+        assert!(cached
+            .user_error()
+            .message
+            .starts_with("permission denied:"));
+        assert!(!cached.user_error().message.contains("CANARY"));
+        assert_eq!(cached.error_origin().code, direct.error_origin().code);
+        assert_eq!(cached.error_origin().sources, direct.error_origin().sources);
+        assert_eq!(
+            legacy_direct["message"],
+            "Failed to install restored database: legacy cause"
+        );
+        assert_eq!(
+            serde_json::to_value(&cached).unwrap()["message"],
+            legacy_direct["message"]
+        );
+        assert!(serde_json::to_value(&cached)
+            .unwrap()
+            .get("origin")
+            .is_none());
     }
 
     #[test]

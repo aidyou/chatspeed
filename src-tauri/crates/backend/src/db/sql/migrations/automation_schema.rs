@@ -91,7 +91,12 @@ pub(crate) fn ensure_automation_concurrency_schema(conn: &Connection) -> Result<
     // version is already at or past this migration (mirrors v20 robustness).
     for (name, sql) in MIGRATION_SQL {
         conn.execute(sql, []).map_err(|e| {
-            StoreError::Query(format!("automation schema ensure {name} failed: {e}"))
+            StoreError::Query(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "automation schema ensure {name} failed: {e}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
         })?;
     }
 

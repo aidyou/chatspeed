@@ -17,9 +17,11 @@
 use crate::environment::{
     get_available_shells, get_default_shell, get_terminal_environment, ShellDescriptor,
 };
+use crate::error_diagnostics::{ErrorDiagnostic, ErrorProjection, FailureMessage};
 use crate::lifecycle::{AdmissionTicket, WorkAdmission, WorkKind};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use chatspeed_contracts::error::{ErrorReason, UserErrorPresentation};
 use chatspeed_contracts::{
     TerminalExitEvent, TerminalOutputEvent, TerminalSessionMetadataDto, TerminalShellDto,
     TerminalStreamEnvelope, TerminalStreamEvent,
@@ -72,28 +74,28 @@ pub enum TerminalError {
     InvalidSize,
     /// The requested working directory could not be resolved.
     #[error("terminal_cwd_invalid: {0}")]
-    InvalidCwd(String),
+    InvalidCwd(FailureMessage),
     /// The caller's lease does not own the session.
     #[error("terminal_forbidden: {0}")]
     Forbidden(String),
     /// The PTY pair could not be opened.
     #[error("terminal_pty_open_failed: {0}")]
-    PtyOpenFailed(String),
+    PtyOpenFailed(FailureMessage),
     /// The shell process could not be spawned.
     #[error("terminal_spawn_failed: {0}")]
-    SpawnFailed(String),
+    SpawnFailed(FailureMessage),
     /// The PTY writer could not be taken.
     #[error("terminal_writer_failed: {0}")]
-    WriterFailed(String),
+    WriterFailed(FailureMessage),
     /// The PTY reader could not be taken.
     #[error("terminal_reader_failed: {0}")]
-    ReaderFailed(String),
+    ReaderFailed(FailureMessage),
     /// Writing user input to the PTY failed.
     #[error("terminal_write_failed: {0}")]
-    WriteFailed(String),
+    WriteFailed(FailureMessage),
     /// Resizing the PTY failed.
     #[error("terminal_resize_failed: {0}")]
-    ResizeFailed(String),
+    ResizeFailed(FailureMessage),
     /// The runtime is quiescing and refuses new terminal work.
     #[error("terminal_stopping: {1}")]
     Stopping(&'static str, String),
@@ -104,6 +106,90 @@ pub enum TerminalError {
 pub struct TerminalOwner {
     pub client_id: String,
     pub lease_id: String,
+}
+
+impl TerminalError {
+    /// The stable machine token the legacy `Display` already exposed.
+    ///
+    /// It stays the internal diagnostic code; HTTP adapters keep mapping to
+    /// their own status/code pair, so this method never changes the wire.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::SessionNotFound => "terminal_session_not_found",
+            Self::SessionExited => "terminal_session_exited",
+            Self::ShellUnavailable => "terminal_shell_unavailable",
+            Self::InvalidSize => "terminal_size_invalid",
+            Self::InvalidCwd(_) => "terminal_cwd_invalid",
+            Self::Forbidden(_) => "terminal_forbidden",
+            Self::PtyOpenFailed(_) => "terminal_pty_open_failed",
+            Self::SpawnFailed(_) => "terminal_spawn_failed",
+            Self::WriterFailed(_) => "terminal_writer_failed",
+            Self::ReaderFailed(_) => "terminal_reader_failed",
+            Self::WriteFailed(_) => "terminal_write_failed",
+            Self::ResizeFailed(_) => "terminal_resize_failed",
+            Self::Stopping(_, _) => "terminal_stopping",
+        }
+    }
+
+    /// The typed cause, when the variant carries one.
+    ///
+    /// `Forbidden` carries only an ownership explanation and `Stopping` carries
+    /// an already-localized admission message, so neither invents a cause chain.
+    fn typed_cause(&self) -> Option<&FailureMessage> {
+        match self {
+            Self::InvalidCwd(cause)
+            | Self::PtyOpenFailed(cause)
+            | Self::SpawnFailed(cause)
+            | Self::WriterFailed(cause)
+            | Self::ReaderFailed(cause)
+            | Self::WriteFailed(cause)
+            | Self::ResizeFailed(cause) => Some(cause),
+            _ => None,
+        }
+    }
+}
+
+impl ErrorProjection for TerminalError {
+    fn user_error(&self) -> UserErrorPresentation {
+        // Unit variants carry no cause, but each one still has a precise source
+        // meaning that must reach the user instead of a generic error.
+        let localized = |key: &str| UserErrorPresentation {
+            schema_version: 1,
+            message: rust_i18n::t!(key).to_string(),
+            reason: None,
+            upstream_status: None,
+        };
+        match self {
+            Self::Stopping(_, message) => UserErrorPresentation {
+                schema_version: 1,
+                message: crate::error_diagnostics::sanitize_user_message(message),
+                reason: Some(ErrorReason::RuntimeStopping),
+                upstream_status: None,
+            },
+            Self::SessionNotFound => localized("terminal.session_not_found"),
+            Self::SessionExited => localized("terminal.session_exited"),
+            Self::ShellUnavailable => localized("terminal.shell_unavailable"),
+            Self::InvalidSize => localized("terminal.invalid_size"),
+            // The payload is an internal ownership note, not a user-facing
+            // string: project a fixed permission denial instead of echoing it.
+            Self::Forbidden(_) => localized("terminal.forbidden"),
+            _ => self
+                .typed_cause()
+                .map(ErrorProjection::user_error)
+                .unwrap_or_else(|| localized("chat.error_feedback")),
+        }
+    }
+
+    fn diagnostic(&self) -> ErrorDiagnostic {
+        let mut diagnostic = self
+            .typed_cause()
+            .map(ErrorProjection::diagnostic)
+            .unwrap_or_else(|| FailureMessage::leaf(self.to_string()).diagnostic());
+        diagnostic.module = "terminal".to_string();
+        diagnostic.operation = self.code().to_string();
+        diagnostic.code = Some(self.code().to_string());
+        diagnostic
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,9 +415,9 @@ impl TerminalManager {
         let session_id = Uuid::new_v4().to_string();
         let size = validated_size(cols, rows)?;
         let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(size)
-            .map_err(|error| TerminalError::PtyOpenFailed(error.to_string()))?;
+        let pair = pty_system.openpty(size).map_err(|error| {
+            TerminalError::PtyOpenFailed(FailureMessage::leaf(error.to_string()))
+        })?;
 
         let mut command = build_shell_command(&shell);
         command.cwd(&cwd);
@@ -351,7 +437,7 @@ impl TerminalManager {
         let mut child = pair
             .slave
             .spawn_command(command)
-            .map_err(|error| TerminalError::SpawnFailed(error.to_string()))?;
+            .map_err(|error| TerminalError::SpawnFailed(FailureMessage::leaf(error.to_string())))?;
         #[cfg(unix)]
         let process_group = pair.master.process_group_leader();
         #[cfg(not(unix))]
@@ -360,7 +446,9 @@ impl TerminalManager {
             Ok(writer) => writer,
             Err(error) => {
                 terminate_child(&mut *child, process_group);
-                return Err(TerminalError::WriterFailed(error.to_string()));
+                return Err(TerminalError::WriterFailed(FailureMessage::leaf(
+                    error.to_string(),
+                )));
             }
         };
         install_session_prompt(&mut writer, &shell, &cwd);
@@ -374,7 +462,9 @@ impl TerminalManager {
             Ok(reader) => reader,
             Err(error) => {
                 terminate_child(&mut *child, process_group);
-                return Err(TerminalError::ReaderFailed(error.to_string()));
+                return Err(TerminalError::ReaderFailed(FailureMessage::leaf(
+                    error.to_string(),
+                )));
             }
         };
 
@@ -443,7 +533,7 @@ impl TerminalManager {
             .writer
             .write_all(input.as_bytes())
             .and_then(|_| resources.writer.flush())
-            .map_err(|error| TerminalError::WriteFailed(error.to_string()))
+            .map_err(|error| TerminalError::WriteFailed(FailureMessage::from_error(&error)))
     }
 
     /// Resizes a session owned by `client_id`.
@@ -473,7 +563,7 @@ impl TerminalManager {
         resources
             .master
             .resize(size)
-            .map_err(|error| TerminalError::ResizeFailed(error.to_string()))
+            .map_err(|error| TerminalError::ResizeFailed(FailureMessage::leaf(error.to_string())))
     }
 
     /// Closes a session owned by `client_id`.
@@ -980,17 +1070,18 @@ fn resolve_initial_cwd(candidate: Option<&str>) -> Result<PathBuf, TerminalError
         if path.is_dir() {
             return path
                 .canonicalize()
-                .map_err(|error| TerminalError::InvalidCwd(error.to_string()));
+                .map_err(|error| TerminalError::InvalidCwd(FailureMessage::from_error(&error)));
         }
     }
 
     if let Some(home) = dirs::home_dir().filter(|path| path.is_dir()) {
         return home
             .canonicalize()
-            .map_err(|error| TerminalError::InvalidCwd(error.to_string()));
+            .map_err(|error| TerminalError::InvalidCwd(FailureMessage::from_error(&error)));
     }
 
-    std::env::current_dir().map_err(|error| TerminalError::InvalidCwd(error.to_string()))
+    std::env::current_dir()
+        .map_err(|error| TerminalError::InvalidCwd(FailureMessage::from_error(&error)))
 }
 
 fn select_shell(shell_path: Option<&str>) -> Result<ShellDescriptor, TerminalError> {
@@ -1020,6 +1111,9 @@ fn validated_size(cols: Option<u16>, rows: Option<u16>) -> Result<PtySize, Termi
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+
+    use crate::error_diagnostics::{ErrorProjection, FailureMessage};
+    use chatspeed_contracts::error::ErrorReason;
 
     use super::{
         build_shell_command, install_session_prompt, reap_exited_session, resolve_initial_cwd,
@@ -1568,5 +1662,127 @@ mod tests {
             .list_sessions("client-a", "client-a-lease")
             .is_empty());
         assert!(!manager.sessions.lock().sessions.contains_key(&session_id));
+    }
+
+    #[test]
+    fn unit_terminal_errors_project_distinct_localized_explanations() {
+        let generic = rust_i18n::t!("chat.error_feedback").to_string();
+        let cases = [
+            (
+                TerminalError::SessionNotFound,
+                "terminal.session_not_found",
+                "terminal_session_not_found",
+            ),
+            (
+                TerminalError::SessionExited,
+                "terminal.session_exited",
+                "terminal_session_exited",
+            ),
+            (
+                TerminalError::ShellUnavailable,
+                "terminal.shell_unavailable",
+                "terminal_shell_unavailable",
+            ),
+            (
+                TerminalError::InvalidSize,
+                "terminal.invalid_size",
+                "terminal_size_invalid",
+            ),
+            (
+                TerminalError::Forbidden("the session belongs to another client lease".to_string()),
+                "terminal.forbidden",
+                "terminal_forbidden",
+            ),
+        ];
+
+        let mut messages = Vec::new();
+        for (error, key, legacy_token) in cases {
+            assert_eq!(error.code(), legacy_token);
+            assert!(error.to_string().starts_with(legacy_token));
+            let presentation = error.user_error();
+            assert_eq!(
+                presentation.message,
+                rust_i18n::t!(key).to_string(),
+                "{legacy_token} must use its own localized explanation"
+            );
+            assert_ne!(
+                presentation.message, generic,
+                "{legacy_token} must not fall back to a generic error"
+            );
+            assert!(
+                !presentation.message.contains("terminal_"),
+                "{legacy_token} must not expose a machine token"
+            );
+            assert!(!presentation.message.trim().is_empty());
+            assert_eq!(presentation.reason, None);
+            assert_eq!(presentation.upstream_status, None);
+            messages.push(presentation.message);
+        }
+        messages.sort();
+        messages.dedup();
+        assert_eq!(
+            messages.len(),
+            5,
+            "each unit terminal failure needs a distinct explanation"
+        );
+    }
+
+    #[test]
+    fn terminal_explanations_exist_and_differ_in_every_locale() {
+        let keys = [
+            "terminal.session_not_found",
+            "terminal.session_exited",
+            "terminal.shell_unavailable",
+            "terminal.invalid_size",
+            "terminal.forbidden",
+        ];
+        for locale in rust_i18n::available_locales!() {
+            let mut messages = Vec::new();
+            for key in keys {
+                let message = rust_i18n::t!(key, locale = locale).to_string();
+                assert!(!message.trim().is_empty(), "{locale} is missing {key}");
+                assert!(
+                    !message.contains("terminal_"),
+                    "{locale} {key} exposes a machine token"
+                );
+                messages.push(message);
+            }
+            messages.sort();
+            messages.dedup();
+            assert_eq!(
+                messages.len(),
+                keys.len(),
+                "{locale} must explain every terminal failure distinctly"
+            );
+        }
+    }
+
+    #[test]
+    fn forbidden_never_echoes_its_internal_parameter() {
+        let error =
+            TerminalError::Forbidden("not the owner; Authorization: Bearer CANARY".to_string());
+        let presentation = error.user_error();
+        assert_eq!(
+            presentation.message,
+            rust_i18n::t!("terminal.forbidden").to_string()
+        );
+        assert!(!presentation.message.contains("CANARY"));
+        assert!(!presentation.message.contains("Bearer"));
+        assert!(!presentation.message.contains("not the owner"));
+    }
+
+    #[test]
+    fn stopping_and_typed_io_errors_keep_their_existing_projection() {
+        let stopping =
+            TerminalError::Stopping("runtime_stopping", "The runtime is stopping".to_string());
+        let presentation = stopping.user_error();
+        assert_eq!(presentation.reason, Some(ErrorReason::RuntimeStopping));
+        assert_eq!(presentation.message, "The runtime is stopping");
+
+        let io = TerminalError::SpawnFailed(FailureMessage::leaf("Authorization: Bearer CANARY"));
+        let presentation = io.user_error();
+        assert!(!presentation.message.contains("CANARY"));
+        assert!(!presentation.message.contains("terminal_"));
+        assert_eq!(presentation.reason, None);
     }
 }

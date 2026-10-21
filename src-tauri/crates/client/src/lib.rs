@@ -525,6 +525,53 @@ const FORBIDDEN_TOKEN_QUERY_KEYS: [&str; 3] = ["token", "access_token", "auth"];
 // Errors
 // ---------------------------------------------------------------------------
 
+/// Structured non-authentication response retained by clients and adapters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientResponseError {
+    pub legacy_display: String,
+    pub status: u16,
+    pub code: String,
+    pub message: String,
+    pub presentation: Option<chatspeed_contracts::UserErrorPresentation>,
+}
+
+impl fmt::Display for ClientResponseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.legacy_display)
+    }
+}
+
+/// Structured authentication failure. The optional fields preserve the wire
+/// envelope while keeping the historical display text stable for callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthError {
+    pub status: u16,
+    pub code: String,
+    pub message: String,
+    pub presentation: Option<chatspeed_contracts::UserErrorPresentation>,
+}
+
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "authentication failed: {} ({})", self.message, self.code)
+    }
+}
+
+/// Safe user-facing projection with a message fallback when no presentation exists.
+pub fn user_error_message(error: &ClientError) -> &str {
+    match error {
+        ClientError::Auth(auth) => auth
+            .presentation
+            .as_ref()
+            .map_or(&auth.message, |p| &p.message),
+        ClientError::Server(response) => response
+            .presentation
+            .as_ref()
+            .map_or(&response.message, |p| &p.message),
+        _ => "An unexpected client error occurred",
+    }
+}
+
 /// Stable failure classification for control-plane clients.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -539,14 +586,10 @@ pub enum ClientError {
     Transport(String),
     /// The runtime rejected authentication or authorization.
     #[error("authentication failed: {0}")]
-    Auth(String),
+    Auth(AuthError),
     /// The runtime returned a structured error for a non-2xx response.
-    #[error("server error {status}: {message} ({code})")]
-    Server {
-        status: u16,
-        code: String,
-        message: String,
-    },
+    #[error("{0}")]
+    Server(ClientResponseError),
     /// The caller asked for something this client refuses to send.
     #[error("invalid request: {0}")]
     InvalidRequest(String),
@@ -559,8 +602,12 @@ pub enum ClientError {
 /// [`ErrorEnvelope`] whenever the body carries one. Raw bodies are used only as
 /// a fallback message and never include the token, which stays in the header.
 fn error_from_status(status: StatusCode, body: &str) -> ClientError {
-    let (code, message) = match serde_json::from_str::<ErrorEnvelope>(body) {
-        Ok(envelope) => (envelope.error.code, envelope.error.message),
+    let (code, message, presentation) = match serde_json::from_str::<ErrorEnvelope>(body) {
+        Ok(envelope) => (
+            envelope.error.code,
+            envelope.error.message,
+            envelope.error.presentation,
+        ),
         Err(_) => (
             "unknown_error".to_string(),
             if body.trim().is_empty() {
@@ -571,17 +618,25 @@ fn error_from_status(status: StatusCode, body: &str) -> ClientError {
             } else {
                 body.to_string()
             },
+            None,
         ),
     };
-
     if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        ClientError::Auth(format!("{message} ({code})"))
-    } else {
-        ClientError::Server {
+        ClientError::Auth(AuthError {
             status: status.as_u16(),
             code,
             message,
-        }
+            presentation,
+        })
+    } else {
+        let legacy_display = format!("server error {}: {} ({})", status.as_u16(), message, code);
+        ClientError::Server(ClientResponseError {
+            legacy_display,
+            status: status.as_u16(),
+            code,
+            message,
+            presentation,
+        })
     }
 }
 
@@ -3085,9 +3140,11 @@ mod tests {
             r#"{"error":{"code":"unauthorized","message":"Missing or invalid bearer token"}}"#,
         );
         match unauthorized {
-            ClientError::Auth(message) => {
-                assert!(message.contains("unauthorized"));
-                assert!(message.contains("Missing or invalid bearer token"));
+            ClientError::Auth(auth) => {
+                assert_eq!(auth.code, "unauthorized");
+                assert_eq!(auth.status, 401);
+                assert_eq!(auth.message, "Missing or invalid bearer token");
+                assert!(auth.presentation.is_none());
             }
             other => panic!("expected an auth error, got {other:?}"),
         }
@@ -3097,14 +3154,11 @@ mod tests {
             r#"{"error":{"code":"internal_error","message":"boom"}}"#,
         );
         match server {
-            ClientError::Server {
-                status,
-                code,
-                message,
-            } => {
-                assert_eq!(status, 500);
-                assert_eq!(code, "internal_error");
-                assert_eq!(message, "boom");
+            ClientError::Server(response) => {
+                assert_eq!(response.status, 500);
+                assert_eq!(response.code, "internal_error");
+                assert_eq!(response.message, "boom");
+                assert!(response.presentation.is_none());
             }
             other => panic!("expected a server error, got {other:?}"),
         }
@@ -3112,17 +3166,78 @@ mod tests {
         // A body without an envelope falls back without swallowing the status.
         let unparseable = error_from_status(StatusCode::BAD_GATEWAY, "not json");
         match unparseable {
-            ClientError::Server {
-                status,
-                code,
-                message,
-            } => {
-                assert_eq!(status, 502);
-                assert_eq!(code, "unknown_error");
-                assert_eq!(message, "not json");
+            ClientError::Server(response) => {
+                assert_eq!(response.status, 502);
+                assert_eq!(response.code, "unknown_error");
+                assert_eq!(response.message, "not json");
             }
             other => panic!("expected a fallback server error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_error_envelope_presentation_is_retained_on_the_typed_error() {
+        let presentation = serde_json::from_value::<chatspeed_contracts::UserErrorPresentation>(
+            serde_json::json!({
+                "schema_version": 1,
+                "message": "Ask the operator to top up the budget",
+                "reason": "budget_exhausted",
+                "upstream_status": null
+            }),
+        )
+        .expect("valid presentation fixture");
+
+        let server = error_from_status(
+            StatusCode::CONFLICT,
+            r#"{"error":{"code":"budget_exceeded","message":"budget admission rejected","presentation":{"schema_version":1,"message":"Ask the operator to top up the budget","reason":"budget_exhausted","upstream_status":null}}}"#,
+        );
+        match server {
+            ClientError::Server(response) => {
+                assert_eq!(response.code, "budget_exceeded");
+                assert_eq!(response.presentation.as_ref(), Some(&presentation));
+                // The legacy display stays stable for callers that only format.
+                assert_eq!(
+                    response.to_string(),
+                    "server error 409: budget admission rejected (budget_exceeded)"
+                );
+            }
+            other => panic!("expected a server error, got {other:?}"),
+        }
+
+        let auth = error_from_status(
+            StatusCode::FORBIDDEN,
+            r#"{"error":{"code":"forbidden","message":"no","presentation":{"schema_version":1,"message":"presented","reason":null,"upstream_status":403}}}"#,
+        );
+        match auth {
+            ClientError::Auth(auth) => {
+                assert_eq!(auth.status, 403);
+                assert_eq!(auth.code, "forbidden");
+                assert_eq!(
+                    auth.presentation.as_ref().map(|p| p.message.as_str()),
+                    Some("presented")
+                );
+                // The legacy display keeps the message and the code, not the
+                // presentation, so historical callers see the same text.
+                assert_eq!(auth.to_string(), "authentication failed: no (forbidden)");
+                assert_eq!(user_error_message(&ClientError::Auth(auth)), "presented");
+            }
+            other => panic!("expected an auth error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn user_error_message_falls_back_to_the_wire_message() {
+        let server = error_from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"error":{"code":"internal_error","message":"boom"}}"#,
+        );
+        assert_eq!(user_error_message(&server), "boom");
+
+        // A non-response error has no runtime-controlled presentation.
+        assert_eq!(
+            user_error_message(&ClientError::Transport("down".to_string())),
+            "An unexpected client error occurred"
+        );
     }
 
     // -- leases -------------------------------------------------------------
@@ -3681,7 +3796,7 @@ mod tests {
             .await
             .expect_err("a non-200 reply must be refused");
         match error {
-            ClientError::Server { status, .. } => assert_eq!(status, 404),
+            ClientError::Server(response) => assert_eq!(response.status, 404),
             other => panic!("unexpected {other:?}"),
         }
     }
@@ -3701,7 +3816,7 @@ mod tests {
             .await
             .expect_err("a redirect must not be followed");
         match error {
-            ClientError::Server { status, .. } => assert_eq!(status, 302),
+            ClientError::Server(response) => assert_eq!(response.status, 302),
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(
@@ -3793,7 +3908,7 @@ mod tests {
             .await
             .expect_err("a redirect must not be followed");
         assert!(
-            matches!(error, ClientError::Server { status: 302, .. }),
+            matches!(error, ClientError::Server(ref response) if response.status == 302),
             "unexpected {error:?}"
         );
         assert!(
@@ -3881,9 +3996,9 @@ mod tests {
         );
         let error = guard.renew().await.expect_err("a missing lease must fail");
         match error {
-            ClientError::Server { status, code, .. } => {
-                assert_eq!(status, 404);
-                assert_eq!(code, "not_found");
+            ClientError::Server(response) => {
+                assert_eq!(response.status, 404);
+                assert_eq!(response.code, "not_found");
             }
             other => panic!("expected a server error, got {other:?}"),
         }
@@ -4482,9 +4597,9 @@ mod tests {
 
         let error = client.stream_chat("chat-1").await.expect_err("must reject");
         match error {
-            ClientError::Server { status, code, .. } => {
-                assert_eq!(status, 503);
-                assert_eq!(code, "runtime_unavailable");
+            ClientError::Server(response) => {
+                assert_eq!(response.status, 503);
+                assert_eq!(response.code, "runtime_unavailable");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -5051,9 +5166,9 @@ mod tests {
             .await
             .expect_err("conflict");
         match error {
-            ClientError::Server { status, code, .. } => {
-                assert_eq!(status, 409);
-                assert_eq!(code, "instance_mismatch");
+            ClientError::Server(response) => {
+                assert_eq!(response.status, 409);
+                assert_eq!(response.code, "instance_mismatch");
             }
             other => panic!("unexpected error: {other:?}"),
         }

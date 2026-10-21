@@ -93,12 +93,18 @@ impl ToolDefinition for ReadHistoryMessage {
             .main_store
             .get_workflow_message_by_id_and_role(&self.session_id, message_id, role)
             .map_err(|error| {
-                ToolError::ExecutionFailed(format!("Failed to read workflow message: {error}"))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to read workflow message: {error}"
+                    ))
+                    .with_origin(error.error_origin()),
+                )
             })?
             .ok_or_else(|| {
-                ToolError::ExecutionFailed(format!(
-                    "User workflow message {message_id} was not found in this session"
-                ))
+                ToolError::ExecutionFailed(
+                    format!("User workflow message {message_id} was not found in this session")
+                        .into(),
+                )
             })?;
         let payload = compact_user_message_payload(message);
         let serialized = serde_json::to_string_pretty(&payload)

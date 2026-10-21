@@ -6,6 +6,7 @@ import { createPinia, defineStore, setActivePinia } from 'pinia'
 import { ref, computed } from 'vue'
 import { compileStyleAsync, compileTemplate, parse as parseSfc } from 'vue/compiler-sfc'
 import { mutationOutcomes, parseCapabilityError } from '../../libs/capability.js'
+import { formatUserError } from '../../libs/error.js'
 
 const component = readFileSync(new URL('./AgentSkills.vue', import.meta.url), 'utf8')
 const plugin = readFileSync(new URL('./Plugin.vue', import.meta.url), 'utf8')
@@ -357,6 +358,7 @@ test('uninstall feedback follows the effect outcome, not transport success', asy
       useCapabilityStore: () => store,
       useI18n: () => ({ t: key => key }),
       mutationOutcomes, verdictAllowsInstall: () => false,
+      formatUserError,
       ElMessage: { success: message => successes.push(message), error: error => assert.fail(error) }
     }
   )

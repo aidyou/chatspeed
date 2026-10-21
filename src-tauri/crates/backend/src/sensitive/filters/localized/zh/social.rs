@@ -14,12 +14,12 @@ impl SocialFilter {
             Regex::new(r#"(?i)(?:微信|微信号|WeChat)[:：]?\s*([a-zA-Z][a-zA-Z0-9_-]{5,19})"#)
                 .map_err(|e| SensitiveError::RegexCompilationFailed {
                     pattern: "zh_social_wechat".to_string(),
-                    message: e.to_string(),
+                    message: crate::error_diagnostics::FailureMessage::from_error(&e),
                 })?;
         let qq_regex = Regex::new(r#"(?i)QQ[:：]?\s*([1-9][0-9]{4,11})"#).map_err(|e| {
             SensitiveError::RegexCompilationFailed {
                 pattern: "zh_social_qq".to_string(),
-                message: e.to_string(),
+                message: crate::error_diagnostics::FailureMessage::from_error(&e),
             }
         })?;
         Ok(Self {

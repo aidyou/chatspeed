@@ -1,6 +1,7 @@
 //! Direct forwarding for the System One decision protocol served on `/v1/systemone`.
 use crate::ccproxy::{
     decision::{self, DecisionError},
+    diagnostic::{self, RequestContext},
     errors::{CCProxyError, ProxyResult},
     helper::{stat_guard::finalize_pricing, ModelResolver},
     types::ProxyModel,
@@ -67,15 +68,25 @@ pub async fn handle_decision(
     {
         Ok(response) => response,
         Err(error) => {
+            let mut frames = diagnostic::request_frames(RequestContext {
+                request_id: "none",
+                client_protocol: "decision",
+                backend_protocol: "decision",
+                client_model: &proxy_model.client_alias,
+                backend_model: &proxy_model.model,
+                provider_id: proxy_model.provider_id,
+                provider: &proxy_model.provider,
+                group: group_name.as_deref(),
+                path: "decision",
+                compat: false,
+            });
+            frames.push((
+                "result",
+                Some(format!("elapsed_ms={}", started.elapsed().as_millis())),
+            ));
+            let diagnostic = diagnostic::from_error("ccproxy", "decision_forward", &error, frames);
+            diagnostic::emit(log::Level::Warn, &diagnostic);
             let failure = map_forward_error(error);
-            log::warn!(
-                "decision proxy: alias={}, provider={}, model={}, status=failed, elapsed_ms={}, error={}",
-                proxy_model.client_alias,
-                proxy_model.provider,
-                proxy_model.model,
-                started.elapsed().as_millis(),
-                failure
-            );
             record_stat(
                 main_store_arc.as_ref(),
                 &proxy_model,
@@ -440,5 +451,124 @@ mod tests {
         );
         assert_eq!(decision_usage(&body), (12, 5));
         assert_eq!(decision_usage(&Bytes::from_static(b"not json")), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn decision_http_errors_pass_through_status_body_and_filtered_headers() {
+        use axum::{extract::State, Router};
+        use std::sync::Mutex;
+
+        type UpstreamState = Arc<Mutex<(u16, Vec<u8>)>>;
+        let upstream_state: UpstreamState = Arc::new(Mutex::new((500, Vec::new())));
+        let app = Router::new()
+            .fallback(|State(state): State<UpstreamState>| async move {
+                let (status, body) = {
+                    let state = state.lock().expect("upstream state should lock");
+                    state.clone()
+                };
+                axum::response::Response::builder()
+                    .status(
+                        http::StatusCode::from_u16(status)
+                            .expect("test upstream status should be valid"),
+                    )
+                    .header("content-type", "application/json")
+                    .header("content-length", body.len().to_string())
+                    .header("x-upstream", "kept")
+                    .header("x-request-id", "upstream-request")
+                    .body(axum::body::Body::from(body))
+                    .expect("test upstream response should build")
+            })
+            .with_state(upstream_state.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        listener
+            .set_nonblocking(true)
+            .expect("listener should be nonblocking");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(
+                tokio::net::TcpListener::from_std(listener).expect("tokio listener should convert"),
+                app,
+            )
+            .await
+            .expect("mock upstream should serve");
+        });
+
+        let directory = tempdir().unwrap();
+        let store =
+            Arc::new(MainStore::new(directory.path().join("decision-http-errors.db")).unwrap());
+        let provider_id = decision_provider(
+            &store,
+            format!("http://{address}/v1/systemone"),
+            "decision",
+            "jev-1.13.0",
+        );
+        store
+            .set_config(
+                CFG_CHAT_COMPLETION_PROXY,
+                &json!({"default": {"jev": [{"id": provider_id, "model": "jev-1.13.0"}]}}),
+            )
+            .unwrap();
+
+        for status in [401_u16, 429, 503] {
+            let upstream_body = format!(r#"{{"error":"decision-{status}"}}"#).into_bytes();
+            *upstream_state.lock().expect("upstream state should lock") =
+                (status, upstream_body.clone());
+            let body = Bytes::from(
+                serde_json::to_vec(&json!({"state": "hi", "model": "jev", "questions": {}}))
+                    .unwrap(),
+            );
+            let response = handle_decision(HeaderMap::new(), body, None, store.clone())
+                .await
+                .expect("decision HTTP errors should pass through");
+
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+            assert_eq!(
+                response.headers().get("x-request-id").unwrap(),
+                "upstream-request"
+            );
+            for name in [
+                "content-length",
+                "transfer-encoding",
+                "connection",
+                "content-encoding",
+                "keep-alive",
+            ] {
+                assert!(
+                    !response.headers().contains_key(name),
+                    "transport header {name} must be filtered"
+                );
+            }
+            assert!(
+                !response
+                    .headers()
+                    .keys()
+                    .any(|name| name.as_str().starts_with("x-cs-")),
+                "control/diagnostic headers must not leak to the client"
+            );
+            let response_body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert_eq!(response_body.as_ref(), upstream_body.as_slice());
+        }
+
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .expect("flush task should join")
+            .expect("decision error stats should flush");
+        let per_status = runtime
+            .read(|conn| {
+                let mut statement = conn.prepare(
+                    "SELECT status_code, COUNT(*) FROM ccproxy_stats GROUP BY status_code ORDER BY status_code",
+                )?;
+                let rows = statement
+                    .query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?)))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .expect("decision error stats query should succeed");
+        assert_eq!(per_status, vec![(401, 1), (429, 1), (503, 1)]);
+        server.abort();
     }
 }

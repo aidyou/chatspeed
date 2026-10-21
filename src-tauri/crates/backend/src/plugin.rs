@@ -518,11 +518,23 @@ impl PluginService {
         let spec = BundleSpec::current()?;
 
         std::fs::create_dir_all(&paths.plugins_root).map_err(|error| {
-            PluginError::io(format!("failed to create the plugins root: {error}"))
+            PluginError::io(format!("failed to create the plugins root: {error}")).with_origin(
+                crate::error_diagnostics::ErrorOrigin::from_error(&error).context(
+                    "plugin",
+                    "create_plugins_root",
+                    None,
+                ),
+            )
         })?;
         restrict_permissions(&paths.plugins_root)?;
         std::fs::create_dir_all(&paths.staging_root).map_err(|error| {
-            PluginError::io(format!("failed to create the staging root: {error}"))
+            PluginError::io(format!("failed to create the staging root: {error}")).with_origin(
+                crate::error_diagnostics::ErrorOrigin::from_error(&error).context(
+                    "plugin",
+                    "create_staging_root",
+                    None,
+                ),
+            )
         })?;
         restrict_permissions(&paths.staging_root)?;
 
@@ -533,7 +545,13 @@ impl PluginService {
             )));
         }
         std::fs::create_dir_all(&staged).map_err(|error| {
-            PluginError::io(format!("failed to create a staging directory: {error}"))
+            PluginError::io(format!("failed to create a staging directory: {error}")).with_origin(
+                crate::error_diagnostics::ErrorOrigin::from_error(&error).context(
+                    "plugin",
+                    "create_staging",
+                    None,
+                ),
+            )
         })?;
         restrict_permissions(&staged)?;
 
@@ -671,9 +689,17 @@ impl BundleSpec {
 fn stage_into(staged: &Path, spec: &BundleSpec) -> Result<(), PluginError> {
     let canonical = serde_json::to_string_pretty(&spec.manifest).map_err(|error| {
         PluginError::internal(format!("failed to serialize the plugin manifest: {error}"))
+            .with_origin(
+                crate::error_diagnostics::ErrorOrigin::from_error(&error).context(
+                    "plugin",
+                    "serialize_manifest",
+                    None,
+                ),
+            )
     })?;
     write_new_file(&staged.join(MANIFEST_FILE_NAME), canonical.as_bytes()).map_err(|error| {
         PluginError::io(format!("failed to write the staged manifest: {error}"))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
     })?;
 
     for asset in spec.assets {
@@ -722,7 +748,8 @@ fn require_real_regular_file(path: &Path, what: &str) -> Result<(), PluginError>
         Err(error) => Err(PluginError::io(format!(
             "failed to inspect '{}': {error}",
             path.display()
-        ))),
+        ))
+        .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))),
     }
 }
 
@@ -755,7 +782,8 @@ fn verify_bundle(root: &Path, spec: &BundleSpec) -> Result<(), PluginError> {
             return Err(PluginError::io(format!(
                 "failed to inspect '{}': {error}",
                 root.display()
-            )))
+            ))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)));
         }
     }
 
@@ -763,11 +791,15 @@ fn verify_bundle(root: &Path, spec: &BundleSpec) -> Result<(), PluginError> {
     // unknown content the service refuses to replace or delete.
     let expected = spec.names();
     let mut seen: BTreeSet<OsString> = BTreeSet::new();
-    let entries = std::fs::read_dir(root)
-        .map_err(|error| PluginError::io(format!("failed to read the plugin bundle: {error}")))?;
+    let entries = std::fs::read_dir(root).map_err(|error| {
+        PluginError::io(format!("failed to read the plugin bundle: {error}"))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
+    })?;
     for entry in entries {
         let entry = entry.map_err(|error| {
             PluginError::io(format!("failed to read the plugin bundle: {error}"))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
         })?;
         let name = entry.file_name();
         if !expected.contains(&name) {
@@ -796,6 +828,7 @@ fn verify_bundle(root: &Path, spec: &BundleSpec) -> Result<(), PluginError> {
         require_real_regular_file(&path, "asset")?;
         let bytes = std::fs::read(&path).map_err(|error| {
             PluginError::io(format!("failed to read asset '{}': {error}", asset.path))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
         })?;
         if sha256_hex(&bytes) != sha256_hex(asset.bytes) {
             return Err(PluginError::refused(format!(
@@ -813,8 +846,10 @@ fn verify_bundle(root: &Path, spec: &BundleSpec) -> Result<(), PluginError> {
 /// exactly as it was written to disk (`serde_json::to_string_pretty`).
 fn read_manifest_structure(dir: &Path) -> Result<PluginManifest, PluginError> {
     let path = dir.join(MANIFEST_FILE_NAME);
-    let text = std::fs::read_to_string(&path)
-        .map_err(|error| PluginError::io(format!("failed to read the plugin manifest: {error}")))?;
+    let text = std::fs::read_to_string(&path).map_err(|error| {
+        PluginError::io(format!("failed to read the plugin manifest: {error}"))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
+    })?;
     serde_json::from_str(&text).map_err(|error| {
         PluginError::refused(format!("the plugin manifest is unparsable: {error}"))
     })
@@ -910,18 +945,23 @@ fn write_state_file(path: &Path, state: &HostState) -> Result<(), PluginError> {
         .ok_or_else(|| PluginError::io("the plugin state path has no parent directory"))?;
     std::fs::create_dir_all(parent).map_err(|error| {
         PluginError::io(format!("failed to create the plugin directory: {error}"))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
     })?;
     let json = serde_json::to_string_pretty(state).map_err(|error| {
         PluginError::internal(format!("failed to serialize host state: {error}"))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
     })?;
     // A process-unique name written with `create_new`, so the temp file can
     // never follow a pre-existing symlink into another file.
     let temp = parent.join(format!("{STATE_FILE_NAME}.{}.tmp", nonce()));
-    write_new_file(&temp, json.as_bytes())
-        .map_err(|error| PluginError::io(format!("failed to write host state: {error}")))?;
+    write_new_file(&temp, json.as_bytes()).map_err(|error| {
+        PluginError::io(format!("failed to write host state: {error}"))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
+    })?;
     std::fs::rename(&temp, path).map_err(|error| {
         let _ = std::fs::remove_file(&temp);
         PluginError::io(format!("failed to publish host state: {error}"))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error))
     })?;
     Ok(())
 }
@@ -1486,6 +1526,24 @@ mod tests {
             "unknown content must be preserved, never deleted"
         );
         assert!(paths.plugin_dir.exists());
+    }
+
+    #[test]
+    fn source_wrapper_preserves_legacy_plugin_message_and_real_io_cause() {
+        use crate::error_diagnostics::ErrorProjection;
+        let temp = TempDir::new().expect("temp dir");
+        let missing = temp.path().join("missing").join("target");
+        let source = std::fs::read_dir(&missing).unwrap_err();
+        let error = verify_bundle(&missing, &BundleSpec::current().unwrap()).unwrap_err();
+        // A missing bundle is a deliberate refusal, not a raw filesystem disclosure.
+        assert_eq!(error.code, plugin_code::REFUSED);
+        let error = PluginError::io(format!("failed to read the plugin bundle: {source}"))
+            .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&source));
+        assert_eq!(error.user_error().message, source.to_string());
+        assert_eq!(
+            error.message,
+            format!("failed to read the plugin bundle: {source}")
+        );
     }
 
     #[test]

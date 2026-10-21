@@ -1,3 +1,4 @@
+import { formatUserError } from '@/libs/error';
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { defineStore } from 'pinia';
@@ -200,10 +201,10 @@ export const useWindowStore = defineStore('window', () => {
     } catch (error) {
       if (error instanceof FrontendAppError) {
         console.error(`Failed to move window: ${error.toFormattedString()}`, error.originalError);
-        showMessage(t('chat.errorOnMoveWindow', { error: error.toFormattedString() }), 'error', 3000);
+        showMessage(t('chat.errorOnMoveWindow', { error: formatUserError(error) }), 'error', 3000);
       } else {
         console.error('Failed to move window:', error)
-        showMessage(t('chat.errorOnMoveWindow', { error: error.message || String(error) }), 'error', 3000)
+        showMessage(t('chat.errorOnMoveWindow', { error: formatUserError(error) }), 'error', 3000)
       }
     }
   }

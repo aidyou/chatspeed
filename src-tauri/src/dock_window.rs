@@ -19,6 +19,7 @@
 
 use std::sync::Mutex;
 
+use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Window, Wry};
 
 use crate::chat_hub::host_window;
@@ -130,7 +131,7 @@ impl DockWindowState {
 
         let host = host_window(app)?;
         let mut grown = self.grown.lock().map_err(|_| AppError::General {
-            message: "the dock window state is poisoned".to_string(),
+            message: FailureMessage::leaf("the dock window state is poisoned"),
         })?;
 
         let delta = match dock_change(*grown, docked_width) {
@@ -200,19 +201,21 @@ pub async fn apply_docked_width(app: &AppHandle<Wry>, width: f64) -> Result<()> 
         let result = thread_app
             .try_state::<DockWindowState>()
             .ok_or_else(|| AppError::General {
-                message: "the dock window state is not managed".to_string(),
+                message: FailureMessage::leaf("the dock window state is not managed"),
             })
             .and_then(|state| state.inner().set_docked_width(&thread_app, width));
         let _ = sender.send(result);
     })
     .map_err(|error| AppError::General {
-        message: format!("the dock window work could not be posted: {error}"),
+        message: FailureMessage::leaf(format!("the dock window work could not be posted: {error}"))
+            .with_origin(ErrorOrigin::from_error(&error)),
     })?;
 
     match receiver.recv() {
         Ok(result) => result,
-        Err(_) => Err(AppError::General {
-            message: "the dock window work did not run".to_string(),
+        Err(error) => Err(AppError::General {
+            message: FailureMessage::leaf("the dock window work did not run")
+                .with_origin(ErrorOrigin::from_error(&error)),
         }),
     }
 }

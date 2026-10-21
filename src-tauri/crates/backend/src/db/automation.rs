@@ -369,7 +369,7 @@ impl MainStore {
         match self.delete_workflow_automation_if_idle(id)? {
             DeleteAutomationOutcome::Deleted | DeleteAutomationOutcome::NotFound => Ok(()),
             DeleteAutomationOutcome::ActiveRun => Err(StoreError::Query(
-                "automation has an active run".to_string(),
+                crate::error_diagnostics::FailureMessage::leaf("automation has an active run"),
             )),
         }
     }

@@ -19,11 +19,12 @@
 //! the desktop task ends, and a disconnect never kills the runtime executor.
 
 use crate::ai::traits::chat::{ChatResponse, FinishReason, MessageType, ModelDetails};
-use crate::runtime_client::RuntimeSupervisor;
+use crate::runtime_client::{client_error_wire, runtime_error_wire, RuntimeSupervisor};
 use chatspeed_contracts::{
     ChatResponseDto, ChatStartRequest, ChatStopRequest, ChatStreamEvent, ListModelsRequest,
-    ModelDetailsDto,
+    ModelDetailsDto, UserErrorPresentation,
 };
+use chatspeed_runtime_backend::error_diagnostics::{ErrorProjection, FailureMessage};
 use chatspeed_runtime_client::{ChatEventStream, ClientError, RuntimeClient};
 use rust_i18n::t;
 use serde_json::{json, Value};
@@ -116,11 +117,19 @@ pub(crate) async fn stop_chat(
 /// Resolves the connected control-plane client or the redacted reason there is
 /// none, so callers can tell "runtime down" from a protocol error.
 async fn connected_client(supervisor: &RuntimeSupervisor) -> Result<RuntimeClient, String> {
-    supervisor.client().await.map_err(|error| error.to_string())
+    supervisor.client().await.map_err(runtime_error_wire)
 }
 
+/// Serializes a public runtime rejection for the Tauri string boundary.
+///
+/// The command signature keeps `Err(String)`, so a structured `Server`/`Auth`
+/// rejection is encoded as the shared error envelope: `code` and `message` stay
+/// the legacy pair old readers consume, and the optional `presentation` keeps
+/// the reason/upstream status the runtime attached. The frontend parser already
+/// accepts this JSON string. Transport, discovery, protocol and serialization
+/// failures stay plain technical strings because they carry no public envelope.
 fn client_message(error: ClientError) -> String {
-    error.to_string()
+    client_error_wire(error)
 }
 
 /// Ensures the request metadata carries the window label the dispatcher routes by.
@@ -252,9 +261,15 @@ impl ChatStreamTail {
         }
         self.ended = true;
         match event {
-            ChatStreamEvent::Error { error } => {
-                Some(self.error_response(&stream_error_message(&self.model, &error.message)))
-            }
+            ChatStreamEvent::Error { error } => Some(
+                self.error_response(
+                    &stream_error_message(&self.model, &error.message),
+                    error
+                        .presentation
+                        .clone()
+                        .unwrap_or_else(|| leaf_user_error(&error.message)),
+                ),
+            ),
             ChatStreamEvent::Finished { finish_reason } => Some(ChatResponse {
                 chat_id: self.chat_id.clone(),
                 chunk: String::new(),
@@ -295,19 +310,31 @@ impl ChatStreamTail {
             Some(error) => error.to_string(),
             None => t!("tools.error.network_error").to_string(),
         };
-        Some(self.error_response(&stream_error_message(&self.model, &cause)))
+        Some(self.error_response(
+            &stream_error_message(&self.model, &cause),
+            leaf_user_error(&cause),
+        ))
     }
 
     /// Builds the canonical error chunk that ends the UI for this turn.
-    fn error_response(&self, message: &str) -> ChatResponse {
+    fn error_response(&self, message: &str, user_error: UserErrorPresentation) -> ChatResponse {
         ChatResponse {
             chat_id: self.chat_id.clone(),
             chunk: json!({ "status": 500, "message": message }).to_string(),
             r#type: MessageType::Error,
-            metadata: Some(json!({ "windowLabel": self.window_label.as_str() })),
+            metadata: Some(json!({
+                "windowLabel": self.window_label.as_str(),
+                "user_error": user_error
+            })),
             finish_reason: Some(FinishReason::Error),
         }
     }
+}
+
+/// Projects a synthesized stream-end cause without wrapping it in the display
+/// template, so the safe user text is the concrete cause itself.
+fn leaf_user_error(cause: &str) -> UserErrorPresentation {
+    FailureMessage::leaf(cause).user_error()
 }
 
 /// Renders the existing chat stream error key for a synthesized stream end.
@@ -342,7 +369,10 @@ fn model_details(model: ModelDetailsDto) -> Result<ModelDetails, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chatspeed_contracts::{ErrorDetail, FinishReasonDto, MessageTypeDto};
+    use chatspeed_contracts::{
+        ErrorDetail, ErrorReason, FinishReasonDto, MessageTypeDto, UserErrorPresentation,
+    };
+    use chatspeed_runtime_client::{AuthError, ClientResponseError};
 
     #[tokio::test]
     async fn a_disconnected_runtime_reports_availability_instead_of_running_locally() {
@@ -357,6 +387,62 @@ mod tests {
             .await
             .expect_err("a disconnected runtime must not stop anything");
         assert!(error.contains("not connected"), "error was {error}");
+    }
+
+    #[test]
+    fn a_list_models_rejection_keeps_its_presentation_on_the_ipc_wire() {
+        let presentation = UserErrorPresentation {
+            schema_version: 1,
+            message: "This provider does not expose a model list".to_string(),
+            reason: Some(ErrorReason::UnsupportedListModels),
+            upstream_status: Some(405),
+        };
+        let wire = client_message(ClientError::Server(ClientResponseError {
+            legacy_display: "server error 405: method not allowed (method_not_allowed)".to_string(),
+            status: 405,
+            code: "method_not_allowed".to_string(),
+            message: "provider rejected the model list request".to_string(),
+            presentation: Some(presentation),
+        }));
+
+        let value: Value = serde_json::from_str(&wire).expect("a JSON error envelope");
+        assert_eq!(value["status"], 405);
+        assert_eq!(value["error"]["code"], "method_not_allowed");
+        assert_eq!(
+            value["error"]["message"],
+            "provider rejected the model list request"
+        );
+        assert_eq!(
+            value["error"]["presentation"]["reason"],
+            "unsupported_list_models"
+        );
+        assert_eq!(value["error"]["presentation"]["upstream_status"], 405);
+        // Only the public envelope crosses; no raw headers or body fields exist.
+        assert!(value["error"].get("headers").is_none());
+        assert!(value["error"].get("body").is_none());
+    }
+
+    #[test]
+    fn an_auth_rejection_preserves_its_status_code_and_category() {
+        let wire = client_message(ClientError::Auth(AuthError {
+            status: 401,
+            code: "unauthorized".to_string(),
+            message: "invalid runtime token".to_string(),
+            presentation: None,
+        }));
+
+        let value: Value = serde_json::from_str(&wire).expect("a JSON error envelope");
+        assert_eq!(value["status"], 401);
+        assert_eq!(value["error"]["code"], "unauthorized");
+        assert_eq!(value["error"]["message"], "invalid runtime token");
+        assert!(value["error"].get("presentation").is_none());
+    }
+
+    #[test]
+    fn a_technical_client_failure_stays_a_plain_string() {
+        let wire = client_message(ClientError::Transport("connection reset".to_string()));
+        assert_eq!(wire, "transport error: connection reset");
+        assert!(!wire.starts_with('{'));
     }
 
     #[test]
@@ -442,6 +528,7 @@ mod tests {
             error: ErrorDetail {
                 code: "chat_stream_detached".to_string(),
                 message: message.to_string(),
+                presentation: None,
             },
         }
     }
@@ -488,8 +575,43 @@ mod tests {
         assert_eq!(response.chat_id, "chat-1");
         assert_eq!(response.r#type, MessageType::Error);
         assert_eq!(response.finish_reason, Some(FinishReason::Error));
-        assert_eq!(response.metadata, Some(json!({ "windowLabel": "main" })));
+        let metadata = response.metadata.as_ref().expect("error metadata");
+        assert_eq!(metadata["windowLabel"], "main");
+        assert_eq!(
+            metadata["user_error"]["message"],
+            "The chat turn stopped producing output"
+        );
+        assert_eq!(metadata["user_error"]["schema_version"], 1);
         assert!(error_message(&response).contains("stopped producing output"));
+
+        // A typed presentation from the runtime wins over the safe fallback.
+        let mut presented = ChatStreamTail::new(
+            "chat-1".to_string(),
+            "main".to_string(),
+            "gpt-4".to_string(),
+        );
+        let presented_event = ChatStreamEvent::Error {
+            error: ErrorDetail {
+                code: "chat_error".to_string(),
+                message: "legacy transport text".to_string(),
+                presentation: Some(UserErrorPresentation {
+                    schema_version: 1,
+                    message: "Provider declined the request".to_string(),
+                    reason: Some(chatspeed_contracts::ErrorReason::UnsupportedListModels),
+                    upstream_status: Some(405),
+                }),
+            },
+        };
+        let presented_response = presented
+            .terminal_response(&presented_event)
+            .expect("one synthesized error");
+        let presented_metadata = presented_response.metadata.as_ref().expect("metadata");
+        assert_eq!(
+            presented_metadata["user_error"]["message"],
+            "Provider declined the request"
+        );
+        assert_eq!(presented_metadata["user_error"]["upstream_status"], 405);
+        assert!(error_message(&presented_response).contains("legacy transport text"));
 
         // Duplicate protection: no later end may add another terminal chunk.
         assert!(tail.terminal_response(&event).is_none());
@@ -507,10 +629,11 @@ mod tests {
         assert_eq!(eof_response.chat_id, "chat-1");
         assert_eq!(eof_response.r#type, MessageType::Error);
         assert_eq!(eof_response.finish_reason, Some(FinishReason::Error));
-        assert_eq!(
-            eof_response.metadata,
-            Some(json!({ "windowLabel": "main" }))
-        );
+        let eof_metadata = eof_response.metadata.as_ref().expect("error metadata");
+        assert_eq!(eof_metadata["windowLabel"], "main");
+        assert!(eof_metadata["user_error"]["message"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty()));
         assert!(!error_message(&eof_response).is_empty());
         assert!(eof.detached_response(None).is_none());
 
@@ -524,6 +647,10 @@ mod tests {
             .expect("one synthesized error");
         assert_eq!(read_response.chat_id, "chat-2");
         assert!(error_message(&read_response).contains("connection reset"));
+        assert_eq!(
+            read_response.metadata.as_ref().expect("metadata")["user_error"]["message"],
+            "connection reset"
+        );
     }
 
     #[test]

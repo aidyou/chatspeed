@@ -13,6 +13,8 @@ import {
   reconcileWorkflowTaskWindowState,
   resolveAskUserResponse,
   resolveFinalReviewSubAgentCompletion,
+  resolveWorkflowErrorDisplay,
+  resolveWorkflowUserError,
   selectVisibleWorkflowMessageWindow
 } from './messageProjectionRules'
 import { useSubAgentSummaries } from './useSubAgentSummaries'
@@ -754,7 +756,8 @@ export function useWorkflowMessages(source = null) {
         childExecutionContext.maxContextTokens ??
         childExecutionContext.max_context_tokens ??
         null
-      const rawResultValue =
+      const userError = completion?.user_error || resolveWorkflowUserError(completionData)
+      const rawResultValue = userError?.display || (
         completionResult.result ??
         completionResult.error ??
         completionData.result ??
@@ -763,6 +766,7 @@ export function useWorkflowMessages(source = null) {
         completion?.summary ??
         completionData.summary ??
         ''
+      )
       const resultContent =
         typeof rawResultValue === 'string'
           ? rawResultValue
@@ -815,6 +819,7 @@ export function useWorkflowMessages(source = null) {
           typeof summary?.contextPercent === 'number' ? summary.contextPercent : null,
         result: resultContent,
         resultMarkdown,
+        userError,
         hasResult,
         usageSummary: normalizeUsageSummary(
           completionResult.usage_summary || completionData.usage_summary || completion?.usage_summary
@@ -1503,6 +1508,10 @@ export function useWorkflowMessages(source = null) {
   const getToolDisplayInfo = message => {
     const meta = message.metadata || {}
     const isError = message.isError || message.is_error || meta.is_error || false
+    const resolvedUserError = resolveWorkflowUserError(message)
+    const resolvedErrorDisplay = isError || resolvedUserError
+      ? resolveWorkflowErrorDisplay(message, message.message).display
+      : ''
 
     // 1. Try to extract tool call info
     const toolCall = meta.tool_call || {}
@@ -1641,8 +1650,11 @@ export function useWorkflowMessages(source = null) {
       summary:
         name === 'complete_workflow'
           ? ''
-          : getToolStatusSummary(name, summaryStatus, fallbackSummary),
+          : resolvedUserError?.display || resolvedErrorDisplay ||
+            getToolStatusSummary(name, summaryStatus, fallbackSummary),
       isError: isError,
+      errorDisplay: resolvedUserError?.display || resolvedErrorDisplay,
+      errorDisplayCopy: resolvedUserError?.displayCopy || resolvedErrorDisplay,
       displayType: inferredDisplayType,
       icon: finalIcon,
       toolType: finalToolType,

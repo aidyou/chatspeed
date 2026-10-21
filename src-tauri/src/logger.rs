@@ -479,6 +479,58 @@ pub fn setup_test_logger() -> Result<(), SetLoggerError> {
 }
 
 mod tests {
+    #[test]
+    fn diagnostic_survives_the_desktop_file_sink_as_one_redacted_json_report() {
+        use chatspeed_runtime_backend::error_diagnostics::{ErrorProjection, FailureMessage};
+        use log::Log;
+
+        let directory = tempfile::tempdir().expect("temporary log directory");
+        let path = directory.path().join("diagnostic.log");
+        let (_, logger) = fern::Dispatch::new()
+            .level(log::LevelFilter::Debug)
+            .filter(|record| {
+                record.target().contains("chatspeed")
+                    || (record.level() < log::LevelFilter::Info
+                        && !matches!(
+                            record.target(),
+                            "ccproxy_client_logger" | "ccproxy_upstream_logger"
+                        ))
+            })
+            .format(super::file_log_formatter)
+            .chain(fern::log_file(&path).expect("open temporary file sink"))
+            .into_log();
+        let mut diagnostic = FailureMessage::leaf(
+            "Authorization: Bearer CANARY\nURL https://name:PASS@example.test/api?api_key=KEY",
+        )
+        .diagnostic();
+        diagnostic.module = "desktop".to_string();
+        diagnostic.operation = "sink_test".to_string();
+        diagnostic.code = Some("internal_error".to_string());
+        diagnostic.http_status = Some(503);
+        let line = diagnostic.to_json_line();
+        logger.log(
+            &log::Record::builder()
+                .args(format_args!("{}", line))
+                .level(log::Level::Error)
+                .target("error_diagnostic")
+                .build(),
+        );
+        logger.flush();
+        let output = std::fs::read_to_string(&path).expect("read actual file sink");
+        assert_eq!(output.lines().count(), 1);
+        for secret in ["CANARY", "PASS", "api_key=KEY"] {
+            assert!(!output.contains(secret));
+        }
+        let json_start = output
+            .find('{')
+            .expect("diagnostic JSON after logger prefix");
+        let event: serde_json::Value =
+            serde_json::from_str(output[json_start..].trim()).expect("JSON survives formatter");
+        assert_eq!(event["event"], "error_diagnostic");
+        assert_eq!(event["code"], "internal_error");
+        assert_eq!(event["http_status"], 503);
+        assert_eq!(event["module"], "desktop");
+    }
 
     #[test]
     fn test_replace_sensitive_info() {

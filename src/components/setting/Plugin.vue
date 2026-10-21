@@ -17,7 +17,8 @@
         class="alert"
         type="error"
         :closable="false"
-        :title="t('settings.plugin.operationFailed')" />
+        :title="t('settings.plugin.operationFailed')"
+        :description="formatUserError(pluginStore.lastError, t('common.errorFallback'))" />
 
       <!-- Only the runtime's built-in inventory collection is rendered; the
            desktop never guesses a plugin the runtime did not report. -->
@@ -96,6 +97,7 @@ import { onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 import { usePluginStore } from '@/stores/plugin';
+import { formatUserError } from '@/libs/error';
 
 const { t } = useI18n();
 const pluginStore = usePluginStore();

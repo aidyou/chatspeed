@@ -55,6 +55,20 @@ pub enum WorkflowManagerError {
     SignalRejected { session_id: String, reason: String },
 }
 
+/// Typed delivery outcome so callers can classify a missing live channel without
+/// reading the rendered error text.
+#[derive(Debug, Error)]
+pub enum SignalSendError {
+    #[error("GLOBAL_SIGNAL_TX poisoned")]
+    LockPoisoned,
+
+    #[error("Session {session_id} signal channel not found")]
+    SignalChannelNotFound { session_id: String },
+
+    #[error("{reason}")]
+    DeliveryFailed { reason: String },
+}
+
 pub struct WorkflowManager {
     sessions: DashMap<String, ManagedSession>,
 }
@@ -471,15 +485,25 @@ impl WorkflowManager {
     }
 
     pub fn try_send_signal_to_session(session_id: &str, signal: String) -> Result<(), String> {
+        Self::try_send_signal_to_session_typed(session_id, signal)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn try_send_signal_to_session_typed(
+        session_id: &str,
+        signal: String,
+    ) -> Result<(), SignalSendError> {
         let Some(map) = Self::lock_global_signal_tx() else {
-            return Err("GLOBAL_SIGNAL_TX poisoned".to_string());
+            return Err(SignalSendError::LockPoisoned);
         };
         let Some(tx) = map.get(session_id) else {
             log::warn!(
                 "[WorkflowManager][session={}][event=signal_send_missing] GLOBAL_SIGNAL_TX entry not found",
                 session_id
             );
-            return Err(format!("Session {} signal channel not found", session_id));
+            return Err(SignalSendError::SignalChannelNotFound {
+                session_id: session_id.to_string(),
+            });
         };
         let capacity = tx.capacity();
         let is_closed = tx.is_closed();
@@ -497,7 +521,9 @@ impl WorkflowManager {
                 tx.is_closed(),
                 error
             );
-            error.to_string()
+            SignalSendError::DeliveryFailed {
+                reason: error.to_string(),
+            }
         })
     }
 

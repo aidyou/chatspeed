@@ -32,7 +32,7 @@ fn primary_directory(path_guard: Option<&Arc<RwLock<PathGuard>>>) -> Result<Path
         .and_then(|guard| guard.read().ok())
         .and_then(|guard| guard.get_primary_root().map(PathBuf::from))
         .ok_or_else(|| {
-            ToolError::ExecutionFailed("No authorized workspace root is configured".to_string())
+            ToolError::ExecutionFailed("No authorized workspace root is configured".into())
         })
 }
 
@@ -47,7 +47,7 @@ pub(crate) fn workspace_directories(
     }
 
     Err(ToolError::ExecutionFailed(
-        "No authorized workspace roots are configured".to_string(),
+        "No authorized workspace roots are configured".into(),
     ))
 }
 
@@ -88,9 +88,14 @@ fn validate_path(
 ) -> Result<PathBuf, ToolError> {
     path_guard
         .and_then(|guard| guard.read().ok())
-        .ok_or_else(|| ToolError::ExecutionFailed("Path guard is unavailable".to_string()))?
+        .ok_or_else(|| ToolError::ExecutionFailed("Path guard is unavailable".into()))?
         .validate(target, false, false, false)
-        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+        .map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(e.to_string())
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
+        })
 }
 
 pub(crate) fn resolve_requested_paths(
@@ -117,18 +122,24 @@ pub(crate) fn resolve_requested_paths(
             let validated = validate_path(path, path_guard)?;
             let workspace_root =
                 find_workspace_root(&validated, &workspace_roots).ok_or_else(|| {
-                    ToolError::ExecutionFailed(format!(
-                        "Path '{}' is outside the authorized workspace roots",
-                        path_str
-                    ))
+                    ToolError::ExecutionFailed(
+                        format!(
+                            "Path '{}' is outside the authorized workspace roots",
+                            path_str
+                        )
+                        .into(),
+                    )
                 })?;
             let relative = validated
                 .strip_prefix(&workspace_root)
                 .map_err(|_| {
-                    ToolError::ExecutionFailed(format!(
-                        "Path '{}' is outside the authorized workspace roots",
-                        path_str
-                    ))
+                    ToolError::ExecutionFailed(
+                        format!(
+                            "Path '{}' is outside the authorized workspace roots",
+                            path_str
+                        )
+                        .into(),
+                    )
                 })?
                 .to_string_lossy()
                 .to_string();
@@ -153,10 +164,13 @@ pub(crate) fn resolve_requested_paths(
             let relative = validated
                 .strip_prefix(workspace_root)
                 .map_err(|_| {
-                    ToolError::ExecutionFailed(format!(
-                        "Path '{}' is outside the authorized workspace roots",
-                        path_str
-                    ))
+                    ToolError::ExecutionFailed(
+                        format!(
+                            "Path '{}' is outside the authorized workspace roots",
+                            path_str
+                        )
+                        .into(),
+                    )
                 })?
                 .to_string_lossy()
                 .to_string();
@@ -179,18 +193,24 @@ pub(crate) fn resolve_requested_paths(
         let validated = validate_path(&fallback, path_guard)?;
         let workspace_root =
             find_workspace_root(&validated, &workspace_roots).ok_or_else(|| {
-                ToolError::ExecutionFailed(format!(
-                    "Path '{}' is outside the authorized workspace roots",
-                    path_str
-                ))
+                ToolError::ExecutionFailed(
+                    format!(
+                        "Path '{}' is outside the authorized workspace roots",
+                        path_str
+                    )
+                    .into(),
+                )
             })?;
         let relative = validated
             .strip_prefix(&workspace_root)
             .map_err(|_| {
-                ToolError::ExecutionFailed(format!(
-                    "Path '{}' is outside the authorized workspace roots",
-                    path_str
-                ))
+                ToolError::ExecutionFailed(
+                    format!(
+                        "Path '{}' is outside the authorized workspace roots",
+                        path_str
+                    )
+                    .into(),
+                )
             })?
             .to_string_lossy()
             .to_string();
@@ -217,7 +237,7 @@ pub(crate) fn parse_status_porcelain_z(output: &str) -> Result<Vec<(String, Stri
         let bytes = record.as_bytes();
         if bytes.len() < 4 || bytes[2] != b' ' {
             return Err(ToolError::ExecutionFailed(
-                "git status returned malformed porcelain data".to_string(),
+                "git status returned malformed porcelain data".into(),
             ));
         }
         let status = record[..2].to_string();
@@ -225,7 +245,7 @@ pub(crate) fn parse_status_porcelain_z(output: &str) -> Result<Vec<(String, Stri
         if status.contains('R') || status.contains('C') {
             records.next().ok_or_else(|| {
                 ToolError::ExecutionFailed(
-                    "git status returned an incomplete rename or copy record".to_string(),
+                    "git status returned an incomplete rename or copy record".into(),
                 )
             })?;
         }
@@ -258,17 +278,20 @@ pub(crate) fn run_git_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_no_window(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {}", e)))?;
+    let mut child = command.spawn().map_err(|e| {
+        ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(format!("Failed to run git: {}", e))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+        )
+    })?;
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture git stdout".to_string()))?;
+        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture git stdout".into()))?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture git stderr".to_string()))?;
+        .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture git stderr".into()))?;
     let stdout_reader = thread::spawn(move || read_git_stream(stdout));
     let stderr_reader = thread::spawn(move || read_git_stream(stderr));
     let started = std::time::Instant::now();
@@ -281,46 +304,67 @@ pub(crate) fn run_git_command(
             Ok(None) => {
                 let _ = child.kill();
                 child.wait().map_err(|e| {
-                    ToolError::ExecutionFailed(format!(
-                        "Failed to stop timed out git command: {}",
-                        e
-                    ))
+                    ToolError::ExecutionFailed(
+                        crate::error_diagnostics::FailureMessage::leaf(format!(
+                            "Failed to stop timed out git command: {}",
+                            e
+                        ))
+                        .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                    )
                 })?;
                 return Err(ToolError::ExecutionFailed(
-                    "Git command exceeded the 10 second inspection limit".to_string(),
+                    "Git command exceeded the 10 second inspection limit".into(),
                 ));
             }
             Err(e) => {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Failed to wait for git command: {}",
-                    e
-                )))
+                return Err(ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to wait for git command: {}",
+                        e
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+                ))
             }
         }
     };
     let (stdout, stdout_truncated) = stdout_reader
         .join()
-        .map_err(|_| ToolError::ExecutionFailed("Git stdout reader panicked".to_string()))?
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read git stdout: {}", e)))?;
+        .map_err(|_| ToolError::ExecutionFailed("Git stdout reader panicked".into()))?
+        .map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to read git stdout: {}",
+                    e
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
+        })?;
     let (stderr, stderr_truncated) = stderr_reader
         .join()
-        .map_err(|_| ToolError::ExecutionFailed("Git stderr reader panicked".to_string()))?
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read git stderr: {}", e)))?;
+        .map_err(|_| ToolError::ExecutionFailed("Git stderr reader panicked".into()))?
+        .map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to read git stderr: {}",
+                    e
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
+        })?;
     if stdout_truncated || stderr_truncated {
-        return Err(ToolError::ExecutionFailed(format!(
-            "Git command output exceeded the {} KiB inspection limit",
-            MAX_GIT_OUTPUT_BYTES / 1024
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!(
+                "Git command output exceeded the {} KiB inspection limit",
+                MAX_GIT_OUTPUT_BYTES / 1024
+            )
+            .into(),
+        ));
     }
     let stdout = String::from_utf8(stdout).map_err(|_| {
-        ToolError::ExecutionFailed(
-            "Git stdout contains non-UTF-8 data and was rejected".to_string(),
-        )
+        ToolError::ExecutionFailed("Git stdout contains non-UTF-8 data and was rejected".into())
     })?;
     let stderr = String::from_utf8(stderr).map_err(|_| {
-        ToolError::ExecutionFailed(
-            "Git stderr contains non-UTF-8 data and was rejected".to_string(),
-        )
+        ToolError::ExecutionFailed("Git stderr contains non-UTF-8 data and was rejected".into())
     })?;
 
     Ok((status.code().unwrap_or(-1), stdout, stderr))
@@ -350,7 +394,7 @@ pub(crate) fn resolve_commit_revision(
     let revision = revision.trim();
     if revision.is_empty() || revision.starts_with('-') || revision.contains('\0') {
         return Err(ToolError::ExecutionFailed(
-            "Git revision must be a non-empty revision name, not an option".to_string(),
+            "Git revision must be a non-empty revision name, not an option".into(),
         ));
     }
 
@@ -364,11 +408,14 @@ pub(crate) fn resolve_commit_revision(
         ],
     )?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "Failed to resolve Git revision '{}': {}",
-            revision,
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!(
+                "Failed to resolve Git revision '{}': {}",
+                revision,
+                stderr.trim()
+            )
+            .into(),
+        ));
     }
 
     let commit = stdout.trim();
@@ -377,10 +424,9 @@ pub(crate) fn resolve_commit_revision(
             .chars()
             .all(|character| character.is_ascii_hexdigit())
     {
-        return Err(ToolError::ExecutionFailed(format!(
-            "Git revision '{}' did not resolve to a commit",
-            revision
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("Git revision '{}' did not resolve to a commit", revision).into(),
+        ));
     }
 
     Ok(commit.to_string())
@@ -393,14 +439,17 @@ pub(crate) fn ensure_git_repository(workspace_root: &Path) -> Result<(), ToolErr
     )?;
     if code != 0 || stdout.trim() != "true" {
         let detail = stderr.trim();
-        return Err(ToolError::ExecutionFailed(if detail.is_empty() {
-            format!(
-                "Primary workspace '{}' is not inside a Git repository",
-                workspace_root.to_string_lossy()
-            )
-        } else {
-            format!("Git repository check failed: {}", detail)
-        }));
+        return Err(ToolError::ExecutionFailed(
+            (if detail.is_empty() {
+                format!(
+                    "Primary workspace '{}' is not inside a Git repository",
+                    workspace_root.to_string_lossy()
+                )
+            } else {
+                format!("Git repository check failed: {}", detail)
+            })
+            .into(),
+        ));
     }
     Ok(())
 }
@@ -426,10 +475,9 @@ fn git_current_branch(workspace_root: &Path) -> Result<String, ToolError> {
         ],
     )?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "Failed to determine current branch: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("Failed to determine current branch: {}", stderr.trim()).into(),
+        ));
     }
 
     Ok(stdout.trim().to_string())
@@ -444,10 +492,9 @@ fn git_branches(workspace_root: &Path) -> Result<Vec<String>, ToolError> {
         ],
     )?;
     if code != 0 {
-        return Err(ToolError::ExecutionFailed(format!(
-            "Failed to list branches: {}",
-            stderr.trim()
-        )));
+        return Err(ToolError::ExecutionFailed(
+            format!("Failed to list branches: {}", stderr.trim()).into(),
+        ));
     }
 
     Ok(stdout
@@ -487,17 +534,33 @@ fn build_untracked_patch(
 ) -> Result<(String, usize), ToolError> {
     let mut content = Vec::new();
     File::open(abs_path)
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read untracked file: {}", e)))?
+        .map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to read untracked file: {}",
+                    e
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
+        })?
         .take((MAX_UNTRACKED_FILE_BYTES + 1) as u64)
         .read_to_end(&mut content)
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read untracked file: {}", e)))?;
+        .map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to read untracked file: {}",
+                    e
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
+        })?;
     let truncated_by_bytes = content.len() > MAX_UNTRACKED_FILE_BYTES;
     if truncated_by_bytes {
         content.truncate(MAX_UNTRACKED_FILE_BYTES);
     }
     let content = String::from_utf8(content).map_err(|_| {
         ToolError::ExecutionFailed(
-            "Untracked file contains non-UTF-8 data and was excluded from the patch".to_string(),
+            "Untracked file contains non-UTF-8 data and was excluded from the patch".into(),
         )
     })?;
     let mut patch = String::new();
@@ -637,10 +700,9 @@ impl ToolDefinition for GitDiff {
             let (status_code, status_stdout, status_stderr) =
                 run_git_command(&workspace_root, &status_args)?;
             if status_code != 0 {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "git status failed: {}",
-                    status_stderr.trim()
-                )));
+                return Err(ToolError::ExecutionFailed(
+                    format!("git status failed: {}", status_stderr.trim()).into(),
+                ));
             }
 
             let status_entries = parse_status_porcelain_z(&status_stdout)?;
@@ -651,10 +713,13 @@ impl ToolDefinition for GitDiff {
                 let requested_path = workspace_root.join(&relative_path);
                 let abs_path = validate_path(&requested_path, self.path_guard.as_ref())?;
                 if !abs_path.starts_with(&workspace_root) {
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "Git status path '{}' resolves outside its workspace root",
-                        relative_path
-                    )));
+                    return Err(ToolError::ExecutionFailed(
+                        format!(
+                            "Git status path '{}' resolves outside its workspace root",
+                            relative_path
+                        )
+                        .into(),
+                    ));
                 }
 
                 if status_code == "??" {
@@ -700,11 +765,14 @@ impl ToolDefinition for GitDiff {
                 let (diff_code, diff_stdout, diff_stderr) =
                     run_git_command(&workspace_root, &diff_args)?;
                 if diff_code != 0 {
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "git diff failed for '{}': {}",
-                        relative_path,
-                        diff_stderr.trim()
-                    )));
+                    return Err(ToolError::ExecutionFailed(
+                        format!(
+                            "git diff failed for '{}': {}",
+                            relative_path,
+                            diff_stderr.trim()
+                        )
+                        .into(),
+                    ));
                 }
 
                 let mut numstat_args = vec![
@@ -829,6 +897,26 @@ mod tests {
     use std::process::Command;
     use std::sync::{Arc, RwLock};
     use tempfile::tempdir;
+
+    #[test]
+    fn untracked_read_failure_preserves_legacy_text_and_typed_origin() {
+        let directory = tempdir().expect("temporary directory");
+        let missing = directory.path().join("missing.txt");
+        let source = fs::File::open(&missing).expect_err("missing file");
+        let error = super::build_untracked_patch(&missing, "missing.txt", 10)
+            .expect_err("missing file must fail");
+        let crate::tools::ToolError::ExecutionFailed(message) = error else {
+            panic!("expected execution failure");
+        };
+        assert_eq!(
+            message.as_str(),
+            format!("Failed to read untracked file: {}", source)
+        );
+        assert_eq!(
+            message.origin(),
+            Some(&crate::error_diagnostics::ErrorOrigin::from_error(&source))
+        );
+    }
 
     /// Creates a fixture directory inside ChatSpeed's stable temp root.
     ///

@@ -35,6 +35,7 @@ use chatspeed_contracts::{
     PROTOCOL_VERSION, RUNTIME_LIFECYCLE_SCHEMA_VERSION,
 };
 use chatspeed_runtime_backend::background::RuntimeBackground;
+use chatspeed_runtime_backend::error_diagnostics::{log_error_diagnostic, ErrorProjection};
 use chatspeed_runtime_backend::lifecycle::{
     AdmissionTicket, RuntimeLifecycleGate, ShutdownHandoff, WorkAdmission, WorkKind,
 };
@@ -1566,7 +1567,10 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
     log::info!("[Runtime] recovering capability state and registering core tools");
     owner.recover_capability_state();
     if let Err(error) = owner.register_core_tools().await {
-        log::error!("[Runtime] failed to register core tools: {error}");
+        let mut diagnostic = error.diagnostic();
+        diagnostic.module = "runtime.startup".to_string();
+        diagnostic.operation = "register_core_tools".to_string();
+        log_error_diagnostic(&diagnostic);
     }
     log::info!("[Runtime] core tool registration complete");
 

@@ -588,6 +588,8 @@ import { FrontendAppError } from '@/libs/tauri'
 import { createDefaultPricing, normalizePricing } from '@/libs/modelPricing'
 import { getProviderLogo, providerLogoFallback } from '@/libs/logo'
 import { useModelStore } from '@/stores/model'
+import { USER_ERROR_REASONS } from '@/constants/errorReasons'
+import { formatUserError, normalizeUserError } from '@/libs/error'
 
 const normalizeProxyServerAddress = value => {
   const server = String(value || '').trim()
@@ -1125,10 +1127,10 @@ const updateModel = () => {
         })
         .catch(err => {
           if (err instanceof FrontendAppError) {
-            showMessage(err.toFormattedString(), 'error')
+            showMessage(formatUserError(err, t('common.errorFallback')), 'error')
             console.error('Error updating model:', err.originalError)
           } else {
-            showMessage(err.message || String(err), 'error')
+            showMessage(formatUserError(err, t('common.errorFallback')), 'error')
             console.error('Error updating model:', err)
           }
         })
@@ -1157,10 +1159,10 @@ const deleteModel = id => {
       })
       .catch(err => {
         if (err instanceof FrontendAppError) {
-          showMessage(err.toFormattedString(), 'error')
+          showMessage(formatUserError(err, t('common.errorFallback')), 'error')
           console.error('Error deleting model:', err.originalError)
         } else {
-          showMessage(err.message || String(err), 'error')
+          showMessage(formatUserError(err, t('common.errorFallback')), 'error')
           console.error('Error deleting model:', err)
         }
       })
@@ -1194,10 +1196,16 @@ const toggleModelStatus = async model => {
     const langKey = `settings.model.${actionText}Failed`
 
     if (e instanceof FrontendAppError) {
-      showMessage(t(langKey, { error: e.toFormattedString(), name: model.name }), 'error')
+      showMessage(
+        t(langKey, { error: formatUserError(e, t('common.errorFallback')), name: model.name }),
+        'error'
+      )
       console.error('Error toggling model status:', e.originalError)
     } else {
-      showMessage(t(langKey, { error: e.message || String(e), name: model.name }), 'error')
+      showMessage(
+        t(langKey, { error: formatUserError(e, t('common.errorFallback')), name: model.name }),
+        'error'
+      )
       console.error('Error toggling model status:', e)
     }
   }
@@ -1585,24 +1593,21 @@ const fetchedProviderModelsFromServer = async (protocol, baseUrl, apiKey, metada
       await loadCatalogProviderModels()
     }
   } catch (error) {
-    const formattedError =
-      error instanceof FrontendAppError
-        ? error.toFormattedString()
-        : error?.message || String(error)
+    const normalizedError = normalizeUserError(error, t('common.errorFallback'))
+    const formattedError = normalizedError.message
     if (protocol === 'decision') {
       showMessage(t('settings.model.decisionImportFailed', { error: formattedError }), 'error')
       return
     }
     const isUnsupportedListModels =
-      formattedError.includes('Method Not Allowed') ||
-      formattedError.includes('status_code\":405') ||
-      formattedError.includes('not available for Coding Agents')
+      normalizedError.reason === USER_ERROR_REASONS.UNSUPPORTED_LIST_MODELS ||
+      normalizedError.upstream_status === 405
 
     if (isUnsupportedListModels) {
       console.warn('Provider does not support list_models, skipping model auto-fetch.')
     } else if (error instanceof FrontendAppError) {
       console.error(
-        `Failed to fetch provider models: ${error.toFormattedString()}`,
+        `Failed to fetch provider models: ${formatUserError(error)}`,
         error.originalError
       )
     } else {
@@ -1768,10 +1773,10 @@ const onProviderModelSave = async () => {
 const onDragEnd = () => {
   modelStore.updateModelProviderOrder().catch(err => {
     if (err instanceof FrontendAppError) {
-      showMessage(err.toFormattedString(), 'error')
+      showMessage(formatUserError(err, t('common.errorFallback')), 'error')
       console.error('Error updating model order:', err.originalError)
     } else {
-      showMessage(err.message || String(err), 'error')
+      showMessage(formatUserError(err, t('common.errorFallback')), 'error')
       console.error('Error updating model order:', err)
     }
   })
@@ -1845,12 +1850,16 @@ const showPresetModels = async () => {
     } catch (error) {
       if (error instanceof FrontendAppError) {
         return showMessage(
-          t('settings.model.loadPresetError', { error: error.toFormattedString() }),
+          t('settings.model.loadPresetError', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
           'error'
         )
       } else {
         return showMessage(
-          t('settings.model.loadPresetError', { error: error.message || String(error) }),
+          t('settings.model.loadPresetError', {
+            error: formatUserError(error, t('common.errorFallback'))
+          }),
           'error'
         )
       }

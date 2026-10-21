@@ -32,7 +32,7 @@ pub use chat::{
     MessageTypeDto, ModelDetailsDto, CHAT_STREAM_SCHEMA_VERSION,
 };
 pub use discovery::{ControlPlaneDiscovery, CONTROL_PLANE_HOST, DISCOVERY_FILE_NAME};
-pub use error::{ErrorDetail, ErrorEnvelope};
+pub use error::{ErrorDetail, ErrorEnvelope, ErrorReason, UserErrorPresentation};
 pub use lease::{ClientLease, ClientLeaseRequest, ClientLeaseResponse};
 pub use model_catalog::{
     ModelsDevPresetProviderDto, ModelsDevProviderModelsRequest, ResolveModelProfileRequest,
@@ -100,6 +100,19 @@ mod fixtures {
         assert_eq!(
             serde_json::to_value(envelope).expect("serialize error"),
             json!({"error": {"code": "invalid_input", "message": "bad request"}})
+        );
+    }
+
+    #[test]
+    fn error_fixture_reads_the_legacy_two_field_envelope() {
+        let wire = json!({"error": {"code": "invalid_input", "message": "bad request"}});
+        let envelope: ErrorEnvelope =
+            serde_json::from_value(wire.clone()).expect("decode legacy error");
+        assert_eq!(envelope.error.code, "invalid_input");
+        assert_eq!(envelope.error.message, "bad request");
+        assert_eq!(
+            serde_json::to_value(envelope).expect("encode legacy error"),
+            wire
         );
     }
 

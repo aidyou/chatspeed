@@ -26,7 +26,8 @@ import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDark, usePreferredDark } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { setI18nLanguage } from '@/i18n'
+import { formatUserError } from '@/libs/error'
+import i18n, { setI18nLanguage } from '@/i18n'
 
 import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -246,7 +247,7 @@ onMounted(async () => {
   // listen for setup error
   await listen('setup-error', event => {
     ElMessage.error({
-      message: `Setup error: ${event.payload}`,
+      message: formatUserError(event.payload, i18n.global.t('common.errorFallback')),
       duration: 0,
       showClose: true
     })

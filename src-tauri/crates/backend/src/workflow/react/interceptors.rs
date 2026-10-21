@@ -1021,6 +1021,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             display_type: "text".to_string(),
             approval_status: Some("pending".to_string()),
             observation_kind: None,
+            user_error: None,
         }))
     }
 
@@ -2263,6 +2264,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+            user_error: None,
             }));
         }
 
@@ -2284,6 +2286,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+            user_error: None,
             }));
         }
 
@@ -2385,6 +2388,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+            user_error: None,
             }));
         }
 
@@ -2403,6 +2407,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             display_type: "choice".to_string(),
             approval_status: None,
             observation_kind: None,
+            user_error: None,
         }))
     }
 
@@ -2428,6 +2433,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+            user_error: None,
             }));
         }
 
@@ -2475,6 +2481,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     display_type: "text".to_string(),
                     approval_status: None,
                     observation_kind: None,
+                    user_error: None,
                 }));
             }
         };
@@ -2520,6 +2527,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                         display_type: "text".to_string(),
                         approval_status: None,
                         observation_kind: None,
+            user_error: None,
                     }));
             }
         }
@@ -2543,6 +2551,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+            user_error: None,
             }));
         }
 
@@ -2617,6 +2626,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+                user_error: None,
             }));
         }
 
@@ -2686,6 +2696,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             display_type: "text".to_string(),
             approval_status: None,
             observation_kind: None,
+            user_error: None,
         }))
     }
 
@@ -2729,6 +2740,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+            user_error: None,
             }));
         }
 
@@ -2773,6 +2785,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     display_type: "text".to_string(),
                     approval_status: None,
                     observation_kind: None,
+            user_error: None,
                 }));
             }
 
@@ -2797,6 +2810,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     display_type: "text".to_string(),
                     approval_status: None,
                     observation_kind: None,
+            user_error: None,
                 }));
             }
         }
@@ -2814,6 +2828,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             display_type: "text".to_string(),
             approval_status: None,
             observation_kind: None,
+            user_error: None,
         }))
     }
 
@@ -2863,6 +2878,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                 display_type: "text".to_string(),
                 approval_status: None,
                 observation_kind: None,
+            user_error: None,
             }));
         }
 
@@ -3134,6 +3150,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
             display_type,
             approval_status: Some("pending".to_string()),
             observation_kind: None,
+            user_error: None,
         }))
     }
 
@@ -3164,6 +3181,7 @@ Return the final verdict ONLY by calling `submit_result`.\n\
                     display_type: "text".to_string(),
                     approval_status: None,
                     observation_kind: None,
+            user_error: None,
                 }));
             }
         }
@@ -3450,6 +3468,7 @@ mod tests {
             usage_summary: None,
             completed_at_ms: 0,
             consumed: false,
+            user_error: None,
         };
         assert!(WorkflowExecutor::active_sub_agent_ids(&[child], &[terminal]).is_empty());
     }

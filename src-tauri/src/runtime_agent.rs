@@ -26,7 +26,9 @@ use serde_json::Value;
 use chatspeed_runtime_client::{ClientError, RuntimeClient};
 
 use crate::db::Agent;
-use crate::runtime_client::{RuntimeSupervisor, RuntimeUnavailable};
+use crate::runtime_client::{
+    client_error_wire, runtime_error_wire, RuntimeSupervisor, RuntimeUnavailable,
+};
 
 /// Canonical control-plane route for the agent collection.
 const AGENTS_ROUTE: &str = "/control/v1/agents";
@@ -44,7 +46,7 @@ pub async fn get_agent(supervisor: &RuntimeSupervisor, id: &str) -> Result<Optio
     let path = format!("{AGENTS_ROUTE}/{id}");
     match client.get(&path).await {
         Ok(value) => decode_response(value).map(Some),
-        Err(ClientError::Server { status, .. }) if status == 404 => Ok(None),
+        Err(ClientError::Server(response)) if response.status == 404 => Ok(None),
         Err(error) => Err(map_client_error(error)),
     }
 }
@@ -110,17 +112,14 @@ fn response_string(response: &Value, field: &str) -> Result<String, String> {
 
 /// Maps a transport/domain client error to the Tauri string error.
 ///
-/// A structured runtime error keeps its bare message so the Tauri wire stays as
-/// close as possible to the previous command's string error; every other
-/// failure keeps the client's classified (redacted) description.
+/// Public runtime rejections keep their structured envelope so the frontend can
+/// still branch on code, status and the safe presentation; every other failure
+/// keeps the client's classified (redacted) description.
 fn map_client_error(error: ClientError) -> String {
-    match error {
-        ClientError::Server { message, .. } => message,
-        other => other.to_string(),
-    }
+    client_error_wire(error)
 }
 
 /// Maps a supervisor availability failure to the Tauri string error.
 fn map_runtime_error(error: RuntimeUnavailable) -> String {
-    error.to_string()
+    runtime_error_wire(error)
 }

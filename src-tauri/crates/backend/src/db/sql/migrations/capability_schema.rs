@@ -109,7 +109,12 @@ pub const MIGRATION_SQL: &[(&str, &str)] = &[
 pub(crate) fn ensure_capability_journal(conn: &Connection) -> Result<(), StoreError> {
     for (name, sql) in MIGRATION_SQL {
         conn.execute(sql, []).map_err(|e| {
-            StoreError::Query(format!("capability journal ensure {name} failed: {e}"))
+            StoreError::Query(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "capability journal ensure {name} failed: {e}"
+                ))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+            )
         })?;
     }
     Ok(())

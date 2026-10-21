@@ -28,6 +28,8 @@ import {
   reconcileWorkflowTaskWindowState,
   resolveAskUserResponse,
   resolveFinalReviewSubAgentCompletion,
+  resolveWorkflowErrorDisplay,
+  resolveWorkflowUserError,
   resolveWorkflowPhaseFromPlanningMode,
   selectVisibleWorkflowMessageWindow,
   selectVisibleWorkflowTaskGroups,
@@ -45,6 +47,40 @@ assert.equal(
   normalizeWorkflowErrorAlertContent('Critical Error: provider failed'),
   'provider failed',
   'terminal error display should remove only the generic presentation prefix'
+)
+
+const canonicalUserError = {
+  schema_version: 1,
+  message: '用户可见的安全错误',
+  reason: 'unknown'
+}
+assert.deepEqual(
+  resolveWorkflowUserError({ user_error: canonicalUserError }),
+  {
+    message: canonicalUserError.message,
+    reason: 'unknown',
+    display: canonicalUserError.message,
+    displayCopy: canonicalUserError.message
+  },
+  'canonical metadata user_error must resolve to one safe display projection'
+)
+assert.equal(
+  resolveWorkflowUserError({ data: { user_error: canonicalUserError } }).display,
+  canonicalUserError.message,
+  'completion data user_error must be read at the adapter boundary'
+)
+assert.equal(
+  resolveWorkflowErrorDisplay(
+    { user_error: canonicalUserError },
+    'legacy transcript content'
+  ).display,
+  canonicalUserError.message,
+  'canonical user_error must take precedence over legacy transcript content'
+)
+assert.equal(
+  resolveWorkflowErrorDisplay({}, 'legacy transcript content').display,
+  'legacy transcript content',
+  'legacy rows must retain the existing fallback projection'
 )
 
 const retryCountdown = { attempt: 2, total: 5, nextRetryIn: 7 }
@@ -374,6 +410,40 @@ assert.equal(
   }),
   false,
   'messages without an assembled sub-agent card must not render as delegated-task cards'
+)
+
+const failedReviewMessage = {
+  metadata: {
+    sub_agent_id: 'review-failed',
+    review_display_state: 'final_review_completed',
+    user_error: canonicalUserError,
+    review_result: { status: 'failed', error: 'legacy wrapped failure' }
+  }
+}
+const failedReviewBefore = JSON.stringify(failedReviewMessage)
+const failedReview = resolveFinalReviewSubAgentCompletion(failedReviewMessage, null)
+assert.equal(failedReview.user_error.display, canonicalUserError.message)
+assert.equal(failedReview.result.error, 'legacy wrapped failure')
+assert.equal(JSON.stringify(failedReviewMessage), failedReviewBefore)
+
+const liveFailure = {
+  sub_agent_id: 'live-failed',
+  status: 'failed',
+  result: {
+    error: 'legacy wrapped failure',
+    error_metadata: { user_error: canonicalUserError }
+  }
+}
+const liveBefore = JSON.stringify(liveFailure)
+const liveCompletion = collectSubAgentCompletions([], [liveFailure]).get('live-failed')
+assert.equal(liveCompletion.user_error.display, canonicalUserError.message)
+assert.equal(liveCompletion.summary, canonicalUserError.message)
+assert.equal(liveCompletion.result.error, 'legacy wrapped failure')
+assert.equal(JSON.stringify(liveFailure), liveBefore)
+assert.equal(
+  resolveWorkflowUserError({ result: { error: 'contains user_error: overloaded' } }),
+  null,
+  'plain result text must never manufacture a UI projection'
 )
 
 const finalReviewUsageSummary = {

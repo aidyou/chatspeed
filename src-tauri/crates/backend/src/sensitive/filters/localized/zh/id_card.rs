@@ -14,7 +14,7 @@ impl IdCardFilter {
         let pattern = r#"(?:[1-9]\d{5}(?:18|19|20)\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3}[\dXx]|[1-9]\d{5}\d{2}(?:(?:0[1-9])|(?:1[0-2]))(?:(?:[0-2][1-9])|10|20|30|31)\d{3})"#;
         let regex = Regex::new(pattern).map_err(|e| SensitiveError::RegexCompilationFailed {
             pattern: "id_card_regex".to_string(),
-            message: e.to_string(),
+            message: crate::error_diagnostics::FailureMessage::from_error(&e),
         })?;
         Ok(Self { regex })
     }

@@ -94,9 +94,23 @@ fn is_opaque_secret_container(key: &str) -> bool {
 /// that would corrupt the redacted projection and make a journal replay
 /// disagree with the original result.
 pub fn redact_json(value: &Value) -> Value {
+    let mut budget = 16_384;
+    redact_json_bounded(value, 0, &mut budget)
+}
+
+fn redact_json_bounded(value: &Value, depth: usize, budget: &mut usize) -> Value {
+    if depth >= 32 || *budget == 0 {
+        return Value::String(REDACTED.to_string());
+    }
+    *budget -= 1;
     match value {
-        Value::String(text) => Value::String(redact_text(text)),
-        Value::Array(items) => Value::Array(items.iter().map(redact_json).collect()),
+        Value::String(text) => Value::String(redact_text_bounded(text, depth + 1)),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| redact_json_bounded(item, depth + 1, budget))
+                .collect(),
+        ),
         Value::Object(map) => {
             let mut redacted = Map::with_capacity(map.len());
             for (key, item) in map {
@@ -105,7 +119,7 @@ pub fn redact_json(value: &Value) -> Value {
                 } else if is_opaque_secret_container(key) {
                     redacted.insert(key.clone(), redact_container(item));
                 } else {
-                    redacted.insert(key.clone(), redact_json(item));
+                    redacted.insert(key.clone(), redact_json_bounded(item, depth + 1, budget));
                 }
             }
             Value::Object(redacted)
@@ -167,17 +181,168 @@ fn inline_secret_pattern() -> &'static regex::Regex {
     })
 }
 
-/// Redacts obvious credentials embedded in free text: URL userinfo and
-/// `token=...`-style assignments. Used for every error message and log-bound
-/// string so an upstream interpolation cannot leak.
+fn authorization_pattern() -> &'static regex::Regex {
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| regex::Regex::new(r#"(?i)\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*[^\r\n]+|\bBearer\s+[^\s\"'<>;,}]+"#).expect("authorization pattern must compile"))
+}
+
+fn quoted_secret_pattern() -> &'static regex::Regex {
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| regex::Regex::new(r#"(?i)([\"'](?:api[_-]?key|token|secret|password|authorization)[\"']\s*:\s*)[\"'][^\"']*[\"']"#).expect("quoted secret pattern must compile"))
+}
+
+fn query_secret_pattern() -> &'static regex::Regex {
+    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)([?&](?:key|token|access[_-]?token|refresh[_-]?token|secret|password|signature|credential|api[_-]?key|apikey|authorization|bearer)=)[^&#\s]*",
+        )
+        .expect("query secret pattern must compile")
+    })
+}
+
+/// Redacts obvious credentials embedded in free text: URL userinfo, query
+/// parameters and `token=...`-style assignments.
 pub fn redact_text(text: &str) -> String {
+    redact_text_bounded(text, 0)
+}
+
+fn redact_text_bounded(text: &str, depth: usize) -> String {
+    // Fail closed rather than parsing or copying an unbounded diagnostic payload.
+    if depth >= 32 || text.len() > 262_144 {
+        return REDACTED.to_string();
+    }
     if text.is_empty() {
         return String::new();
     }
-    let with_urls = url_credential_pattern().replace_all(text, "${1}[redacted]@");
+    // Escaped JSON also occurs without an enclosing JSON string in upstream errors.
+    if text.contains("\\\"") {
+        let decoded = text.replace("\\\"", "\"");
+        let redacted = redact_text_bounded(&decoded, depth + 1);
+        if redacted != decoded {
+            return redacted;
+        }
+    }
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while cursor < text.len() {
+        let start = cursor;
+        let byte = text.as_bytes()[cursor];
+        if byte == b'"' || byte == b'\'' || byte.is_ascii_alphabetic() || byte == b'_' {
+            let quoted = byte == b'"' || byte == b'\'';
+            let end = if quoted {
+                text_value_end(text, cursor)
+            } else {
+                let mut end = cursor + 1;
+                while end < text.len()
+                    && (text.as_bytes()[end].is_ascii_alphanumeric()
+                        || b"_-.:".contains(&text.as_bytes()[end]))
+                {
+                    // A colon separates a key from its value, not a key segment here.
+                    if text.as_bytes()[end] == b':' {
+                        break;
+                    }
+                    end += 1;
+                }
+                end
+            };
+            let key = if quoted && end > cursor + 1 && text.as_bytes().get(end - 1) == Some(&byte) {
+                &text[cursor + 1..end - 1]
+            } else {
+                &text[cursor..end]
+            };
+            let decoded_key = if quoted && byte == b'"' {
+                serde_json::from_str::<String>(&text[cursor..end]).ok()
+            } else {
+                None
+            };
+            let key = decoded_key.as_deref().unwrap_or(key);
+            let separator = skip_space(text, end);
+            if separator < text.len()
+                && b":=".contains(&text.as_bytes()[separator])
+                && (is_secret_key(key) || is_opaque_secret_container(key))
+            {
+                let value_start = skip_space(text, separator + 1);
+                let value_end = text_value_end(text, value_start);
+                output.push_str(&text[start..value_start]);
+                output.push_str("\"[redacted]\"");
+                cursor = value_end;
+                continue;
+            }
+            if quoted && byte == b'"' {
+                if let Ok(decoded) = serde_json::from_str::<String>(&text[start..end]) {
+                    let redacted = redact_text_bounded(&decoded, depth + 1);
+                    if redacted != decoded {
+                        output.push_str(&Value::String(redacted).to_string());
+                        cursor = end;
+                        continue;
+                    }
+                }
+            }
+            output.push_str(&text[start..end]);
+            cursor = end;
+        } else {
+            let character = text[cursor..].chars().next().unwrap_or_default();
+            output.push(character);
+            cursor += character.len_utf8();
+        }
+    }
+    let with_urls = url_credential_pattern().replace_all(&output, "${1}[redacted]@");
+    let with_queries = query_secret_pattern().replace_all(&with_urls, "${1}[redacted]");
+    let with_auth = authorization_pattern().replace_all(&with_queries, "[redacted]");
+    let with_quoted = quoted_secret_pattern().replace_all(&with_auth, "${1}\"[redacted]\"");
     inline_secret_pattern()
-        .replace_all(&with_urls, "$1=[redacted]")
+        .replace_all(&with_quoted, "$1=[redacted]")
         .into_owned()
+}
+
+fn skip_space(text: &str, mut cursor: usize) -> usize {
+    while cursor < text.len() && text.as_bytes()[cursor].is_ascii_whitespace() {
+        cursor += 1;
+    }
+    cursor
+}
+
+// Scan balanced containers without recursion, including malformed diagnostic snippets.
+// An unterminated secret consumes the remainder rather than exposing a partial value.
+fn text_value_end(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    if start >= bytes.len() {
+        return start;
+    }
+    let first = bytes[start];
+    let container = first == b'{' || first == b'[';
+    let mut nesting = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    for (cursor, &byte) in bytes.iter().enumerate().skip(start) {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == delimiter {
+                quote = None;
+                if !container {
+                    return cursor + 1;
+                }
+            }
+        } else if byte == b'"' || byte == b'\'' {
+            quote = Some(byte);
+        } else if container {
+            if byte == b'{' || byte == b'[' {
+                nesting += 1;
+            } else if byte == b'}' || byte == b']' {
+                nesting = nesting.saturating_sub(1);
+                if nesting == 0 {
+                    return cursor + 1;
+                }
+            }
+        } else if b",;\r\n}]".contains(&byte) {
+            return cursor;
+        }
+    }
+    text.len()
 }
 
 /// A bounded, redacted JSON projection for persistence or display.
@@ -260,5 +425,101 @@ mod tests {
         let value = json!({ "note": "x".repeat(64) });
         let bounded = bounded_redacted_json(&value, 16);
         assert!(bounded.is_string(), "expected truncation marker");
+    }
+
+    #[test]
+    fn free_text_authorization_and_query_values_are_not_partial_redactions() {
+        for text in [
+            "Authorization: Bearer CANARY",
+            "Bearer CANARY",
+            "https://a.test/?access_token=CANARY",
+            "Cookie: arbitrary=CANARY",
+            "prefix {\"api_key\":\"CANARY\"} suffix",
+            "headers: {\n\"custom\":\"CANARY\"\n}",
+        ] {
+            assert!(
+                !redact_text(text).contains("CANARY"),
+                "{}",
+                redact_text(text)
+            );
+        }
+    }
+
+    #[test]
+    fn parameterized_container_and_escaped_canaries_do_not_survive() {
+        for key in ["env", "environment", "headers", "header", "ENV", "Headers"] {
+            for value in [
+                r#"{"custom":"CANARY"}"#,
+                "{\n custom:CANARY\n}",
+                r#"{"nested":{"custom":["CANARY"]}}"#,
+                r#"[["custom","CANARY"],["other","CANARY"]]"#,
+                r#"["CANARY", {"custom":"CANARY"}]"#,
+                "{custom:CANARY",
+            ] {
+                for text in [
+                    format!("failure {key}: {value}"),
+                    format!("failure {{\"{key}\":{value}}} suffix"),
+                ] {
+                    let redacted = redact_text(&text);
+                    assert!(!redacted.contains("CANARY"), "{text} => {redacted}");
+                }
+            }
+        }
+        for text in [
+            r#"failed {\"api_key\":\"CANARY\"}"#,
+            r#"failed {"api\u005fkey":"CANARY"}"#,
+            r#""{\"headers\":{\"custom\":\"CANARY\"}}""#,
+            "https://user:CANARY@example.test/path?access_token=CANARY&ok=yes",
+            "Authorization: Bearer CANARY",
+            "Bearer CANARY",
+            "\"Bearer CANARY\"",
+        ] {
+            let redacted = redact_text(text);
+            assert!(!redacted.contains("CANARY"), "{text} => {redacted}");
+        }
+    }
+
+    #[test]
+    fn plain_diagnostics_and_scalar_json_are_not_reformatted() {
+        for text in [
+            "plain error",
+            "https://example.test:8443/path?ok=yes#anchor",
+            "failed: connection refused\nretry: later",
+            "中文错误：连接失败\nnext: retry",
+            "\"未闭合中文",
+            r#""string""#,
+            r#"{"message":"plain error","count":3}"#,
+        ] {
+            assert_eq!(redact_text(text), text);
+        }
+    }
+
+    #[test]
+    fn deep_and_oversized_inputs_are_bounded_and_fail_closed() {
+        let nested = format!(
+            "{}{{\"headers\":{{\"custom\":\"CANARY\"}}}}{}",
+            "[".repeat(2048),
+            "]".repeat(2048)
+        );
+        assert!(!redact_text(&nested).contains("CANARY"));
+        assert_eq!(redact_text(&"CANARY".repeat(50_000)), REDACTED);
+        let mut value = json!({"custom":"CANARY"});
+        for _ in 0..64 {
+            value = json!({"nested":value});
+        }
+        assert!(!redact_json(&value).to_string().contains("CANARY"));
+        let mut encoded = "Bearer CANARY".to_string();
+        for _ in 0..12 {
+            encoded = serde_json::to_string(&encoded).unwrap();
+        }
+        assert!(!redact_text(&encoded).contains("CANARY"));
+    }
+
+    #[test]
+    fn redact_text_handles_embedded_json_and_all_credential_surfaces() {
+        let text = r#"failed {"Authorization":"Bearer canary","env":{"HOME":"canary-env"},"headers":{"X-Test":"canary-header"}} https://user:canary-pass@example.test/?key=canary-key"#;
+        let redacted = redact_text(text);
+        assert!(!redacted.contains("canary"), "got {redacted}");
+        assert!(redacted.contains("[redacted]"));
     }
 }

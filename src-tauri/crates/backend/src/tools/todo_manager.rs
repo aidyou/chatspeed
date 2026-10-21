@@ -77,7 +77,7 @@ fn next_todo_id(list: &[Value]) -> Result<String, ToolError> {
     let next_id = match max_existing_id {
         Some(id) => id.checked_add(1).ok_or_else(|| {
             ToolError::ExecutionFailed(
-                "Cannot allocate a todo ID because the numeric ID range is exhausted".to_string(),
+                "Cannot allocate a todo ID because the numeric ID range is exhausted".into(),
             )
         })?,
         None => 1,
@@ -107,17 +107,32 @@ async fn get_db_todo_list(
 ) -> Result<Vec<Value>, ToolError> {
     let runtime = {
         let store = store.as_ref();
-        store
-            .db_runtime()
-            .map_err(|e| ToolError::ExecutionFailed(format!("DB runtime error: {}", e)))?
+        store.db_runtime().map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!("DB runtime error: {}", e))
+                    .with_origin(e.error_origin()),
+            )
+        })?
     };
     let snapshot = MainStore::get_workflow_snapshot_with_runtime(runtime, session_id.to_string())
         .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch workflow: {}", e)))?;
+        .map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!(
+                    "Failed to fetch workflow: {}",
+                    e
+                ))
+                .with_origin(e.error_origin()),
+            )
+        })?;
 
     let list_str = snapshot.workflow.todo_list.unwrap_or_else(|| "[]".into());
-    serde_json::from_str(&list_str)
-        .map_err(|e| ToolError::ExecutionFailed(format!("Invalid todo JSON: {}", e)))
+    serde_json::from_str(&list_str).map_err(|e| {
+        ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(format!("Invalid todo JSON: {}", e))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+        )
+    })
 }
 
 async fn save_db_todo_list(
@@ -127,15 +142,27 @@ async fn save_db_todo_list(
 ) -> Result<(), ToolError> {
     let runtime = {
         let store = store.as_ref();
-        store
-            .db_runtime()
-            .map_err(|e| ToolError::ExecutionFailed(format!("DB runtime error: {}", e)))?
+        store.db_runtime().map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!("DB runtime error: {}", e))
+                    .with_origin(e.error_origin()),
+            )
+        })?
     };
-    let list_str = serde_json::to_string(&list)
-        .map_err(|e| ToolError::ExecutionFailed(format!("Serialize error: {}", e)))?;
+    let list_str = serde_json::to_string(&list).map_err(|e| {
+        ToolError::ExecutionFailed(
+            crate::error_diagnostics::FailureMessage::leaf(format!("Serialize error: {}", e))
+                .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&e)),
+        )
+    })?;
     MainStore::update_workflow_todo_list_with_runtime(runtime, session_id.to_string(), list_str)
         .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("DB Update error: {}", e)))
+        .map_err(|e| {
+            ToolError::ExecutionFailed(
+                crate::error_diagnostics::FailureMessage::leaf(format!("DB Update error: {}", e))
+                    .with_origin(e.error_origin()),
+            )
+        })
 }
 
 pub struct TodoCreateTool {
@@ -353,17 +380,23 @@ impl ToolDefinition for TodoListTool {
                 .iter()
                 .find(|item| item["id"].as_str() == Some(todo_id))
                 .ok_or_else(|| {
-                    ToolError::ExecutionFailed(format!(
-                        "Todo {} not found. {}",
-                        todo_id,
-                        format_todo_list_summary(&list)
-                    ))
+                    ToolError::ExecutionFailed(
+                        format!(
+                            "Todo {} not found. {}",
+                            todo_id,
+                            format_todo_list_summary(&list)
+                        )
+                        .into(),
+                    )
                 })?;
             let details = serde_json::to_string_pretty(item).map_err(|error| {
-                ToolError::ExecutionFailed(format!(
-                    "Failed to serialize todo {}: {}",
-                    todo_id, error
-                ))
+                ToolError::ExecutionFailed(
+                    crate::error_diagnostics::FailureMessage::leaf(format!(
+                        "Failed to serialize todo {}: {}",
+                        todo_id, error
+                    ))
+                    .with_origin(crate::error_diagnostics::ErrorOrigin::from_error(&error)),
+                )
             })?;
             return Ok(ToolCallResult::success(Some(details), Some(item.clone())));
         }
@@ -495,11 +528,14 @@ impl ToolDefinition for TodoUpdateTool {
         }
 
         if !found {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Todo item {} not found. {}",
-                todo_id,
-                format_todo_list_summary(&list)
-            )));
+            return Err(ToolError::ExecutionFailed(
+                format!(
+                    "Todo item {} not found. {}",
+                    todo_id,
+                    format_todo_list_summary(&list)
+                )
+                .into(),
+            ));
         }
 
         save_db_todo_list(&self.main_store, &self.session_id, list).await?;

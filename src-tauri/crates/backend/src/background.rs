@@ -25,6 +25,7 @@ use crate::ai::interaction::chat_completion::ChatState;
 use crate::capability::CapabilityApplicationService;
 use crate::ccproxy::launcher::{self, CcproxyServer};
 use crate::db::MainStore;
+use crate::error_diagnostics::{log_error_diagnostic, ErrorProjection};
 use crate::lifecycle::{RuntimeLifecycleGate, WorkAdmission, WorkKind};
 use crate::model_catalog_service::ModelsDevCatalogService;
 use crate::owner::RuntimeOwner;
@@ -140,10 +141,12 @@ fn spawn_capability_reconcile(
                     report.still_needs_reconcile.len()
                 ),
                 Ok(_) => {}
-                Err(error) => log::error!(
-                    "[Runtime][capability][reconcile] startup reconcile failed: {}",
-                    error.redacted_message()
-                ),
+                Err(error) => {
+                    let mut diagnostic = error.diagnostic();
+                    diagnostic.module = "runtime.background".to_string();
+                    diagnostic.operation = "capability_reconcile".to_string();
+                    log_error_diagnostic(&diagnostic);
+                }
             },
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
@@ -169,7 +172,10 @@ fn spawn_mcp_registration(
                 .clone()
                 .register_available_mcp_tools(main_store) => {
                     if let Err(error) = result {
-                        log::error!("[Runtime][mcp] failed to register configured MCP servers: {error}");
+                        let mut diagnostic = error.diagnostic();
+                        diagnostic.module = "runtime.background".to_string();
+                        diagnostic.operation = "mcp_registration".to_string();
+                        log_error_diagnostic(&diagnostic);
                     }
                 }
             changed = shutdown.changed() => {
@@ -218,7 +224,10 @@ fn spawn_automation_scheduler(
                     };
                     let now = normalize_datetime_for_db(Local::now());
                     if let Err(error) = service.automation_dispatch_due(&now).await {
-                        log::error!("[Runtime][automation][scheduler] dispatch_due failed: {error}");
+                        let mut diagnostic = error.diagnostic();
+                        diagnostic.module = "runtime.background".to_string();
+                        diagnostic.operation = "automation_dispatch_due".to_string();
+                        log_error_diagnostic(&diagnostic);
                     }
                     drop(ticket);
                 }

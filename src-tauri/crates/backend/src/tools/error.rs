@@ -1,3 +1,5 @@
+use crate::error_diagnostics::{ErrorDiagnostic, ErrorOrigin, ErrorProjection, FailureMessage};
+use chatspeed_contracts::error::UserErrorPresentation;
 use rust_i18n::t;
 use serde::Serialize;
 use thiserror::Error;
@@ -11,7 +13,7 @@ pub enum ToolError {
 
     /// Errors during the initialization process of a tool or service.
     #[error("{}", t!("tools.error.initialization", details = .0))]
-    Initialization(String),
+    Initialization(FailureMessage),
 
     /// A required tool or function was not found in the registry.
     #[error("{}", t!("tools.error.function_not_found", name = .0))]
@@ -43,7 +45,7 @@ pub enum ToolError {
 
     /// A generic error during tool execution that doesn't fit other categories.
     #[error("{}", t!("tools.error.execution_failed", details = .0))]
-    ExecutionFailed(String),
+    ExecutionFailed(FailureMessage),
 
     /// A sandbox backend failed in a structured, non-fallback way.
     #[error("sandbox failure: {0:?}")]
@@ -79,10 +81,49 @@ pub enum ToolError {
     Security(String),
 }
 
+impl ToolError {
+    pub fn error_origin(&self) -> ErrorOrigin {
+        match self {
+            Self::Initialization(message) | Self::ExecutionFailed(message) => message
+                .origin()
+                .cloned()
+                .unwrap_or_else(|| ErrorOrigin::leaf(message.as_str(), None, None, None)),
+            // Policy details stay local, including sandbox paths and commands.
+            Self::Security(_) | Self::SandboxFailure(_) => {
+                ErrorOrigin::leaf(t!("chat.error_feedback").to_string(), None, None, None)
+            }
+            _ => ErrorOrigin::leaf(self.to_string(), None, None, None),
+        }
+    }
+}
+
+impl ErrorProjection for ToolError {
+    fn user_error(&self) -> UserErrorPresentation {
+        FailureMessage::leaf(self.to_string())
+            .with_origin(self.error_origin())
+            .user_error()
+    }
+
+    fn diagnostic(&self) -> ErrorDiagnostic {
+        let mut diagnostic = FailureMessage::leaf(self.to_string())
+            .with_origin(self.error_origin())
+            .diagnostic();
+        diagnostic.module = "tools".into();
+        diagnostic
+    }
+}
+
+impl From<crate::mcp::McpError> for ToolError {
+    fn from(error: crate::mcp::McpError) -> Self {
+        let origin = error.error_origin();
+        Self::ExecutionFailed(FailureMessage::leaf(error.to_string()).with_origin(origin))
+    }
+}
+
 impl From<String> for ToolError {
     fn from(s: String) -> Self {
         // Default to a generic execution failure for simple string conversions.
-        ToolError::ExecutionFailed(s)
+        ToolError::ExecutionFailed(s.into())
     }
 }
 
@@ -91,10 +132,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_carrier_serialization_and_policy_projection() {
+        let error = ToolError::ExecutionFailed(
+            FailureMessage::leaf("legacy").with_origin(ErrorOrigin::leaf("root", None, None, None)),
+        );
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({"kind":"executionFailed", "message":"legacy"})
+        );
+        assert_eq!(error.user_error().message, "root");
+        let error = ToolError::Security("private path /secret token=CANARY".into());
+        assert_eq!(error.user_error().message, t!("chat.error_feedback"));
+        assert!(!crate::mcp::McpError::from(error)
+            .user_error()
+            .message
+            .contains("CANARY"));
+    }
+
+    #[test]
     fn test_from_string_conversion() {
         let error = ToolError::from("test error".to_string());
         match error {
-            ToolError::ExecutionFailed(msg) => assert_eq!(msg, "test error"),
+            ToolError::ExecutionFailed(msg) => assert_eq!(msg.as_str(), "test error"),
             _ => panic!("Expected ExecutionFailed variant"),
         }
     }

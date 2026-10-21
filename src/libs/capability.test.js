@@ -34,6 +34,35 @@ test('an unrecognized failure is still an error with an unknown code', () => {
   assert.equal(notEnvelope.code, 'unknown')
 })
 
+test('capability parser accepts Error and cyclic envelopes without serializing objects', () => {
+  const original = new Error('native failure')
+  original.code = 'native_code'
+  const native = parseCapabilityError(original)
+  assert.ok(native instanceof Error)
+  assert.equal(native.message, 'native failure')
+  assert.equal(native.code, 'native_code')
+  const cyclic = { code: 'cycle', message: 'cycle safe' }
+  cyclic.details = cyclic
+  assert.equal(parseCapabilityError(cyclic).message, 'cycle safe')
+  assert.equal(parseCapabilityError(cyclic).code, 'cycle')
+  assert.equal(parseCapabilityError({ code: 'nested', message: { message: 'safe' } }).message, 'safe')
+})
+
+test('capability HTTP envelopes preserve shared fields without requiring the Tauri module', () => {
+  const detail = { code: 'check_blocked', message: 'legacy', presentation: {
+    schema_version: 1, message: 'safe explanation', reason: 'runtime_stopping', upstream_status: 503
+  } }
+  for (const value of [{ error: detail }, JSON.stringify({ error: detail })]) {
+    const parsed = parseCapabilityError(value)
+    assert.equal(parsed.message, 'safe explanation')
+    assert.equal(parsed.code, 'check_blocked')
+    assert.equal(parsed.reason, 'runtime_stopping')
+    assert.equal(parsed.upstream_status, 503)
+  }
+  // Before renderer initialization, unknown failures stay safe but have no localized fallback.
+  assert.equal(parseCapabilityError({}).message, '')
+})
+
 test('only an explicit pass verdict authorizes an install', () => {
   assert.equal(verdictAllowsInstall({ verdict: 'pass' }), true)
   // blocked and inconclusive both refuse, and no report never authorizes.

@@ -4,10 +4,12 @@ use crate::ccproxy::{
         output::OutputAdapter,
         unified::{SseStatus, StreamLogRecorder, UnifiedFunctionCallPart, UnifiedStreamChunk},
     },
+    diagnostic::{self, RequestContext},
     errors::{CCProxyError, ProxyResult},
     helper::stat_guard::StreamStatGuard,
     ChatProtocol, StreamFormat, StreamProcessor,
 };
+use crate::error_diagnostics::FailureMessage;
 
 use crate::db::MainStore;
 use axum::body::Body;
@@ -16,6 +18,35 @@ use futures_util::{stream::iter, StreamExt};
 use http::StatusCode;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
+
+#[derive(Clone)]
+struct StreamLogContext {
+    request_id: String,
+    client_protocol: String,
+    backend_protocol: String,
+    client_model: String,
+    backend_model: String,
+    provider_id: i64,
+    provider: String,
+    compat: bool,
+}
+
+impl StreamLogContext {
+    fn request_context(&self) -> RequestContext<'_> {
+        RequestContext {
+            request_id: &self.request_id,
+            client_protocol: &self.client_protocol,
+            backend_protocol: &self.backend_protocol,
+            client_model: &self.client_model,
+            backend_model: &self.backend_model,
+            provider_id: self.provider_id,
+            provider: &self.provider,
+            group: None,
+            path: "unified",
+            compat: self.compat,
+        }
+    }
+}
 
 pub async fn handle_streamed_response(
     client_headers: &http::HeaderMap,
@@ -62,6 +93,16 @@ pub async fn handle_streamed_response(
     } else {
         "".to_string()
     };
+    let log_context = Arc::new(StreamLogContext {
+        request_id: message_id.clone(),
+        client_protocol: client_protocol.to_string(),
+        backend_protocol: backend_protocol.to_string(),
+        client_model: client_model.clone(),
+        backend_model: backend_model.clone(),
+        provider_id,
+        provider: provider.clone(),
+        compat: tool_compat_mode,
+    });
     let log_recorder = Arc::new(Mutex::new(StreamLogRecorder::new(message_id, model_id)));
 
     let unified_stream = reassembled_stream
@@ -69,6 +110,7 @@ pub async fn handle_streamed_response(
             let adapter = backend_adapter.clone();
             let status = sse_status_clone.clone();
             let backend_protocol = backend_protocol_for_log.clone();
+            let log_context = log_context.clone();
             async move {
                 match item {
                     Ok(chunk) => {
@@ -84,7 +126,13 @@ pub async fn handle_streamed_response(
                             .adapt_stream_chunk(chunk, status)
                             .await
                             .unwrap_or_else(|e| {
-                                log::error!("handler: adapt_stream_chunk failed: {}", e);
+                                let diagnostic = diagnostic::from_error(
+                                    "ccproxy",
+                                    "stream_adapt",
+                                    e.as_ref(),
+                                    diagnostic::request_frames(log_context.request_context()),
+                                );
+                                diagnostic::emit(log::Level::Error, &diagnostic);
                                 vec![
                                     crate::ccproxy::adapter::unified::UnifiedStreamChunk::Error {
                                         message: e.to_string(),
@@ -94,9 +142,16 @@ pub async fn handle_streamed_response(
                         result
                     }
                     Err(e) => {
-                        log::error!("error on backend stream: {}", e);
+                        let failure = FailureMessage::from(e);
+                        let diagnostic = diagnostic::from_failure(
+                            "ccproxy",
+                            "stream_read",
+                            &failure,
+                            diagnostic::request_frames(log_context.request_context()),
+                        );
+                        diagnostic::emit(log::Level::Error, &diagnostic);
                         vec![UnifiedStreamChunk::Error {
-                            message: e.to_string(),
+                            message: failure.as_str().to_string(),
                         }]
                     }
                 }
@@ -150,7 +205,13 @@ pub async fn handle_streamed_response(
             let events = output_adapter
                 .adapt_stream_chunk(unified_chunk, sse_status)
                 .unwrap_or_else(|_| {
-                    log::error!("adapt_stream_chunk failed unexpectedly");
+                    let diagnostic = diagnostic::from_message(
+                        "ccproxy",
+                        "stream_emit",
+                        "output adapter reported an infallible stream failure",
+                        [("route", Some("path=unified".to_string()))],
+                    );
+                    diagnostic::emit(log::Level::Error, &diagnostic);
                     Vec::new()
                 });
 
@@ -279,5 +340,128 @@ pub fn adapt_stream_chunk_to_log(
             recorder.error_message = Some(message.clone());
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_streamed_response;
+    use crate::ccproxy::{
+        adapter::{backend::OpenAIBackendAdapter, output::OpenAIOutputAdapter, unified::SseStatus},
+        ChatProtocol,
+    };
+    use crate::db::MainStore;
+    use std::sync::{Arc, RwLock};
+    use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn ccproxy_stream_helper_abort_emits_error_event_and_records_failure() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener should have address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("upstream should accept");
+            let mut request = [0_u8; 8192];
+            socket
+                .read(&mut request)
+                .await
+                .expect("upstream should read request");
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Upstream: kept\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await
+                .expect("upstream should write headers");
+            let event = b"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0}]}\n\n";
+            socket
+                .write_all(format!("{:x}\r\n", event.len()).as_bytes())
+                .await
+                .expect("upstream should write chunk size");
+            socket
+                .write_all(event)
+                .await
+                .expect("upstream should write chunk");
+            socket
+                .write_all(b"\r\n")
+                .await
+                .expect("upstream should finish chunk");
+            socket.flush().await.expect("upstream should flush");
+            // Close without the terminating chunk so the helper observes a stream abort.
+        });
+        let target_response = reqwest::Client::new()
+            .get(format!("http://{address}/stream"))
+            .send()
+            .await
+            .expect("upstream response should be available");
+
+        let directory = tempdir().expect("test directory should exist");
+        let store = Arc::new(
+            MainStore::new(directory.path().join("stream-helper-abort.db"))
+                .expect("test store should initialize"),
+        );
+        let sse_status = Arc::new(RwLock::new(SseStatus::new(
+            "message-id".to_string(),
+            "backend-model".to_string(),
+            false,
+            0.0,
+        )));
+        let response = handle_streamed_response(
+            &http::HeaderMap::new(),
+            Arc::new(ChatProtocol::OpenAI),
+            ChatProtocol::OpenAI,
+            target_response,
+            Arc::new(OpenAIBackendAdapter),
+            OpenAIOutputAdapter,
+            sse_status,
+            false,
+            false,
+            store.clone(),
+            "alias".to_string(),
+            "backend-model".to_string(),
+            1,
+            "provider".to_string(),
+            false,
+            None,
+        )
+        .await
+        .expect("stream helper should return a protocol-safe response");
+
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/event-stream"
+        );
+        assert_eq!(response.headers().get("x-upstream").unwrap(), "kept");
+        assert!(!response.headers().contains_key("content-length"));
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("protocol error event should terminate the body");
+        let body = String::from_utf8_lossy(&body);
+        assert!(
+            body.contains("\"error\""),
+            "aborted backend stream must surface a protocol-safe error event"
+        );
+
+        let runtime = store.db_runtime().expect("runtime should exist");
+        let flush_runtime = runtime.clone();
+        tokio::task::spawn_blocking(move || flush_runtime.drain_blocking())
+            .await
+            .expect("flush task should join")
+            .expect("stream failure stat should flush");
+        let stat = runtime
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT status_code, error_message FROM ccproxy_stats",
+                    [],
+                    |row| Ok((row.get::<_, i32>(0)?, row.get::<_, Option<String>>(1)?)),
+                )?)
+            })
+            .await
+            .expect("stream failure stat should persist");
+        assert_eq!(stat.0, 502);
+        assert!(stat.1.is_some_and(|message| !message.is_empty()));
+        server.await.expect("upstream task should join");
     }
 }

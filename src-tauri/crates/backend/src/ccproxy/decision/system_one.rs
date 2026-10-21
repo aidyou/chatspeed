@@ -5,7 +5,10 @@ use super::{
 };
 use crate::{
     ai::{network::ProxyType, util::get_proxy_type_for_key},
-    ccproxy::helper::CC_PROXY_ROTATOR,
+    ccproxy::{
+        diagnostic,
+        helper::CC_PROXY_ROTATOR,
+    },
     db::MainStore,
 };
 use bytes::Bytes;
@@ -222,7 +225,22 @@ pub(crate) async fn evaluate(
     .await;
     match &result {
         Ok(response) => log::info!("decision provider={provider_id} rule={rule} model={} elapsed_ms={} input_tokens={} output_tokens={} answers={}", response.model, started.elapsed().as_millis(), response.usage.input_tokens, response.usage.output_tokens, result_summary(response)),
-        Err(error) => log::warn!("decision provider={provider_id} rule={rule} elapsed_ms={} failed: {error}", started.elapsed().as_millis()),
+        Err(error) => {
+            let diagnostic = diagnostic::from_error(
+                "ccproxy",
+                "decision_evaluate",
+                error,
+                [
+                    ("provider", Some(format!("id={provider_id}"))),
+                    ("rule", Some(format!("name={rule}"))),
+                    (
+                        "result",
+                        Some(format!("elapsed_ms={}", started.elapsed().as_millis())),
+                    ),
+                ],
+            );
+            diagnostic::emit(log::Level::Warn, &diagnostic);
+        }
     }
     result
 }

@@ -15,7 +15,7 @@ impl EmailFilter {
             Regex::new(r#"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"#).map_err(|e| {
                 SensitiveError::RegexCompilationFailed {
                     pattern: "email_regex".to_string(),
-                    message: e.to_string(),
+                    message: crate::error_diagnostics::FailureMessage::from_error(&e),
                 }
             })?;
         Ok(Self { regex })
