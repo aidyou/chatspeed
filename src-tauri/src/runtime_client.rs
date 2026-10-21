@@ -286,8 +286,13 @@ pub(crate) fn client_error_wire(error: ClientError) -> String {
         ClientError::Auth(auth) => {
             public_rejection_wire(auth.status, &auth.code, &auth.message, auth.presentation)
         }
+        ClientError::Transport(message) => transport_cause(&message).to_string(),
         other => other.to_string(),
     }
+}
+
+fn transport_cause(message: &str) -> &str {
+    message.strip_prefix("request failed: ").unwrap_or(message)
 }
 
 /// Maps one supervisor failure to the IPC string error.
@@ -887,7 +892,11 @@ impl RuntimeSupervisor {
     /// kills a runtime this process did not start.
     pub async fn shutdown(&self) {
         if let Err(error) = self.release().await {
-            log::warn!("[RuntimeSupervisor] releasing the runtime lease failed: {error}");
+            let detail = match &error {
+                RuntimeUnavailable::Unreachable(message) => transport_cause(message).to_string(),
+                other => other.to_string(),
+            };
+            log::warn!("[RuntimeSupervisor] releasing the runtime lease failed: {detail}");
         }
     }
 
@@ -1210,10 +1219,7 @@ async fn run_health_monitor(inner: Weak<Mutex<SupervisorState>>, monitor: Arc<Mo
                 && !state.connecting
                 && state.launch_config.is_some()
             {
-                Some((
-                    None,
-                    "runtime unavailable; starting controlled recovery".to_string(),
-                ))
+                Some((None, "runtime unavailable".to_string()))
             } else {
                 None
             }

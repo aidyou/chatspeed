@@ -2977,7 +2977,7 @@ where
                     match rx.borrow().clone() {
                         Some(done) => done,
                         None => {
-                            log::warn!(
+                            log::debug!(
                                 "[ControlPlane][phase=idempotency] In-flight mutation published no result key={} body_hash={}",
                                 key,
                                 body_hash

@@ -1048,8 +1048,16 @@ mod tests {
     #[test]
     fn non_rejection_failures_stay_technical_strings() {
         let transport = map_client_error(ClientError::Transport("connection refused".to_string()));
-        assert_eq!(transport, "transport error: connection refused");
+        assert_eq!(transport, "connection refused");
         assert!(!transport.starts_with('{'));
+
+        let transport = map_client_error(ClientError::Transport(
+            "request failed: error sending request for url (http://127.0.0.1:37919/control/v1/workflow-commands/workflow_begin_new_context_frame)".to_string(),
+        ));
+        assert_eq!(
+            transport,
+            "error sending request for url (http://127.0.0.1:37919/control/v1/workflow-commands/workflow_begin_new_context_frame)"
+        );
 
         let protocol = map_client_error(ClientError::Protocol("major mismatch".to_string()));
         assert_eq!(protocol, "protocol mismatch: major mismatch");

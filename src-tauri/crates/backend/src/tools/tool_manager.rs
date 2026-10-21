@@ -1236,16 +1236,9 @@ impl ToolManager {
             *generation
         };
         // Immediately broadcast "Starting" status to provide user feedback
-        if let Err(e) = self
+        let _ = self
             .mcp_status_event_sender
-            .send((server_name_for_log.clone(), McpStatus::Starting))
-        {
-            log::warn!(
-                "Failed to broadcast MCP starting status for server {}: {}",
-                server_name_for_log,
-                e
-            );
-        }
+            .send((server_name_for_log.clone(), McpStatus::Starting));
 
         // 1. Create the MCP client
         // This happens without holding FunctionManager's locks
@@ -1296,13 +1289,7 @@ impl ToolManager {
         let sender_for_callback = self.mcp_status_event_sender.clone();
         client_arc
             .on_status_change(Box::new(move |name, new_status| {
-                if let Err(e) = sender_for_callback.send((name.clone(), new_status.clone())) {
-                    log::error!(
-                        "Failed to broadcast MCP status change for server {}: {}",
-                        name,
-                        e
-                    );
-                }
+                let _ = sender_for_callback.send((name, new_status));
             }))
             .await;
 
