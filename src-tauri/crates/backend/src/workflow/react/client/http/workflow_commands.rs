@@ -99,11 +99,12 @@ async fn dispatch_workflow_command(
         };
     }
 
+    let operation = command.clone();
     with_idempotency_named(
         &state,
         &headers,
         &body,
-        "workflow.command",
+        &operation,
         move |state: ControlPlaneState, body: String| async move {
             let params = match parse_command_body(&body) {
                 Ok(params) => params,
