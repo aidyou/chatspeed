@@ -503,7 +503,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 106,
+      "modelCount": 105,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -552,7 +552,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 76,
+      "modelCount": 77,
       "name": "Deep Infra",
       "responses": false
     },
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.digitalocean.com/products/gradient-ai-platform/details/models/",
       "id": "digitalocean",
       "logo": "https://models.dev/logos/digitalocean.svg",
-      "modelCount": 103,
+      "modelCount": 104,
       "name": "DigitalOcean",
       "protocol": "openai",
       "responses": false
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 353,
+      "modelCount": 359,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -662,7 +662,7 @@
       "documentationUrl": "https://fastrouter.ai/models",
       "id": "fastrouter",
       "logo": "https://models.dev/logos/fastrouter.svg",
-      "modelCount": 47,
+      "modelCount": 44,
       "name": "FastRouter",
       "protocol": "openai",
       "responses": false
@@ -693,7 +693,7 @@
       "documentationUrl": "https://friendli.ai/docs/guides/serverless_endpoints/introduction",
       "id": "friendli",
       "logo": "https://models.dev/logos/friendli.svg",
-      "modelCount": 7,
+      "modelCount": 6,
       "name": "Friendli",
       "protocol": "openai",
       "responses": false
@@ -821,7 +821,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 82,
+      "modelCount": 84,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -871,7 +871,7 @@
       "documentationUrl": "https://docs.inceptron.io",
       "id": "inceptron",
       "logo": "https://models.dev/logos/inceptron.svg",
-      "modelCount": 4,
+      "modelCount": 6,
       "name": "Inceptron",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 396,
+      "modelCount": 397,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1071,7 +1071,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 212,
+      "modelCount": 214,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1081,7 +1081,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 432,
+      "modelCount": 431,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1181,7 +1181,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 212,
+      "modelCount": 211,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1355,7 +1355,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 618,
+      "modelCount": 624,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1436,7 +1436,7 @@
       "documentationUrl": "https://docs.api.nvidia.com/nim/",
       "id": "nvidia",
       "logo": "https://models.dev/logos/nvidia.svg",
-      "modelCount": 107,
+      "modelCount": 51,
       "name": "Nvidia",
       "protocol": "openai",
       "responses": false
@@ -1499,7 +1499,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 129,
+      "modelCount": 130,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
@@ -1530,7 +1530,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 389,
+      "modelCount": 390,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1601,7 +1601,7 @@
       "documentationUrl": "https://docs.perplexity.ai/docs/agent-api/models",
       "id": "perplexity-agent",
       "logo": "https://models.dev/logos/perplexity-agent.svg",
-      "modelCount": 46,
+      "modelCount": 47,
       "name": "Perplexity Agent",
       "protocol": "openai",
       "responses": false
@@ -1789,7 +1789,7 @@
       "documentationUrl": "https://www.scaleway.com/en/docs/generative-apis/",
       "id": "scaleway",
       "logo": "https://models.dev/logos/scaleway.svg",
-      "modelCount": 16,
+      "modelCount": 17,
       "name": "Scaleway",
       "protocol": "openai",
       "responses": false
@@ -2014,7 +2014,7 @@
       "documentationUrl": "https://thegrid.ai/docs",
       "id": "the-grid-ai",
       "logo": "https://models.dev/logos/the-grid-ai.svg",
-      "modelCount": 16,
+      "modelCount": 17,
       "name": "The Grid AI",
       "protocol": "openai",
       "responses": false
@@ -2085,7 +2085,7 @@
       "documentationUrl": "https://app.umans.ai/offers/code/docs/orgs",
       "id": "umans-ai",
       "logo": "https://models.dev/logos/umans-ai.svg",
-      "modelCount": 7,
+      "modelCount": 8,
       "name": "Umans AI",
       "protocol": "openai",
       "responses": false
@@ -2095,7 +2095,7 @@
       "documentationUrl": "https://app.umans.ai/offers/code/docs",
       "id": "umans-ai-coding-plan",
       "logo": "https://models.dev/logos/umans-ai-coding-plan.svg",
-      "modelCount": 8,
+      "modelCount": 9,
       "name": "Umans AI Coding Plan",
       "protocol": "openai",
       "responses": false
@@ -2142,7 +2142,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 420,
+      "modelCount": 421,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2343,7 +2343,7 @@
       "documentationUrl": "https://docs.zenmux.ai",
       "id": "zenmux",
       "logo": "https://models.dev/logos/zenmux.svg",
-      "modelCount": 130,
+      "modelCount": 137,
       "name": "ZenMux",
       "protocol": "openai",
       "responses": false
@@ -2371,9 +2371,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "b59cb7a62a8db376ef325bdaab69a0d25e48204573d15f25c564b6efb41a7512",
-    "generatedAt": "2026-10-21T08:36:24Z",
+    "catalogSha256": "4b708358e32c57f66d75578bd16cde9e7220cb810c1e8b5bafac245ab407399c",
+    "generatedAt": "2026-10-22T08:38:48Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "8d5ae11e091d74a02d1f96b813ba4a63f6656dcf"
+    "revision": "dd269bcae9cd54a7d14b752f5cb75bd91686587a"
   }
 }
