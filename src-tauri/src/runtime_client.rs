@@ -31,9 +31,9 @@ use std::time::{Duration, Instant};
 
 use chatspeed_contracts::{
     ClientBridgeCapability, ClientBridgeDeclaration, ClientBridgeWorkEnvelope,
-    ClientCapabilityInvocation, ClientCapabilityResult, ErrorEnvelope, RuntimeShutdownRequest,
-    UserErrorPresentation, BRIDGE_PROTOCOL_VERSION, BRIDGE_SCHEMA_VERSION,
-    RUNTIME_CODE_RUNTIME_STOPPING,
+    ClientCapabilityInvocation, ClientCapabilityResult, ErrorEnvelope, MetaResponse,
+    RuntimeLifecyclePhase, RuntimeShutdownRequest, UserErrorPresentation, BRIDGE_PROTOCOL_VERSION,
+    BRIDGE_SCHEMA_VERSION, RUNTIME_CODE_RUNTIME_STOPPING,
 };
 use chatspeed_runtime_client::{
     process_alive, runtime_needs_start, BridgeSession, ClientError, Heartbeat, LeaseGuard,
@@ -65,6 +65,10 @@ const SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// surfacing a transient `runtime_stopping` error as a permanent auth failure.
 const RUNTIME_STOPPING_RETRY_WINDOW: Duration = Duration::from_secs(35);
 const RUNTIME_STOPPING_RETRY_INTERVAL: Duration = Duration::from_millis(500);
+const RUNTIME_REPLACEMENT_STOP_BUDGET: Duration = Duration::from_secs(25);
+const RUNTIME_REPLACEMENT_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(target_os = "linux")]
+const RUNTIME_REPLACEMENT_TERM_BUDGET: Duration = Duration::from_secs(2);
 
 /// How long to wait for a cancelled bridge reader to stop before unregistering.
 const BRIDGE_READER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -194,6 +198,8 @@ pub enum RuntimeUnavailable {
     /// No lease is held, so the control-plane client is not available.
     #[error("runtime client is not connected")]
     NotConnected,
+    #[error("previous runtime version stopped; reconnecting")]
+    VersionSwitchCompleted,
 }
 
 /// Typed structured error the runtime returned over the control plane.
@@ -427,6 +433,7 @@ pub struct RuntimeStopReport {
 struct MonitorState {
     started: AtomicBool,
     stop: watch::Sender<bool>,
+    task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// Thread-safe supervisor around the desktop's relationship with the runtime.
@@ -537,6 +544,7 @@ impl RuntimeSupervisor {
             monitor: Arc::new(MonitorState {
                 started: AtomicBool::new(false),
                 stop: watch::channel(false).0,
+                task: std::sync::Mutex::new(None),
             }),
         }
     }
@@ -566,14 +574,17 @@ impl RuntimeSupervisor {
         let mut logged_stopping = false;
         let result = loop {
             match self.connect_or_start_once(config, client_id).await {
-                Err(error) if error.is_runtime_stopping() => {
+                Err(error)
+                    if error.is_runtime_stopping()
+                        || matches!(error, RuntimeUnavailable::VersionSwitchCompleted) =>
+                {
                     let now = tokio::time::Instant::now();
                     if now >= deadline {
                         break Err(error);
                     }
                     if !logged_stopping {
                         log::warn!(
-                            "[RuntimeSupervisor] runtime is stopping; waiting for it to exit before retrying lease registration"
+                            "[RuntimeSupervisor] runtime is stopping or being replaced; waiting before reconnecting"
                         );
                         logged_stopping = true;
                     }
@@ -605,7 +616,42 @@ impl RuntimeSupervisor {
         }
         let inner = Arc::downgrade(&self.inner);
         let monitor = self.monitor.clone();
-        tokio::spawn(async move { run_health_monitor(inner, monitor).await });
+        let task = tokio::spawn(async move { run_health_monitor(inner, monitor).await });
+        *self
+            .monitor
+            .task
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(task);
+    }
+
+    /// An update failure leaves the existing runtime usable and restores normal
+    /// health recovery after the update's shutdown fence is no longer needed.
+    pub async fn resume_after_failed_update(&self) {
+        let task = self
+            .monitor
+            .task
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
+        let resume = {
+            let mut state = self.inner.lock().await;
+            if state.state == RuntimeConnectionState::Released {
+                false
+            } else {
+                state.stopping = false;
+                true
+            }
+        };
+        if !resume {
+            return;
+        }
+        self.monitor.stop.send_replace(false);
+        self.monitor.started.store(false, Ordering::SeqCst);
+        self.start_health_monitor();
     }
 
     /// Returns a clone of the connected control-plane client.
@@ -1011,12 +1057,21 @@ impl RuntimeSupervisor {
         let operation_id = Some(accepted.operation_id.clone());
         let deadline = Instant::now() + budget;
         match client.wait_runtime_stopped(budget).await {
-            Ok(ClientShutdownOutcome::Stopped) => RuntimeStopReport {
-                outcome: RuntimeStopOutcome::Confirmed,
-                instance_id,
-                operation_id,
-                detail: None,
-            },
+            Ok(ClientShutdownOutcome::Stopped) => {
+                let exited = self
+                    .wait_for_runtime_process_exit(expected_pid, deadline)
+                    .await;
+                RuntimeStopReport {
+                    outcome: if exited {
+                        RuntimeStopOutcome::Confirmed
+                    } else {
+                        RuntimeStopOutcome::TimedOut
+                    },
+                    instance_id,
+                    operation_id,
+                    detail: None,
+                }
+            }
             Ok(ClientShutdownOutcome::EndpointGone) => {
                 let outcome = if self
                     .wait_for_runtime_process_exit(expected_pid, deadline)
@@ -1323,6 +1378,25 @@ async fn connect_once(
         Ok(lease) => lease,
         Err(error) => {
             let error = RuntimeUnavailable::from_client_error(error);
+            let error = if error.is_runtime_stopping() {
+                match tokio::time::timeout(RUNTIME_REPLACEMENT_PROBE_TIMEOUT, client.meta()).await {
+                    Ok(Ok(meta))
+                        if runtime_is_outdated(&meta)
+                            && discovery_matches_meta(&config.discovery_file(), &meta) =>
+                    {
+                        recover_stopping_outdated_runtime(
+                            &client,
+                            &meta,
+                            &config.discovery_file(),
+                            RUNTIME_REPLACEMENT_STOP_BUDGET,
+                        )
+                        .await
+                    }
+                    _ => error,
+                }
+            } else {
+                error
+            };
             let mut state = inner.lock().await;
             state.connecting = false;
             state.pending_pid = child
@@ -1331,10 +1405,32 @@ async fn connect_once(
                 .or_else(|| pending.as_ref().map(RuntimeChild::id));
             state.pending_child = child.or(pending);
             state.state = RuntimeConnectionState::Unavailable;
-            state.last_error = Some(error.to_string());
+            state.last_error = (!matches!(error, RuntimeUnavailable::VersionSwitchCompleted))
+                .then(|| error.to_string());
             return Err(error);
         }
     };
+    if let Err(error) = replace_outdated_runtime(&client, &lease, &config.discovery_file()).await {
+        if matches!(error, RuntimeUnavailable::VersionSwitchCompleted) {
+            let mut state = inner.lock().await;
+            state.connecting = false;
+            state.pending_child = child.or(pending);
+            state.pending_pid = state.pending_child.as_ref().map(RuntimeChild::id);
+            state.state = RuntimeConnectionState::Unavailable;
+            state.last_error = None;
+            return Err(error);
+        }
+        let mut state = inner.lock().await;
+        state.connecting = false;
+        state.pending_pid = child
+            .as_ref()
+            .map(RuntimeChild::id)
+            .or_else(|| pending.as_ref().map(RuntimeChild::id));
+        state.pending_child = child.or(pending);
+        state.state = RuntimeConnectionState::Unavailable;
+        state.last_error = Some(error.to_string());
+        return Err(error);
+    }
     let connection = Connection {
         heartbeat: Some(lease.heartbeat()),
         lease,
@@ -1360,6 +1456,228 @@ async fn connect_once(
     state.generation = state.generation.saturating_add(1);
     state.last_error = None;
     Ok(())
+}
+
+async fn replace_outdated_runtime(
+    client: &RuntimeClient,
+    lease: &LeaseGuard,
+    discovery_file: &Path,
+) -> Result<(), RuntimeUnavailable> {
+    let meta = tokio::time::timeout(RUNTIME_REPLACEMENT_PROBE_TIMEOUT, client.meta())
+        .await
+        .map_err(|_| {
+            RuntimeUnavailable::Unreachable("runtime identity probe timed out".to_string())
+        })?
+        .map_err(RuntimeUnavailable::from_client_error)?;
+    if !runtime_is_outdated(&meta) {
+        return Ok(());
+    }
+    if !discovery_matches_meta(discovery_file, &meta) {
+        return Err(RuntimeUnavailable::InvalidConfig(
+            "runtime identity changed during version replacement".to_string(),
+        ));
+    }
+    log::warn!(
+        "[RuntimeSupervisor] installed runtime differs from live instance; stopping instance {} (pid {}) before reconnect",
+        meta.server_instance_id,
+        meta.pid
+    );
+    let request = RuntimeShutdownRequest {
+        expected_instance_id: meta.server_instance_id.clone(),
+        confirm: true,
+        force: true,
+    };
+    if let Err(error) = tokio::time::timeout(
+        RUNTIME_REPLACEMENT_PROBE_TIMEOUT,
+        client.request_runtime_shutdown(
+            &request,
+            &lease.lease().client_id,
+            lease.lease_id(),
+            &format!("replace-runtime-{}", meta.server_instance_id),
+        ),
+    )
+    .await
+    .map_err(|_| RuntimeUnavailable::Unreachable("runtime stop request timed out".to_string()))
+    .and_then(|result| result.map_err(RuntimeUnavailable::from_client_error))
+    {
+        let stopping =
+            tokio::time::timeout(RUNTIME_REPLACEMENT_PROBE_TIMEOUT, client.runtime_status())
+                .await
+                .is_ok_and(|result| {
+                    result.is_ok_and(|status| {
+                        status.instance_id == meta.server_instance_id
+                            && status.pid == meta.pid
+                            && status.phase != RuntimeLifecyclePhase::Running
+                            && status.quiesced
+                    })
+                });
+        if !stopping {
+            return Err(error);
+        }
+    }
+    Err(recover_stopping_outdated_runtime(
+        client,
+        &meta,
+        discovery_file,
+        RUNTIME_REPLACEMENT_STOP_BUDGET,
+    )
+    .await)
+}
+
+fn runtime_is_outdated(meta: &MetaResponse) -> bool {
+    if meta.service != chatspeed_runtime_client::RUNTIME_SERVICE_NAME || meta.pid == 0 {
+        return false;
+    }
+    let version_changed = meta
+        .package_version
+        .as_deref()
+        .is_some_and(|version| version != env!("CARGO_PKG_VERSION"));
+    #[cfg(target_os = "linux")]
+    let binary_replaced = chatspeed_runtime_client::runtime_binary_replaced(meta.pid);
+    #[cfg(not(target_os = "linux"))]
+    let binary_replaced = false;
+    version_changed || binary_replaced
+}
+
+fn discovery_matches_meta(path: &Path, meta: &MetaResponse) -> bool {
+    chatspeed_runtime_client::load_discovery(Some(path)).is_ok_and(|discovery| {
+        discovery.server_instance_id == meta.server_instance_id && discovery.pid == meta.pid
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn lock_matches_meta(discovery_file: &Path, meta: &MetaResponse) -> bool {
+    let Some(runtime_dir) = discovery_file.parent() else {
+        return false;
+    };
+    let body = match std::fs::read(runtime_dir.join("runtime.lock")) {
+        Ok(body) => body,
+        Err(_) => return false,
+    };
+    let record: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(record) => record,
+        Err(_) => return false,
+    };
+    record
+        .get("instance_id")
+        .and_then(serde_json::Value::as_str)
+        == Some(meta.server_instance_id.as_str())
+        && record.get("pid").and_then(serde_json::Value::as_u64) == Some(meta.pid as u64)
+}
+
+async fn recover_stopping_outdated_runtime(
+    client: &RuntimeClient,
+    meta: &MetaResponse,
+    discovery_file: &Path,
+    budget: Duration,
+) -> RuntimeUnavailable {
+    let deadline = Instant::now() + budget;
+    while process_alive(meta.pid) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if !process_alive(meta.pid) {
+        return RuntimeUnavailable::VersionSwitchCompleted;
+    }
+    #[cfg(target_os = "linux")]
+    if terminate_stalled_outdated_runtime(client, meta, discovery_file).await {
+        return RuntimeUnavailable::VersionSwitchCompleted;
+    }
+    RuntimeUnavailable::InvalidConfig(
+        "outdated runtime did not exit within the replacement budget".to_string(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+async fn terminate_stalled_outdated_runtime(
+    client: &RuntimeClient,
+    meta: &MetaResponse,
+    discovery_file: &Path,
+) -> bool {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
+    if std::env::var_os(chatspeed_runtime_client::RUNTIME_BINARY_ENV).is_some() {
+        return false;
+    }
+    if meta.pid == 0 || meta.pid > i32::MAX as u32 || meta.pid == std::process::id() {
+        return false;
+    }
+    let pid = meta.pid as libc::pid_t;
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return false;
+    }
+    let pidfd = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+    let status = match tokio::time::timeout(
+        RUNTIME_REPLACEMENT_PROBE_TIMEOUT,
+        client.runtime_status(),
+    )
+    .await
+    {
+        Ok(Ok(status)) => status,
+        _ => return false,
+    };
+    if status.instance_id != meta.server_instance_id
+        || status.pid != meta.pid
+        || status.phase == RuntimeLifecyclePhase::Running
+        || !status.quiesced
+        || !runtime_is_outdated(meta)
+        || !discovery_matches_meta(discovery_file, meta)
+        || !lock_matches_meta(discovery_file, meta)
+    {
+        return false;
+    }
+    let executable = match std::fs::read_link(format!("/proc/{pid}/exe")) {
+        Ok(executable) => executable,
+        Err(_) => return false,
+    };
+    let name = executable.file_name().and_then(|name| name.to_str());
+    if !matches!(
+        name,
+        Some("chatspeed-runtime" | "chatspeed-runtime (deleted)")
+    ) {
+        return false;
+    }
+    let expected_binary = match std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(Path::to_path_buf))
+    {
+        Some(directory) => directory.join("chatspeed-runtime"),
+        None => return false,
+    };
+    let running_path = executable.to_string_lossy();
+    let running_path = running_path
+        .strip_suffix(" (deleted)")
+        .unwrap_or(&running_path);
+    if Path::new(running_path) != expected_binary.as_path() {
+        return false;
+    }
+    log::warn!(
+        "[RuntimeSupervisor] outdated stopping runtime {} (pid {}) exceeded its exit budget; terminating the verified process",
+        meta.server_instance_id,
+        meta.pid
+    );
+    for signal in [libc::SIGTERM, libc::SIGKILL] {
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                std::os::fd::AsRawFd::as_raw_fd(&pidfd),
+                signal,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            )
+        };
+        if result != 0 {
+            return !process_alive(meta.pid);
+        }
+        let deadline = Instant::now() + RUNTIME_REPLACEMENT_TERM_BUDGET;
+        while process_alive(meta.pid) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if !process_alive(meta.pid) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Preserve dependency targets and levels before the desktop file filter sees them.
@@ -2307,6 +2625,117 @@ mod tests {
                 .expect("serve fake runtime");
         });
         (document, task)
+    }
+
+    #[tokio::test]
+    async fn outdated_runtime_is_requested_to_stop_before_a_connection_is_exposed() {
+        use axum::{
+            http::StatusCode,
+            routing::{get, post},
+            Json, Router,
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let discovery_file = dir.path().join("discovery.json");
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind fake runtime");
+        let mut document = discovery_with_token("test-only-token");
+        document.pid = std::process::id();
+        document.port = listener.local_addr().expect("address").port();
+        std::fs::write(
+            &discovery_file,
+            serde_json::to_vec(&document).expect("encode discovery"),
+        )
+        .expect("write discovery");
+        let meta = serde_json::json!({
+            "service": "chatspeed-runtime", "protocol_version": PROTOCOL_VERSION,
+            "schema_version": chatspeed_contracts::SCHEMA_VERSION,
+            "server_instance_id": document.server_instance_id, "pid": document.pid,
+            "package_version": "0.0.0"
+        });
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requested = requests.clone();
+        let app = Router::new()
+            .route("/control/v1/meta", get(move || { let meta = meta.clone(); async move { Json(meta) } }))
+            .route("/control/v1/clients/register", post(|| async { Json(serde_json::json!({
+                "client_id": "tauri-main", "lease_id": "test-lease", "expires_at": "2099-01-01T00:00:00Z"
+            })) }))
+            .route(chatspeed_contracts::RUNTIME_SHUTDOWN_PATH, post(move || {
+                let requested = requested.clone();
+                async move {
+                    requested.fetch_add(1, Ordering::SeqCst);
+                    (StatusCode::ACCEPTED, Json(serde_json::json!({
+                        "schema_version": chatspeed_contracts::RUNTIME_LIFECYCLE_SCHEMA_VERSION,
+                        "service": "chatspeed-runtime", "instance_id": "instance",
+                        "operation_id": "op", "stage": "accepted", "accepted": true, "force": true
+                    })))
+                }
+            }));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let client = RuntimeClient::new(&document).expect("client");
+        let lease = LeaseGuard::register(&client, "tauri-main", CLIENT_KIND)
+            .await
+            .expect("lease");
+        let result = tokio::time::timeout(
+            Duration::from_millis(200),
+            replace_outdated_runtime(&client, &lease, &discovery_file),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "replacement waits for the old process to exit"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn stalled_replacement_refuses_to_signal_a_non_runtime_process() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let discovery_file = dir.path().join("discovery.json");
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .expect("spawn unrelated process");
+        let document = ControlPlaneDiscovery {
+            pid: child.id(),
+            ..discovery_with_token("test-only-token")
+        };
+        std::fs::write(
+            &discovery_file,
+            serde_json::to_vec(&document).expect("encode"),
+        )
+        .expect("write discovery");
+        let meta = MetaResponse {
+            service: chatspeed_runtime_client::RUNTIME_SERVICE_NAME.to_string(),
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            schema_version: chatspeed_contracts::SCHEMA_VERSION,
+            server_instance_id: document.server_instance_id.clone(),
+            pid: child.id(),
+            package_version: Some("0.0.0".to_string()),
+        };
+        let client = RuntimeClient::new(&document).expect("client");
+        assert!(!terminate_stalled_outdated_runtime(&client, &meta, &discovery_file).await);
+        assert!(process_alive(child.id()));
+        child.kill().expect("stop unrelated child");
+        child.wait().expect("reap unrelated child");
+    }
+
+    #[tokio::test]
+    async fn failed_update_restarts_health_monitor() {
+        let supervisor = RuntimeSupervisor::new();
+        supervisor.start_health_monitor();
+        supervisor.begin_stopping().await;
+        supervisor.resume_after_failed_update().await;
+        assert!(!supervisor.is_stopping().await);
+        assert!(!*supervisor.monitor.stop.borrow());
+        assert!(supervisor.monitor.started.load(Ordering::SeqCst));
+        supervisor.begin_stopping().await;
     }
 
     #[tokio::test]

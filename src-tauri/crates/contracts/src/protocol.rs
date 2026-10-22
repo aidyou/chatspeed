@@ -12,4 +12,6 @@ pub struct MetaResponse {
     pub schema_version: u32,
     pub server_instance_id: String,
     pub pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_version: Option<String>,
 }

@@ -261,6 +261,38 @@ fn resolve_runtime_binary() -> Option<PathBuf> {
     sibling.exists().then_some(sibling)
 }
 
+/// A replaced Linux sidecar keeps running from its old inode even when its
+/// pathname now resolves to the new package's binary.
+#[cfg(target_os = "linux")]
+pub fn runtime_binary_replaced(pid: u32) -> bool {
+    let Some(binary) = resolve_runtime_binary() else {
+        return false;
+    };
+    let executable = match std::fs::read_link(format!("/proc/{pid}/exe")) {
+        Ok(executable) => executable,
+        Err(_) => return false,
+    };
+    if !matches!(
+        executable.file_name().and_then(|name| name.to_str()),
+        Some("chatspeed-runtime" | "chatspeed-runtime (deleted)")
+    ) {
+        return false;
+    }
+    let Some(replaced) = runtime_binary_differs_from(pid, &binary) else {
+        return false;
+    };
+    replaced
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_binary_differs_from(pid: u32, binary: &Path) -> Option<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    let running = std::fs::metadata(format!("/proc/{pid}/exe")).ok()?;
+    let installed = std::fs::metadata(binary).ok()?;
+    Some(running.dev() != installed.dev() || running.ino() != installed.ino())
+}
+
 fn runtime_binary_name() -> String {
     if cfg!(windows) {
         format!("{RUNTIME_BINARY_NAME}.exe")
@@ -1156,13 +1188,18 @@ impl RuntimeClient {
     /// schema, or a different service (for example the desktop in-process
     /// control plane) all fail here, before a lease is ever registered.
     pub async fn handshake(&self, discovery: &ControlPlaneDiscovery) -> Result<(), ClientError> {
+        let meta = self.meta().await?;
+        validate_meta(discovery, &meta)
+    }
+
+    /// Reads the authenticated runtime identity and package version.
+    pub async fn meta(&self) -> Result<MetaResponse, ClientError> {
         let value = self.get(META_PATH).await?;
-        let meta: MetaResponse = serde_json::from_value(value).map_err(|error| {
+        serde_json::from_value(value).map_err(|error| {
             ClientError::Protocol(format!(
                 "control plane /meta is not a recognized runtime document: {error}"
             ))
-        })?;
-        validate_meta(discovery, &meta)
+        })
     }
 
     /// Base URL (`http://host:port`) this client talks to.
@@ -2985,6 +3022,22 @@ mod tests {
         }
         assert!(!process_alive(pid));
         child.wait().expect("reap the zombie child");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn runtime_binary_identity_detects_a_replaced_sidecar() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let installed = dir.path().join("runtime");
+        std::fs::copy("/proc/self/exe", &installed).expect("copy executable");
+        assert_eq!(
+            runtime_binary_differs_from(std::process::id(), &installed),
+            Some(true)
+        );
+        assert_eq!(
+            runtime_binary_differs_from(std::process::id(), Path::new("/proc/self/exe")),
+            Some(false)
+        );
     }
 
     #[cfg(unix)]

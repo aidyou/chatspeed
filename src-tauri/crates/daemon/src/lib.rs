@@ -872,11 +872,10 @@ impl LeaseRegistry {
 /// `stopped` claim.
 pub const DEFAULT_SHUTDOWN_BUDGET: Duration = Duration::from_secs(15);
 
-/// Extra budget granted only to an explicitly forced shutdown (U-5).
+/// Extra budget for the final stop watchdog (U-5).
 ///
-/// After the graceful budget is exhausted, a *forced* request may spend this much
-/// more waiting for the instance to finish before the last-resort termination
-/// fallback fires. An idle, non-forced shutdown never gets it.
+/// A forced request spends this after the graceful budget. The standalone binary
+/// also uses it when a graceful shutdown has exhausted its stop budget.
 pub const DEFAULT_FORCE_BUDGET: Duration = Duration::from_secs(5);
 
 /// Last-resort termination for a forced shutdown that could not clean up.
@@ -888,6 +887,11 @@ pub const DEFAULT_FORCE_BUDGET: Duration = Duration::from_secs(5);
 /// once a forced shutdown has exhausted both budgets. Tests inject their own hook
 /// to observe the fallback without exiting.
 pub trait TerminationHook: Send + Sync + std::fmt::Debug {
+    /// Whether a stalled graceful shutdown may invoke the fallback.
+    fn terminate_stalled_graceful(&self) -> bool {
+        false
+    }
+
     /// Invoked once, after a forced shutdown exhausted the graceful and forced
     /// budgets without the instance reaching `stopped`.
     fn force_exit(&self, instance_id: &str, pid: u32);
@@ -910,6 +914,10 @@ impl TerminationHook for LogOnlyTerminationHook {
 pub struct ProcessExitTerminationHook;
 
 impl TerminationHook for ProcessExitTerminationHook {
+    fn terminate_stalled_graceful(&self) -> bool {
+        true
+    }
+
     fn force_exit(&self, instance_id: &str, pid: u32) {
         log::error!(
             "[Runtime] forced shutdown of instance {instance_id} (pid {pid}) exhausted its budget; performing the last-resort self-exit"
@@ -1172,12 +1180,16 @@ impl RuntimeShutdown {
             // streams so graceful shutdown completes instead of hanging.
             let _ = this.trigger.send_replace(true);
 
-            // Forced escalation (U-5). Only an explicitly forced request spends
-            // the extra budget, and only after the graceful budget elapsed without
-            // the instance reaching `stopped`. Idle/non-forced shutdowns never
-            // force.
-            if force || this.operation_force() {
-                let stopped = tokio::time::timeout(this.force_budget, async {
+            // A real daemon must not keep its lock forever after a stalled idle
+            // exit. Embedded callers retain their own termination policy.
+            let forced = force || this.operation_force();
+            if forced || this.termination.terminate_stalled_graceful() {
+                let stop_budget = if forced {
+                    this.force_budget
+                } else {
+                    this.shutdown_budget.saturating_add(this.force_budget)
+                };
+                let stopped = tokio::time::timeout(stop_budget, async {
                     if *this.finished.borrow() {
                         return;
                     }
@@ -1192,12 +1204,12 @@ impl RuntimeShutdown {
                 .is_ok();
                 if stopped {
                     log::info!(
-                        "[Runtime] forced shutdown completed within budget (instance {})",
+                        "[Runtime] shutdown completed within budget (instance {})",
                         this.instance_id
                     );
                 } else {
                     log::error!(
-                        "[Runtime] forced shutdown of instance {} exhausted both budgets without reaching `stopped`; invoking the termination fallback",
+                        "[Runtime] shutdown of instance {} exhausted its stop budget without reaching `stopped`; invoking the termination fallback",
                         this.instance_id
                     );
                     this.set_outcome(Some(RuntimeShutdownOutcome::Failed));
@@ -2547,6 +2559,7 @@ mod tests {
         assert_eq!(meta["service"], SERVICE_NAME);
         assert_eq!(meta["server_instance_id"], handle.instance_id());
         assert_eq!(meta["pid"], std::process::id());
+        assert_eq!(meta["package_version"], env!("CARGO_PKG_VERSION"));
 
         // The same server serves the canonical workflow and automation routes
         // the clients rely on, not only `/meta` and the lease lifecycle.
@@ -3750,6 +3763,48 @@ mod tests {
             0,
             "an idle shutdown is never forced"
         );
+    }
+
+    /// The process hook opts into a final watchdog even for an idle shutdown.
+    /// A held admission must not leave a quiescing daemon owning the lock forever.
+    #[tokio::test]
+    async fn stalled_idle_shutdown_fires_process_watchdog_without_claiming_stopped() {
+        #[derive(Debug)]
+        struct ProcessWatchdog(Arc<AtomicUsize>);
+
+        impl TerminationHook for ProcessWatchdog {
+            fn terminate_stalled_graceful(&self) -> bool {
+                true
+            }
+
+            fn force_exit(&self, _instance_id: &str, _pid: u32) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fired = Arc::new(AtomicUsize::new(0));
+        let handle = start_runtime(
+            short_config(dir.path(), Duration::from_secs(30), Duration::from_secs(30))
+                .with_shutdown_budget(Duration::from_millis(100))
+                .with_force_budget(Duration::from_millis(100))
+                .with_termination_hook(Arc::new(ProcessWatchdog(fired.clone()))),
+        )
+        .await
+        .expect("start runtime");
+
+        let ticket = handle.gate().admit(WorkKind::ChatTurn).expect("admit");
+        let (_, handoff) = handle.shutdown.request(false);
+        drop(handoff);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while fired.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("watchdog fires");
+        assert!(!handle.is_finished());
+        drop(ticket);
     }
 
     /// A clean shutdown must still record `Graceful`: the outcome-preservation

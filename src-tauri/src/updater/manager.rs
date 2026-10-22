@@ -4,6 +4,7 @@
 
 use super::error::{Result, UpdateError};
 use super::types::VersionInfo;
+use crate::runtime_client::{RuntimeStopOutcome, RuntimeSupervisor};
 use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
 use log::{info, warn};
 use reqwest::Proxy;
@@ -13,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use tauri::async_runtime::spawn;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
+
+const UPDATE_RUNTIME_STOP_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 const EVENT_UPDATE_PROGRESS: &str = "update://download-progress";
 const EVENT_UPDATE_READY: &str = "update://ready";
@@ -168,15 +171,56 @@ impl UpdateManager {
                         .with_origin(ErrorOrigin::leaf(e.to_string(), None, None, None)),
                 )
             })?
-            .take();
+            .clone();
 
         if let Some(state) = update_state {
             info!("Installing update and restarting...");
             let bytes = tokio::fs::read(&state.tmp_path).await?;
-            state
-                .update
-                .install(&bytes)
-                .map_err(|e| UpdateError::InstallError(FailureMessage::from_error(&e)))?;
+            // An installed desktop must never attach to the old sidecar after
+            // restart. Confirm its exact process has exited before replacing the
+            // bundled runtime binary.
+            let supervisor = self
+                .app
+                .try_state::<Arc<RuntimeSupervisor>>()
+                .ok_or_else(|| {
+                    UpdateError::InstallError(FailureMessage::leaf(
+                        "Runtime supervisor is unavailable",
+                    ))
+                })?;
+            let identity = supervisor.runtime_identity().await.map_err(|error| {
+                UpdateError::InstallError(FailureMessage::leaf(format!(
+                    "Cannot identify the runtime before updating: {error}"
+                )))
+            })?;
+            let report = supervisor
+                .request_forced_runtime_shutdown(
+                    &identity.instance_id,
+                    identity.pid,
+                    &format!("update-stop-{}", identity.instance_id),
+                    UPDATE_RUNTIME_STOP_BUDGET,
+                )
+                .await;
+            if report.outcome != RuntimeStopOutcome::Confirmed {
+                supervisor.resume_after_failed_update().await;
+                return Err(UpdateError::InstallError(FailureMessage::leaf(format!(
+                    "Runtime shutdown was not confirmed before updating: {}",
+                    report.outcome.code()
+                ))));
+            }
+            if let Err(error) = state.update.install(&bytes) {
+                supervisor.resume_after_failed_update().await;
+                return Err(UpdateError::InstallError(FailureMessage::from_error(
+                    &error,
+                )));
+            }
+            self.latest_update
+                .lock()
+                .map_err(|_| {
+                    UpdateError::LockError(FailureMessage::leaf(
+                        "Failed to lock latest_update mutex",
+                    ))
+                })?
+                .take();
             tokio::fs::remove_file(&state.tmp_path).await?;
             self.app.restart();
         } else {

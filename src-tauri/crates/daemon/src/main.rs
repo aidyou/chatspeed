@@ -80,6 +80,13 @@ fn runtime_log_line(record: &log::Record<'_>, level: log::Level) -> String {
     }
 }
 
+fn write_runtime_log(writer: &mut impl Write, line: &str) {
+    // The desktop may exit while the runtime is still shutting down. Its stderr
+    // pipe then has no reader; a failed diagnostic write must not panic the
+    // shutdown task after the admission gate has already closed.
+    let _ = writeln!(writer, "{line}");
+}
+
 impl log::Log for StderrLogger {
     fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
         admitted_level(metadata, log::max_level()).is_some()
@@ -87,7 +94,10 @@ impl log::Log for StderrLogger {
 
     fn log(&self, record: &log::Record<'_>) {
         if let Some(level) = admitted_level(record.metadata(), log::max_level()) {
-            eprintln!("{}", runtime_log_line(record, level));
+            write_runtime_log(
+                &mut std::io::stderr().lock(),
+                &runtime_log_line(record, level),
+            );
         }
     }
 
@@ -197,7 +207,26 @@ async fn termination_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{admitted_level, is_project_target, runtime_log_line, write_failure};
+    use super::{
+        admitted_level, is_project_target, runtime_log_line, write_failure, write_runtime_log,
+    };
+
+    #[test]
+    fn broken_runtime_log_pipe_does_not_interrupt_shutdown() {
+        struct BrokenPipe;
+
+        impl std::io::Write for BrokenPipe {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        write_runtime_log(&mut BrokenPipe, "[Runtime] shutting down");
+    }
 
     #[test]
     fn runtime_log_transport_preserves_source_and_target() {

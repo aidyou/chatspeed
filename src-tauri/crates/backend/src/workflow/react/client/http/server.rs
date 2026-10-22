@@ -1150,6 +1150,7 @@ async fn meta(State(state): State<ControlPlaneState>) -> Json<MetaResponse> {
         schema_version: crate::workflow::react::client::hub::STREAM_SCHEMA_VERSION,
         server_instance_id: (*state.server_instance_id).clone(),
         pid: std::process::id(),
+        package_version: None,
     })
 }
 
@@ -1166,6 +1167,7 @@ async fn meta(State(state): State<ControlPlaneState>) -> Json<MetaResponse> {
         schema_version: crate::workflow::react::client::hub::STREAM_SCHEMA_VERSION,
         server_instance_id: (*state.server_instance_id).clone(),
         pid: std::process::id(),
+        package_version: state.runtime.as_ref().map(|_| env!("CARGO_PKG_VERSION").to_string()),
     })
 }
 
@@ -5000,6 +5002,7 @@ mod tests {
         assert_eq!(body["server_instance_id"], "test-instance");
         assert_eq!(body["schema_version"], 1);
         assert_eq!(body["pid"], std::process::id());
+        assert!(body.get("package_version").is_none());
 
         app.handle.shutdown();
     }
