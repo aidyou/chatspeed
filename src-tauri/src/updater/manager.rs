@@ -40,6 +40,7 @@ pub struct UpdateManager {
     app: AppHandle,
     latest_update: Arc<Mutex<Option<UpdateState>>>,
     check_in_progress: Arc<Mutex<bool>>,
+    install_in_progress: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl UpdateManager {
@@ -49,6 +50,7 @@ impl UpdateManager {
             app,
             latest_update: Arc::new(Mutex::new(None)),
             check_in_progress: Arc::new(Mutex::new(false)),
+            install_in_progress: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -162,6 +164,11 @@ impl UpdateManager {
 
     /// Installs the latest downloaded update and restarts the application.
     pub async fn install_and_restart(&self) -> Result<()> {
+        let _install = self.install_in_progress.try_lock().map_err(|_| {
+            UpdateError::InstallError(FailureMessage::leaf(
+                "An update installation is already in progress",
+            ))
+        })?;
         let update_state = self
             .latest_update
             .lock()
@@ -187,27 +194,56 @@ impl UpdateManager {
                         "Runtime supervisor is unavailable",
                     ))
                 })?;
-            let identity = supervisor.runtime_identity().await.map_err(|error| {
-                UpdateError::InstallError(FailureMessage::leaf(format!(
-                    "Cannot identify the runtime before updating: {error}"
-                )))
-            })?;
-            let report = supervisor
-                .request_forced_runtime_shutdown(
-                    &identity.instance_id,
-                    identity.pid,
-                    &format!("update-stop-{}", identity.instance_id),
-                    UPDATE_RUNTIME_STOP_BUDGET,
-                )
-                .await;
-            if report.outcome != RuntimeStopOutcome::Confirmed {
+            supervisor.begin_stopping().await;
+            let stop_result = match supervisor.runtime_identity().await {
+                Ok(identity) => {
+                    let report = supervisor
+                        .request_forced_runtime_shutdown(
+                            &identity.instance_id,
+                            identity.pid,
+                            &format!("update-stop-{}", identity.instance_id),
+                            UPDATE_RUNTIME_STOP_BUDGET,
+                        )
+                        .await;
+                    if report.outcome != RuntimeStopOutcome::Confirmed {
+                        Err(UpdateError::InstallError(FailureMessage::leaf(format!(
+                            "Runtime shutdown was not confirmed before updating: {}",
+                            report.outcome.code()
+                        ))))
+                    } else {
+                        Ok(())
+                    }
+                }
+                Err(error) => {
+                    info!("Runtime identity is unavailable before update: {error}; checking the owner lock");
+                    Ok(())
+                }
+            };
+            if let Err(error) = stop_result {
                 supervisor.resume_after_failed_update().await;
-                return Err(UpdateError::InstallError(FailureMessage::leaf(format!(
-                    "Runtime shutdown was not confirmed before updating: {}",
-                    report.outcome.code()
-                ))));
+                return Err(error);
             }
+            let config = match crate::runtime_client::default_launch_config() {
+                Ok(config) => config,
+                Err(cause) => {
+                    supervisor.resume_after_failed_update().await;
+                    return Err(UpdateError::InstallError(FailureMessage::leaf(format!(
+                        "Cannot resolve runtime before updating: {cause}"
+                    ))));
+                }
+            };
+            let _runtime_lock =
+                match chatspeed_runtime_client::lock_idle_runtime_for_update(&config) {
+                    Ok(lock) => lock,
+                    Err(cause) => {
+                        supervisor.resume_after_failed_update().await;
+                        return Err(UpdateError::InstallError(FailureMessage::leaf(format!(
+                            "Cannot confirm runtime exit before updating: {cause}"
+                        ))));
+                    }
+                };
             if let Err(error) = state.update.install(&bytes) {
+                drop(_runtime_lock);
                 supervisor.resume_after_failed_update().await;
                 return Err(UpdateError::InstallError(FailureMessage::from_error(
                     &error,

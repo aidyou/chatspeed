@@ -749,7 +749,11 @@ impl LeaseRegistry {
     }
 
     /// Extends an existing, non-expired lease, keeping its lease id.
-    pub fn renew(&self, client_id: &str) -> Result<ClientLeaseResponse, LeaseError> {
+    pub fn renew(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+    ) -> Result<ClientLeaseResponse, LeaseError> {
         let now = Instant::now();
         let mut leases = self.lock();
         leases.retain(|_, entry| entry.expires_at > now);
@@ -759,6 +763,11 @@ impl LeaseRegistry {
             self.publish_count(count);
             return Err(LeaseError::NotFound(client_id.to_string()));
         };
+        if !lease_id_matches(&record.lease_id, lease_id) {
+            drop(leases);
+            self.publish_count(count);
+            return Err(LeaseError::NotFound(client_id.to_string()));
+        }
         record.expires_at = now + self.ttl;
         record.expires_at_text = expires_at_rfc3339(self.ttl);
         let response = ClientLeaseResponse {
@@ -796,16 +805,23 @@ impl LeaseRegistry {
     }
 
     /// Releases a lease. A lease that already expired counts as unknown.
-    pub fn release(&self, client_id: &str) -> Result<(), LeaseError> {
-        self.release_with_kind(client_id).map(|_| ())
+    pub fn release(&self, client_id: &str, lease_id: &str) -> Result<(), LeaseError> {
+        self.release_with_kind(client_id, lease_id).map(|_| ())
     }
 
-    fn release_with_kind(&self, client_id: &str) -> Result<String, LeaseError> {
+    fn release_with_kind(&self, client_id: &str, lease_id: &str) -> Result<String, LeaseError> {
         let now = Instant::now();
         let (removed, count) = {
             let mut leases = self.lock();
             leases.retain(|_, entry| entry.expires_at > now);
-            let removed = leases.remove(client_id);
+            let removed = if leases
+                .get(client_id)
+                .is_some_and(|record| lease_id_matches(&record.lease_id, lease_id))
+            {
+                leases.remove(client_id)
+            } else {
+                None
+            };
             (removed, leases.len())
         };
         self.publish_count(count);
@@ -1354,9 +1370,13 @@ impl RuntimeControlPlane for RuntimeControl {
             .map_err(RuntimeLeaseError::from)
     }
 
-    fn renew_lease(&self, client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
+    fn renew_lease(
+        &self,
+        client_id: &str,
+        lease_id: &str,
+    ) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
         self.leases
-            .renew(client_id)
+            .renew(client_id, lease_id)
             .map_err(RuntimeLeaseError::from)
     }
 
@@ -1370,19 +1390,20 @@ impl RuntimeControlPlane for RuntimeControl {
             .map_err(RuntimeLeaseError::from)
     }
 
-    fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError> {
+    fn release_lease(&self, client_id: &str, lease_id: &str) -> Result<(), RuntimeLeaseError> {
         self.leases
-            .release(client_id)
+            .release(client_id, lease_id)
             .map_err(RuntimeLeaseError::from)
     }
 
     fn release_lease_for_desktop_exit(
         &self,
         client_id: &str,
+        lease_id: &str,
     ) -> Result<Option<ShutdownHandoff>, RuntimeLeaseError> {
         let client_kind = self
             .leases
-            .release_with_kind(client_id)
+            .release_with_kind(client_id, lease_id)
             .map_err(RuntimeLeaseError::from)?;
         if client_kind != "tauri" {
             return Ok(None);
@@ -2317,6 +2338,33 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn replaced_client_cannot_renew_or_release_successor_lease() {
+        let registry = LeaseRegistry::new(Duration::from_secs(60));
+        let previous = registry
+            .register(&lease_request("tauri-main"))
+            .expect("first lease");
+        let current = registry
+            .register(&lease_request("tauri-main"))
+            .expect("successor lease");
+        assert_ne!(previous.lease_id, current.lease_id);
+        assert!(matches!(
+            registry.renew("tauri-main", &previous.lease_id),
+            Err(LeaseError::NotFound(_))
+        ));
+        assert!(matches!(
+            registry.release("tauri-main", &previous.lease_id),
+            Err(LeaseError::NotFound(_))
+        ));
+        assert_eq!(registry.active_count(), 1);
+        registry
+            .renew("tauri-main", &current.lease_id)
+            .expect("successor renews");
+        registry
+            .release("tauri-main", &current.lease_id)
+            .expect("successor releases");
+    }
+
     // -- lock ---------------------------------------------------------------
 
     #[test]
@@ -2459,6 +2507,16 @@ mod tests {
                 .expect("post request")
         }
 
+        async fn lease_post(&self, path: &str, lease_id: &str) -> reqwest::Response {
+            self.client
+                .post(self.url(path))
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header(RUNTIME_LEASE_HEADER, lease_id)
+                .send()
+                .await
+                .expect("lease request")
+        }
+
         /// Sends a Web MCP provider control request with the header-only proof
         /// the production contract requires (never in the URL, query or body).
         async fn web_mcp(
@@ -2589,16 +2647,22 @@ mod tests {
         assert!(!lease_id.is_empty());
         assert_eq!(handle.leases().active_count(), 1);
 
-        let response = http.post("/control/v1/clients/client-a/renew", "").await;
+        let response = http
+            .lease_post("/control/v1/clients/client-a/renew", &lease_id)
+            .await;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let renewed: Value = response.json().await.expect("renew json");
         assert_eq!(renewed["lease_id"], lease_id);
 
-        let response = http.post("/control/v1/clients/client-a/release", "").await;
+        let response = http
+            .lease_post("/control/v1/clients/client-a/release", &lease_id)
+            .await;
         assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
         assert_eq!(handle.leases().active_count(), 0);
 
-        let response = http.post("/control/v1/clients/client-a/renew", "").await;
+        let response = http
+            .lease_post("/control/v1/clients/client-a/renew", &lease_id)
+            .await;
         assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 
         handle.shutdown();
@@ -2912,6 +2976,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lease_renew_and_release_require_the_current_proof() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let handle = start_runtime(short_config(
+            dir.path(),
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        ))
+        .await
+        .expect("start runtime");
+        let document = discovery::read_discovery_in(dir.path()).expect("discovery published");
+        let http = Http {
+            client: reqwest::Client::new(),
+            port: handle.port(),
+            token: document.token,
+        };
+        let registered: Value = http
+            .post(
+                "/control/v1/clients/register",
+                r#"{"client_id":"tauri-main","client_kind":"tauri"}"#,
+            )
+            .await
+            .json()
+            .await
+            .expect("registration response");
+        let lease_id = registered["lease_id"].as_str().expect("lease id");
+        let renew = "/control/v1/clients/tauri-main/renew";
+        let release = "/control/v1/clients/tauri-main/release";
+        for path in [renew, release] {
+            let missing = http.post(path, "{}").await;
+            assert_eq!(missing.status(), reqwest::StatusCode::FORBIDDEN);
+            let wrong = http.lease_post(path, "old-lease").await;
+            assert_eq!(wrong.status(), reqwest::StatusCode::NOT_FOUND);
+        }
+        assert_eq!(handle.leases().active_count(), 1);
+        assert_eq!(
+            http.lease_post(renew, lease_id).await.status(),
+            reqwest::StatusCode::OK
+        );
+        assert_eq!(
+            http.lease_post(release, lease_id).await.status(),
+            reqwest::StatusCode::NO_CONTENT
+        );
+        handle.shutdown();
+        tokio::time::timeout(Duration::from_secs(5), handle.wait())
+            .await
+            .expect("runtime stops");
+    }
+
+    #[tokio::test]
     async fn start_refuses_second_instance_without_publishing_discovery() {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = short_config(dir.path(), Duration::from_secs(30), Duration::from_secs(30));
@@ -2945,7 +3058,7 @@ mod tests {
         .await
         .expect("start runtime");
 
-        handle
+        let lease = handle
             .leases()
             .register(&lease_request("client-a"))
             .expect("register");
@@ -2956,7 +3069,10 @@ mod tests {
         );
         assert!(discovery::discovery_path_in(dir.path()).exists());
 
-        handle.leases().release("client-a").expect("release");
+        handle
+            .leases()
+            .release("client-a", &lease.lease_id)
+            .expect("release");
         tokio::time::timeout(Duration::from_secs(5), handle.wait())
             .await
             .expect("grace expires and runtime stops");
@@ -2986,11 +3102,13 @@ mod tests {
             )
             .await;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let registered: Value = response.json().await.expect("lease json");
+        let lease_id = registered["lease_id"].as_str().expect("lease id");
 
         let response = http
-            .post(
+            .lease_post(
                 "/control/v1/clients/tauri-main/release?shutdown_if_idle=true",
-                "",
+                lease_id,
             )
             .await;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -3017,6 +3135,7 @@ mod tests {
             port: handle.port(),
             token: document.token,
         };
+        let mut desktop_lease = String::new();
         for client_id in ["tauri-main", "other-client"] {
             let response = http
                 .post(
@@ -3025,12 +3144,19 @@ mod tests {
                 )
                 .await;
             assert_eq!(response.status(), reqwest::StatusCode::OK);
+            if client_id == "tauri-main" {
+                let registered: Value = response.json().await.expect("lease json");
+                desktop_lease = registered["lease_id"]
+                    .as_str()
+                    .expect("lease id")
+                    .to_string();
+            }
         }
 
         let response = http
-            .post(
+            .lease_post(
                 "/control/v1/clients/tauri-main/release?shutdown_if_idle=true",
-                "",
+                &desktop_lease,
             )
             .await;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -3074,11 +3200,13 @@ mod tests {
             )
             .await;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let registered: Value = response.json().await.expect("lease json");
+        let lease_id = registered["lease_id"].as_str().expect("lease id");
 
         let response = http
-            .post(
+            .lease_post(
                 "/control/v1/clients/cscli-1/release?shutdown_if_idle=true",
-                "",
+                lease_id,
             )
             .await;
         assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -3103,16 +3231,19 @@ mod tests {
         .await
         .expect("start runtime");
 
-        handle
+        let lease_a = handle
             .leases()
             .register(&lease_request("client-a"))
             .expect("register");
-        handle.leases().release("client-a").expect("release");
+        handle
+            .leases()
+            .release("client-a", &lease_a.lease_id)
+            .expect("release");
 
         // Register again inside the grace window; the pending shutdown must be
         // cancelled for the full grace after the new registration.
         tokio::time::sleep(Duration::from_millis(80)).await;
-        handle
+        let lease_b = handle
             .leases()
             .register(&lease_request("client-b"))
             .expect("re-register");
@@ -3123,7 +3254,10 @@ mod tests {
         );
         assert!(discovery::discovery_path_in(dir.path()).exists());
 
-        handle.leases().release("client-b").expect("release");
+        handle
+            .leases()
+            .release("client-b", &lease_b.lease_id)
+            .expect("release");
         tokio::time::timeout(Duration::from_secs(5), handle.wait())
             .await
             .expect("runtime stops after release");
@@ -3181,11 +3315,14 @@ mod tests {
         // so the runtime is still up at t600 (the old break-then-final-check path
         // would have stopped it near t300).
         tokio::time::sleep(Duration::from_millis(300)).await;
-        handle
+        let lease = handle
             .leases()
             .register(&lease_request("client-a"))
             .expect("register");
-        handle.leases().release("client-a").expect("release");
+        handle
+            .leases()
+            .release("client-a", &lease.lease_id)
+            .expect("release");
 
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(

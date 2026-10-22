@@ -358,7 +358,11 @@ mod runtime_extension {
         ) -> Result<ClientLeaseResponse, RuntimeLeaseError>;
 
         /// Extends an existing, non-expired lease.
-        fn renew_lease(&self, client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError>;
+        fn renew_lease(
+            &self,
+            client_id: &str,
+            lease_id: &str,
+        ) -> Result<ClientLeaseResponse, RuntimeLeaseError>;
 
         /// Resolves a live lease for a `(client_id, lease_id)` proof.
         ///
@@ -372,14 +376,15 @@ mod runtime_extension {
         ) -> Result<ClientLease, RuntimeLeaseError>;
 
         /// Releases a lease.
-        fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError>;
+        fn release_lease(&self, client_id: &str, lease_id: &str) -> Result<(), RuntimeLeaseError>;
 
         /// Releases the desktop lease and checks whether shutdown can start now.
         fn release_lease_for_desktop_exit(
             &self,
             client_id: &str,
+            lease_id: &str,
         ) -> Result<Option<crate::lifecycle::ShutdownHandoff>, RuntimeLeaseError> {
-            self.release_lease(client_id)?;
+            self.release_lease(client_id, lease_id)?;
             Ok(None)
         }
 
@@ -1167,7 +1172,10 @@ async fn meta(State(state): State<ControlPlaneState>) -> Json<MetaResponse> {
         schema_version: crate::workflow::react::client::hub::STREAM_SCHEMA_VERSION,
         server_instance_id: (*state.server_instance_id).clone(),
         pid: std::process::id(),
-        package_version: state.runtime.as_ref().map(|_| env!("CARGO_PKG_VERSION").to_string()),
+        package_version: state
+            .runtime
+            .as_ref()
+            .map(|_| env!("CARGO_PKG_VERSION").to_string()),
     })
 }
 
@@ -1225,11 +1233,16 @@ async fn register_client(State(state): State<ControlPlaneState>, body: String) -
 async fn renew_client(
     State(state): State<ControlPlaneState>,
     Path(client_id): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(runtime) = state.runtime.as_ref() else {
         return runtime_missing_response();
     };
-    match runtime.renew_lease(&client_id) {
+    let lease_id = match runtime_lease_proof(&headers) {
+        Ok(lease_id) => lease_id,
+        Err(refusal) => return refusal.into_response(),
+    };
+    match runtime.renew_lease(&client_id, &lease_id) {
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(error) => runtime_lease_error_response(&error),
     }
@@ -1247,12 +1260,17 @@ async fn release_client(
     State(state): State<ControlPlaneState>,
     Path(client_id): Path<String>,
     Query(query): Query<ReleaseLeaseQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(runtime) = state.runtime.as_ref() else {
         return runtime_missing_response();
     };
+    let lease_id = match runtime_lease_proof(&headers) {
+        Ok(lease_id) => lease_id,
+        Err(refusal) => return refusal.into_response(),
+    };
     if query.shutdown_if_idle {
-        return match runtime.release_lease_for_desktop_exit(&client_id) {
+        return match runtime.release_lease_for_desktop_exit(&client_id, &lease_id) {
             Ok(handoff) => {
                 let response = (
                     StatusCode::OK,
@@ -1266,7 +1284,7 @@ async fn release_client(
             Err(error) => runtime_lease_error_response(&error),
         };
     }
-    match runtime.release_lease(&client_id) {
+    match runtime.release_lease(&client_id, &lease_id) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => runtime_lease_error_response(&error),
     }
@@ -1304,6 +1322,23 @@ fn runtime_proof(headers: &HeaderMap) -> Result<(String, String), HandlerRefusal
             })
     };
     Ok((field(RUNTIME_CLIENT_HEADER)?, field(RUNTIME_LEASE_HEADER)?))
+}
+
+#[cfg(not(feature = "desktop"))]
+fn runtime_lease_proof(headers: &HeaderMap) -> Result<String, HandlerRefusal> {
+    headers
+        .get(RUNTIME_LEASE_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            HandlerRefusal::new(dto::error_response(
+                StatusCode::FORBIDDEN,
+                RUNTIME_CODE_LEASE_INVALID,
+                "Missing runtime lease proof".to_string(),
+            ))
+        })
 }
 
 /// Maps a coordinated-shutdown refusal to a stable status and code.
@@ -5984,7 +6019,11 @@ mod tests {
             Err(RuntimeLeaseError::InvalidInput("unused".to_string()))
         }
 
-        fn renew_lease(&self, _client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
+        fn renew_lease(
+            &self,
+            _client_id: &str,
+            _lease_id: &str,
+        ) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
             Err(RuntimeLeaseError::NotFound("unused".to_string()))
         }
 
@@ -5996,7 +6035,11 @@ mod tests {
             Err(RuntimeLeaseError::NotFound("unused".to_string()))
         }
 
-        fn release_lease(&self, _client_id: &str) -> Result<(), RuntimeLeaseError> {
+        fn release_lease(
+            &self,
+            _client_id: &str,
+            _lease_id: &str,
+        ) -> Result<(), RuntimeLeaseError> {
             Ok(())
         }
 
@@ -7105,7 +7148,11 @@ mod chat_route_tests {
             })
         }
 
-        fn renew_lease(&self, client_id: &str) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
+        fn renew_lease(
+            &self,
+            client_id: &str,
+            _lease_id: &str,
+        ) -> Result<ClientLeaseResponse, RuntimeLeaseError> {
             Ok(ClientLeaseResponse {
                 client_id: client_id.to_string(),
                 lease_id: format!("lease-{client_id}"),
@@ -7130,7 +7177,7 @@ mod chat_route_tests {
             }
         }
 
-        fn release_lease(&self, client_id: &str) -> Result<(), RuntimeLeaseError> {
+        fn release_lease(&self, client_id: &str, _lease_id: &str) -> Result<(), RuntimeLeaseError> {
             self.leases.lock().unwrap().remove(client_id);
             Ok(())
         }

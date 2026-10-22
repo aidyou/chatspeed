@@ -857,6 +857,62 @@ pub fn runtime_needs_start(config: &RuntimeLaunchConfig) -> Result<bool, ClientE
     runtime_needs_start_with(config, || {})
 }
 
+/// Holds the runtime directory vacant while the desktop replaces its bundled
+/// binaries. A runtime cannot acquire its owner lock until this file is dropped.
+pub fn lock_idle_runtime_for_update(
+    config: &RuntimeLaunchConfig,
+) -> Result<std::fs::File, ClientError> {
+    let lock = open_runtime_dir_lock(config.runtime_dir())?;
+    lock.try_lock().map_err(|error| {
+        ClientError::Discovery(format!(
+            "cannot hold runtime directory for update {}: {error}",
+            config.runtime_dir().display()
+        ))
+    })?;
+    if !stale_decision_under_lock(&config.discovery_file())? {
+        return Err(ClientError::Discovery(
+            "runtime is still alive; update cannot replace its binary".to_string(),
+        ));
+    }
+    Ok(lock)
+}
+
+#[cfg(test)]
+mod update_lock_tests {
+    use super::*;
+
+    #[test]
+    fn update_lock_excludes_a_new_runtime_owner() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = sandbox_launch_config(dir.path());
+        let update_lock = lock_idle_runtime_for_update(&config).expect("vacant runtime");
+        assert!(!runtime_needs_start(&config).expect("lock owner is visible"));
+        drop(update_lock);
+        assert!(runtime_needs_start(&config).expect("runtime can start after install"));
+    }
+
+    #[test]
+    fn update_lock_rejects_a_live_discovery_owner() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = sandbox_launch_config(dir.path());
+        let document = ControlPlaneDiscovery {
+            protocol_version: chatspeed_contracts::PROTOCOL_VERSION.to_string(),
+            server_instance_id: "test-owner".to_string(),
+            pid: std::process::id(),
+            host: "127.0.0.1".to_string(),
+            port: 1,
+            token: "test-token".to_string(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        std::fs::write(
+            config.discovery_file(),
+            serde_json::to_vec(&document).expect("discovery JSON"),
+        )
+        .expect("write discovery");
+        assert!(lock_idle_runtime_for_update(&config).is_err());
+    }
+}
+
 /// Shared implementation of [`runtime_needs_start`].
 ///
 /// `before_lock` runs after a confirmed-dead probe and before the runtime-dir
@@ -869,7 +925,22 @@ fn runtime_needs_start_with(
 ) -> Result<bool, ClientError> {
     let discovery_file = config.discovery_file();
     if discovery_absent(&discovery_file) {
-        return Ok(true);
+        // A runtime can hold the lock while assembling its owner, before it
+        // publishes discovery. Let that owner finish instead of spawning a
+        // competing process which cannot acquire the same lock.
+        let lock = open_runtime_dir_lock(config.runtime_dir())?;
+        return match lock.try_lock() {
+            Ok(()) => {
+                let decision = stale_decision_under_lock(&discovery_file);
+                let _ = lock.unlock();
+                decision
+            }
+            Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+            Err(std::fs::TryLockError::Error(error)) => Err(ClientError::Discovery(format!(
+                "cannot lock runtime directory {}: {error}",
+                config.runtime_dir().display()
+            ))),
+        };
     }
 
     let discovery = load_discovery(Some(&discovery_file))?;
@@ -1820,20 +1891,14 @@ impl RuntimeClient {
         decode(response).await
     }
 
-    async fn send_without_body(&self, method: Method, path: &str) -> Result<Value, ClientError> {
+    async fn send_lease_request(&self, path: &str, lease_id: &str) -> Result<Value, ClientError> {
         let response = self
-            .build(method, path)?
+            .build(Method::POST, path)?
+            .header(RUNTIME_LEASE_HEADER, lease_id)
             .send()
             .await
             .map_err(transport_error)?;
         decode(response).await
-    }
-
-    async fn post_empty_json<R: DeserializeOwned>(&self, path: &str) -> Result<R, ClientError> {
-        let value = self.send_without_body(Method::POST, path).await?;
-        serde_json::from_value(value).map_err(|error| {
-            ClientError::Serialization(format!("unexpected response body: {error}"))
-        })
     }
 
     fn build_idempotent_request(
@@ -2572,6 +2637,25 @@ impl LeaseGuard {
                 tokio::select! {
                     _ = ticker.tick() => {
                         if let Err(error) = lease.renew().await {
+                            if matches!(error, ClientError::Transport(_)) {
+                                // A single request timeout is not proof that the
+                                // lease or the runtime has gone away.
+                                let retry = tokio::select! {
+                                    result = lease.renew() => result,
+                                    changed = stop_rx.changed() => {
+                                        if changed.is_err() || *stop_rx.borrow() {
+                                            return;
+                                        }
+                                        continue;
+                                    }
+                                };
+                                if let Err(retry_error) = retry {
+                                    let _ = result_tx.send_replace(Err(retry_error.to_string()));
+                                    return;
+                                }
+                                let _ = result_tx.send_replace(Ok(()));
+                                continue;
+                            }
                             let _ = result_tx.send_replace(Err(error.to_string()));
                             return;
                         }
@@ -2630,10 +2714,13 @@ impl LeaseGuard {
                 "lease was already released".to_string(),
             ));
         }
-        let response: ClientLeaseResponse = self
+        let response = self
             .client
-            .post_empty_json(&renew_path(&self.client_id))
+            .send_lease_request(&renew_path(&self.client_id), &self.lease.lease_id)
             .await?;
+        let response: ClientLeaseResponse = serde_json::from_value(response).map_err(|error| {
+            ClientError::Serialization(format!("unexpected response body: {error}"))
+        })?;
         self.lease = response;
         Ok(&self.lease)
     }
@@ -2657,7 +2744,9 @@ impl LeaseGuard {
         if check_idle {
             path.push_str("?shutdown_if_idle=true");
         }
-        self.client.send_without_body(Method::POST, &path).await?;
+        self.client
+            .send_lease_request(&path, &self.lease.lease_id)
+            .await?;
         self.released = true;
         Ok(())
     }
@@ -4133,8 +4222,18 @@ mod tests {
             .await
             .expect("desktop exit release");
         assert!(desktop_guard.is_released());
-        assert!(server.requests().iter().any(|request| {
+        let requests = server.requests();
+        assert!(requests.iter().any(|request| {
             request.path == "/control/v1/clients/cscli-1/release?shutdown_if_idle=true"
+                && request.runtime_lease.as_deref() == Some("lease-2")
+        }));
+        assert!(requests.iter().any(|request| {
+            request.path == "/control/v1/clients/cscli-1/renew"
+                && request.runtime_lease.as_deref() == Some("lease-1")
+        }));
+        assert!(requests.iter().any(|request| {
+            request.path == "/control/v1/clients/cscli-1/release"
+                && request.runtime_lease.as_deref() == Some("lease-1")
         }));
     }
 
@@ -4242,6 +4341,77 @@ mod tests {
         heartbeat.stop().await;
     }
 
+    #[tokio::test]
+    async fn heartbeat_confirms_a_persistent_transport_failure() {
+        let renews = Arc::new(AtomicUsize::new(0));
+        let counter = renews.clone();
+        let server = FakeServer::start_with_delay(Duration::from_millis(40), move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            http_response(
+                "200 OK",
+                &json!({
+                    "client_id": "cscli-1", "lease_id": "lease-1",
+                    "expires_at": "2026-01-01T00:00:10Z",
+                })
+                .to_string(),
+            )
+        })
+        .await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client = RuntimeClient::with_timeout(&document, Duration::from_millis(25))
+            .expect("short-timeout client");
+        let lease = LeaseGuard::from_response(
+            client,
+            "cscli",
+            ClientLeaseResponse {
+                client_id: "cscli-1".to_string(),
+                lease_id: "lease-1".to_string(),
+                expires_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+        );
+        let heartbeat = lease.heartbeat_with_interval(Duration::from_millis(20));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while heartbeat.status().is_ok() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("two failed renewals are reported");
+        assert!(renews.load(Ordering::SeqCst) >= 1);
+        heartbeat.stop().await;
+    }
+
+    #[tokio::test]
+    async fn heartbeat_keeps_a_lease_after_one_transport_failure() {
+        let renews = Arc::new(AtomicUsize::new(0));
+        let counter = renews.clone();
+        let server = FakeServer::start(move |_| {
+            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Vec::new();
+            }
+            http_response(
+                "200 OK",
+                &json!({
+                    "client_id": "cscli-1", "lease_id": "lease-1",
+                    "expires_at": "2026-01-01T00:00:10Z",
+                })
+                .to_string(),
+            )
+        })
+        .await;
+        let lease = lease_at(server.addr.port());
+        let heartbeat = lease.heartbeat_with_interval(Duration::from_millis(20));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while renews.load(Ordering::SeqCst) < 2 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("renewal retried after the connection closed");
+        assert_eq!(heartbeat.status(), Ok(()));
+        heartbeat.stop().await;
+    }
+
     #[test]
     fn heartbeat_interval_follows_the_configured_lease_ttl() {
         let _guard = crate::ENV_LOCK.lock().expect("env lock");
@@ -4293,6 +4463,18 @@ mod tests {
         let config = sandbox_launch_config(dir.path());
         assert!(runtime_needs_start(&config).expect("decision"));
         assert!(discovery_absent(&config.discovery_file()));
+    }
+
+    #[test]
+    fn runtime_needs_start_waits_for_lock_owner_before_discovery_is_published() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = sandbox_launch_config(dir.path());
+        let lock = open_runtime_dir_lock(config.runtime_dir()).expect("open lock");
+        lock.try_lock().expect("hold runtime lock");
+        assert!(discovery_absent(&config.discovery_file()));
+        assert!(!runtime_needs_start(&config).expect("attach while owner starts"));
+        lock.unlock().expect("unlock");
+        assert!(runtime_needs_start(&config).expect("start after owner exits"));
     }
 
     #[test]

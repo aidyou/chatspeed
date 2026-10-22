@@ -98,6 +98,8 @@ const WORKFLOW_READER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Leave time for lease release if the optional Web MCP provider stalls on exit.
 const DESKTOP_PROVIDER_STOP_TIMEOUT: Duration = Duration::from_secs(1);
+const RECOVERY_PROVIDER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+const RECOVERY_LEASE_RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Backoff between supervisor health checks and recovery attempts.
 const RUNTIME_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
@@ -464,6 +466,8 @@ struct SupervisorState {
 /// Everything the supervisor owns once a lease is held.
 struct Connection {
     client: RuntimeClient,
+    runtime_instance_id: String,
+    runtime_pid: u32,
     lease: LeaseGuard,
     heartbeat: Option<Heartbeat>,
     child: Option<RuntimeChild>,
@@ -1176,8 +1180,12 @@ async fn cleanup_connection(
         bridge.cancel.send_replace(true);
         bridge.reader.abort();
         let _ = tokio::time::timeout(BRIDGE_READER_STOP_TIMEOUT, bridge.reader).await;
-        if let Err(error) = bridge.session.unregister().await {
-            log::debug!("[RuntimeSupervisor] unregistering the bridge failed: {error}");
+        match tokio::time::timeout(BRIDGE_READER_STOP_TIMEOUT, bridge.session.unregister()).await {
+            Ok(Err(error)) => {
+                log::debug!("[RuntimeSupervisor] unregistering the bridge failed: {error}")
+            }
+            Err(_) => log::warn!("[RuntimeSupervisor] bridge unregister timed out"),
+            Ok(Ok(())) => {}
         }
     }
     let workflow_readers: Vec<WorkflowStreamHandle> = connection
@@ -1201,13 +1209,20 @@ async fn cleanup_connection(
                     "[RuntimeSupervisor] Web MCP provider stop timed out during desktop exit"
                 );
             }
-        } else {
-            provider.shutdown().await;
+        } else if tokio::time::timeout(RECOVERY_PROVIDER_STOP_TIMEOUT, provider.shutdown())
+            .await
+            .is_err()
+        {
+            log::warn!("[RuntimeSupervisor] Web MCP provider stop timed out during recovery");
         }
     }
     let result = match early_release {
         Some(result) => result,
-        None => connection.lease.release().await,
+        None => tokio::time::timeout(RECOVERY_LEASE_RELEASE_TIMEOUT, connection.lease.release())
+            .await
+            .map_err(|_| {
+                RuntimeUnavailable::Unreachable("runtime lease release timed out".to_string())
+            })?,
     };
     result.map_err(RuntimeUnavailable::from_client_error)
 }
@@ -1233,32 +1248,71 @@ async fn run_health_monitor(inner: Weak<Mutex<SupervisorState>>, monitor: Arc<Mo
             if state.stopping {
                 return;
             }
-            state
-                .connection
-                .as_ref()
-                .map(|connection| (state.generation, connection.client.clone()))
+            state.connection.as_ref().map(|connection| {
+                (
+                    state.generation,
+                    connection.client.clone(),
+                    connection.runtime_instance_id.clone(),
+                    connection.runtime_pid,
+                )
+            })
         };
-        let probe_failure = if let Some((generation, client)) = probe {
+        let probe_failure = if let Some((generation, client, instance_id, pid)) = probe {
             let result = tokio::select! {
                 _ = stop_rx.changed() => return,
                 result = tokio::time::timeout(
                     RUNTIME_HEALTH_PROBE_TIMEOUT,
-                    client.get(chatspeed_runtime_client::META_PATH),
+                    client.meta(),
                 ) => result,
             };
-            match result {
-                Ok(Ok(_)) => None,
-                Ok(Err(error)) => Some((
-                    generation,
-                    format!(
-                        "control-plane health probe failed: {}",
-                        redact_secrets(&error.to_string())
-                    ),
-                )),
-                Err(_) => Some((
-                    generation,
-                    "control-plane health probe timed out".to_string(),
-                )),
+            let (first_failure, identity_changed) = match result {
+                Ok(Ok(meta)) if meta.server_instance_id == instance_id && meta.pid == pid => {
+                    (None, false)
+                }
+                Ok(Ok(_)) => (
+                    Some((generation, "control-plane instance changed".to_string())),
+                    true,
+                ),
+                Ok(Err(error)) => (
+                    Some((
+                        generation,
+                        format!(
+                            "control-plane health probe failed: {}",
+                            redact_secrets(&error.to_string())
+                        ),
+                    )),
+                    false,
+                ),
+                Err(_) => (
+                    Some((
+                        generation,
+                        "control-plane health probe timed out".to_string(),
+                    )),
+                    false,
+                ),
+            };
+            if first_failure.is_some() && !process_alive(pid) {
+                first_failure
+            } else if identity_changed {
+                first_failure
+            } else if first_failure.is_some() {
+                // One slow /meta response can coincide with otherwise healthy
+                // work. Confirm reachability before tearing down live readers.
+                let confirmation = tokio::select! {
+                    _ = stop_rx.changed() => return,
+                    result = tokio::time::timeout(
+                        RUNTIME_HEALTH_PROBE_TIMEOUT,
+                        client.meta(),
+                    ) => result,
+                };
+                if matches!(confirmation, Ok(Ok(meta)) if meta.server_instance_id == instance_id && meta.pid == pid)
+                {
+                    None
+                } else {
+                    first_failure
+                }
+            } else {
+                None
             }
         } else {
             None
@@ -1374,10 +1428,29 @@ async fn connect_once(
             return Err(error);
         }
     };
-    let lease = match LeaseGuard::register(&client, client_id, CLIENT_KIND).await {
-        Ok(lease) => lease,
+    let registration = async {
+        let meta = tokio::time::timeout(RUNTIME_REPLACEMENT_PROBE_TIMEOUT, client.meta())
+            .await
+            .map_err(|_| {
+                RuntimeUnavailable::Unreachable("runtime identity probe timed out".to_string())
+            })?
+            .map_err(RuntimeUnavailable::from_client_error)?;
+        if runtime_is_newer(&meta) {
+            return Err(RuntimeUnavailable::InvalidConfig(format!(
+                "runtime version {} is newer than desktop version {}; update the desktop before connecting",
+                meta.package_version.as_deref().unwrap_or_default(),
+                env!("CARGO_PKG_VERSION")
+            )));
+        }
+        let lease = LeaseGuard::register(&client, client_id, CLIENT_KIND)
+            .await
+            .map_err(RuntimeUnavailable::from_client_error)?;
+        Ok((meta, lease))
+    }
+    .await;
+    let (meta, lease) = match registration {
+        Ok(result) => result,
         Err(error) => {
-            let error = RuntimeUnavailable::from_client_error(error);
             let error = if error.is_runtime_stopping() {
                 match tokio::time::timeout(RUNTIME_REPLACEMENT_PROBE_TIMEOUT, client.meta()).await {
                     Ok(Ok(meta))
@@ -1410,7 +1483,9 @@ async fn connect_once(
             return Err(error);
         }
     };
-    if let Err(error) = replace_outdated_runtime(&client, &lease, &config.discovery_file()).await {
+    if let Err(error) =
+        replace_outdated_runtime(&client, &lease, &config.discovery_file(), &meta).await
+    {
         if matches!(error, RuntimeUnavailable::VersionSwitchCompleted) {
             let mut state = inner.lock().await;
             state.connecting = false;
@@ -1436,6 +1511,8 @@ async fn connect_once(
         lease,
         child,
         client,
+        runtime_instance_id: meta.server_instance_id,
+        runtime_pid: meta.pid,
         client_id: client_id.to_string(),
         bridge: None,
         workflow_streams: HashMap::new(),
@@ -1462,28 +1539,41 @@ async fn replace_outdated_runtime(
     client: &RuntimeClient,
     lease: &LeaseGuard,
     discovery_file: &Path,
+    meta: &MetaResponse,
 ) -> Result<(), RuntimeUnavailable> {
-    let meta = tokio::time::timeout(RUNTIME_REPLACEMENT_PROBE_TIMEOUT, client.meta())
+    let confirmed = tokio::time::timeout(RUNTIME_REPLACEMENT_PROBE_TIMEOUT, client.meta())
         .await
         .map_err(|_| {
-            RuntimeUnavailable::Unreachable("runtime identity probe timed out".to_string())
+            RuntimeUnavailable::Unreachable("runtime identity confirmation timed out".to_string())
         })?
         .map_err(RuntimeUnavailable::from_client_error)?;
-    if !runtime_is_outdated(&meta) {
+    if confirmed.server_instance_id != meta.server_instance_id || confirmed.pid != meta.pid {
+        return Err(RuntimeUnavailable::InvalidConfig(
+            "runtime identity changed while registering the desktop lease".to_string(),
+        ));
+    }
+    if runtime_is_newer(&confirmed) {
+        return Err(RuntimeUnavailable::InvalidConfig(format!(
+            "runtime version {} is newer than desktop version {}; update the desktop before connecting",
+            confirmed.package_version.as_deref().unwrap_or_default(),
+            env!("CARGO_PKG_VERSION")
+        )));
+    }
+    if !runtime_is_outdated(&confirmed) {
         return Ok(());
     }
-    if !discovery_matches_meta(discovery_file, &meta) {
+    if !discovery_matches_meta(discovery_file, &confirmed) {
         return Err(RuntimeUnavailable::InvalidConfig(
             "runtime identity changed during version replacement".to_string(),
         ));
     }
     log::warn!(
         "[RuntimeSupervisor] installed runtime differs from live instance; stopping instance {} (pid {}) before reconnect",
-        meta.server_instance_id,
-        meta.pid
+        confirmed.server_instance_id,
+        confirmed.pid
     );
     let request = RuntimeShutdownRequest {
-        expected_instance_id: meta.server_instance_id.clone(),
+        expected_instance_id: confirmed.server_instance_id.clone(),
         confirm: true,
         force: true,
     };
@@ -1493,7 +1583,7 @@ async fn replace_outdated_runtime(
             &request,
             &lease.lease().client_id,
             lease.lease_id(),
-            &format!("replace-runtime-{}", meta.server_instance_id),
+            &format!("replace-runtime-{}", confirmed.server_instance_id),
         ),
     )
     .await
@@ -1505,8 +1595,8 @@ async fn replace_outdated_runtime(
                 .await
                 .is_ok_and(|result| {
                     result.is_ok_and(|status| {
-                        status.instance_id == meta.server_instance_id
-                            && status.pid == meta.pid
+                        status.instance_id == confirmed.server_instance_id
+                            && status.pid == confirmed.pid
                             && status.phase != RuntimeLifecyclePhase::Running
                             && status.quiesced
                     })
@@ -1517,7 +1607,7 @@ async fn replace_outdated_runtime(
     }
     Err(recover_stopping_outdated_runtime(
         client,
-        &meta,
+        &confirmed,
         discovery_file,
         RUNTIME_REPLACEMENT_STOP_BUDGET,
     )
@@ -1528,15 +1618,35 @@ fn runtime_is_outdated(meta: &MetaResponse) -> bool {
     if meta.service != chatspeed_runtime_client::RUNTIME_SERVICE_NAME || meta.pid == 0 {
         return false;
     }
-    let version_changed = meta
-        .package_version
-        .as_deref()
-        .is_some_and(|version| version != env!("CARGO_PKG_VERSION"));
+    if runtime_is_newer(meta) {
+        return false;
+    }
+    let version_changed = meta.package_version.as_deref().is_some_and(|version| {
+        runtime_version_order(version)
+            .map_or(version != env!("CARGO_PKG_VERSION"), |order| order.is_lt())
+    });
     #[cfg(target_os = "linux")]
     let binary_replaced = chatspeed_runtime_client::runtime_binary_replaced(meta.pid);
     #[cfg(not(target_os = "linux"))]
     let binary_replaced = false;
     version_changed || binary_replaced
+}
+
+fn runtime_is_newer(meta: &MetaResponse) -> bool {
+    meta.package_version
+        .as_deref()
+        .and_then(runtime_version_order)
+        .is_some_and(|order| order.is_gt())
+}
+
+fn runtime_version_order(runtime_version: &str) -> Option<std::cmp::Ordering> {
+    match (
+        semver::Version::parse(runtime_version),
+        semver::Version::parse(env!("CARGO_PKG_VERSION")),
+    ) {
+        (Ok(runtime), Ok(desktop)) => Some(runtime.cmp(&desktop)),
+        _ => None,
+    }
 }
 
 fn discovery_matches_meta(path: &Path, meta: &MetaResponse) -> bool {
@@ -2618,6 +2728,9 @@ mod tests {
             .route("/control/v1/clients/register", post(|| async { Json(serde_json::json!({
                 "client_id": "tauri-main", "lease_id": "test-lease", "expires_at": "2099-01-01T00:00:00Z"
             })) }))
+            .route("/control/v1/clients/tauri-main/renew", post(|| async { Json(serde_json::json!({
+                "client_id": "tauri-main", "lease_id": "test-lease", "expires_at": "2099-01-01T00:00:00Z"
+            })) }))
             .route("/control/v1/clients/tauri-main/release", post(|| async { Json(serde_json::json!({})) }));
         let task = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -2682,7 +2795,19 @@ mod tests {
             .expect("lease");
         let result = tokio::time::timeout(
             Duration::from_millis(200),
-            replace_outdated_runtime(&client, &lease, &discovery_file),
+            replace_outdated_runtime(
+                &client,
+                &lease,
+                &discovery_file,
+                &MetaResponse {
+                    service: chatspeed_runtime_client::RUNTIME_SERVICE_NAME.to_string(),
+                    protocol_version: PROTOCOL_VERSION.to_string(),
+                    schema_version: chatspeed_contracts::SCHEMA_VERSION,
+                    server_instance_id: document.server_instance_id.clone(),
+                    pid: document.pid,
+                    package_version: Some("0.0.0".to_string()),
+                },
+            ),
         )
         .await;
         assert!(
@@ -3104,7 +3229,7 @@ mod tests {
                 .await
                 .expect("serve hung endpoint");
         });
-        tokio::time::timeout(Duration::from_secs(7), async {
+        tokio::time::timeout(Duration::from_secs(12), async {
             while supervisor.status().await.state != RuntimeConnectionState::Unavailable {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
@@ -3112,10 +3237,10 @@ mod tests {
         .await
         .expect("probe timeout invalidates stale ready state");
         let status = supervisor.status().await;
-        assert_eq!(
+        assert!(matches!(
             status.last_error.as_deref(),
-            Some("control-plane health probe timed out")
-        );
+            Some("control-plane health probe timed out" | "runtime lease heartbeat failed")
+        ));
         assert_eq!(status.generation, 1);
         assert_eq!(
             status.base_url, None,
@@ -3124,6 +3249,143 @@ mod tests {
         supervisor.begin_stopping().await;
         hung_server.abort();
         let _ = supervisor.release().await;
+    }
+
+    #[tokio::test]
+    async fn one_slow_probe_does_not_replace_a_healthy_runtime() {
+        use axum::{
+            routing::{get, post},
+            Json, Router,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind");
+        let mut document = discovery_with_token("test-only-token");
+        document.pid = std::process::id();
+        document.port = listener.local_addr().expect("address").port();
+        std::fs::write(
+            config.discovery_file(),
+            serde_json::to_vec(&document).expect("encode"),
+        )
+        .expect("discovery");
+        let probes = Arc::new(AtomicUsize::new(0));
+        let probe_count = probes.clone();
+        let meta = serde_json::json!({
+            "service": "chatspeed-runtime", "protocol_version": PROTOCOL_VERSION,
+            "schema_version": chatspeed_contracts::SCHEMA_VERSION,
+            "server_instance_id": document.server_instance_id, "pid": document.pid
+        });
+        let app = Router::new()
+            .route(chatspeed_runtime_client::META_PATH, get(move || {
+                let meta = meta.clone();
+                let probe_count = probe_count.clone();
+                async move {
+                    if probe_count.fetch_add(1, Ordering::SeqCst) == 3 {
+                        tokio::time::sleep(RUNTIME_HEALTH_PROBE_TIMEOUT + Duration::from_millis(200)).await;
+                    }
+                    Json(meta)
+                }
+            }))
+            .route("/control/v1/clients/register", post(|| async { Json(serde_json::json!({
+                "client_id": "tauri-main", "lease_id": "test-lease", "expires_at": "2099-01-01T00:00:00Z"
+            })) }))
+            .route("/control/v1/clients/tauri-main/renew", post(|| async { Json(serde_json::json!({
+                "client_id": "tauri-main", "lease_id": "test-lease", "expires_at": "2099-01-01T00:00:00Z"
+            })) }))
+            .route("/control/v1/clients/tauri-main/release", post(|| async { Json(serde_json::json!({})) }));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let supervisor = RuntimeSupervisor::new();
+        supervisor
+            .connect_or_start(&config, "tauri-main")
+            .await
+            .expect("connect");
+        tokio::time::timeout(Duration::from_secs(7), async {
+            while probes.load(Ordering::SeqCst) < 5 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("second health probe completed");
+        assert_eq!(supervisor.status().await.generation, 1);
+        let status = supervisor.status().await;
+        assert!(status.base_url.is_some(), "{status:?}");
+        supervisor.release().await.expect("release");
+        server.abort();
+    }
+
+    #[test]
+    fn newer_runtime_is_never_replaced_by_an_older_desktop() {
+        let meta = MetaResponse {
+            service: chatspeed_runtime_client::RUNTIME_SERVICE_NAME.to_string(),
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            schema_version: chatspeed_contracts::SCHEMA_VERSION,
+            server_instance_id: "newer-instance".to_string(),
+            pid: std::process::id(),
+            package_version: Some("999.0.0".to_string()),
+        };
+        assert!(runtime_is_newer(&meta));
+        assert!(!runtime_is_outdated(&meta));
+    }
+
+    #[tokio::test]
+    async fn older_desktop_rejects_newer_runtime_before_registering_a_lease() {
+        use axum::{
+            routing::{get, post},
+            Json, Router,
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = chatspeed_runtime_client::sandbox_launch_config(dir.path());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind");
+        let mut document = discovery_with_token("test-only-token");
+        document.pid = std::process::id();
+        document.port = listener.local_addr().expect("address").port();
+        std::fs::write(
+            config.discovery_file(),
+            serde_json::to_vec(&document).expect("encode"),
+        )
+        .expect("discovery");
+        let meta = serde_json::json!({
+            "service": "chatspeed-runtime", "protocol_version": PROTOCOL_VERSION,
+            "schema_version": chatspeed_contracts::SCHEMA_VERSION,
+            "server_instance_id": document.server_instance_id, "pid": document.pid,
+            "package_version": "999.0.0"
+        });
+        let registrations = Arc::new(AtomicUsize::new(0));
+        let observed = registrations.clone();
+        let app = Router::new()
+            .route(
+                chatspeed_runtime_client::META_PATH,
+                get(move || {
+                    let meta = meta.clone();
+                    async move { Json(meta) }
+                }),
+            )
+            .route(
+                "/control/v1/clients/register",
+                post(move || {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    async { Json(serde_json::json!({})) }
+                }),
+            );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let supervisor = RuntimeSupervisor::new();
+        let result = supervisor.connect_or_start(&config, "tauri-main").await;
+        assert!(matches!(result, Err(RuntimeUnavailable::InvalidConfig(_))));
+        assert_eq!(registrations.load(Ordering::SeqCst), 0);
+        supervisor.begin_stopping().await;
+        server.abort();
     }
 
     #[tokio::test]
