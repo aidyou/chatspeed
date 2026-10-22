@@ -275,6 +275,7 @@ impl IdempotencyTracker {
 struct InFlightGuard {
     tracker: Arc<IdempotencyTracker>,
     key: String,
+    operation: String,
     reservation: Arc<InFlightReservation>,
     defused: bool,
 }
@@ -289,7 +290,8 @@ impl Drop for InFlightGuard {
     fn drop(&mut self) {
         if !self.defused {
             log::warn!(
-                "[ControlPlane][phase=idempotency] Aborting in-flight mutation without result key={}",
+                "[ControlPlane][phase=idempotency][operation={}] Aborting in-flight mutation without result key={}",
+                self.operation,
                 self.key
             );
             self.tracker.abort(&self.key, &self.reservation);
@@ -1656,34 +1658,40 @@ async fn start_workflow(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    with_idempotency(&state, &headers, &body, |state, body| async move {
-        // The admission ticket is held across the whole start, so the shutdown
-        // drain observes an in-flight start and a quiescing runtime refuses it.
-        let _ticket = match state.admit_work(crate::lifecycle::WorkKind::WorkflowStart) {
-            Ok(ticket) => ticket,
-            Err(refusal) => return refusal.into_response(),
-        };
-        let mut request: WorkflowStartRequest = match serde_json::from_str(&body) {
-            Ok(request) => request,
-            Err(error) => {
-                return dto::error_response(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_input",
-                    format!("Invalid start request: {}", error),
-                );
+    with_idempotency_named(
+        &state,
+        &headers,
+        &body,
+        "workflow.start",
+        |state, body| async move {
+            // The admission ticket is held across the whole start, so the shutdown
+            // drain observes an in-flight start and a quiescing runtime refuses it.
+            let _ticket = match state.admit_work(crate::lifecycle::WorkKind::WorkflowStart) {
+                Ok(ticket) => ticket,
+                Err(refusal) => return refusal.into_response(),
+            };
+            let mut request: WorkflowStartRequest = match serde_json::from_str(&body) {
+                Ok(request) => request,
+                Err(error) => {
+                    return dto::error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_input",
+                        format!("Invalid start request: {}", error),
+                    );
+                }
+            };
+            // The path parameter is authoritative for the target session.
+            request.session_id = session_id;
+            match state.svc.workflow_start(request).await {
+                Ok(result) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({ "session_id": result })),
+                )
+                    .into_response(),
+                Err(error) => dto::application_error_response(&error),
             }
-        };
-        // The path parameter is authoritative for the target session.
-        request.session_id = session_id;
-        match state.svc.workflow_start(request).await {
-            Ok(result) => (
-                StatusCode::OK,
-                Json(serde_json::json!({ "session_id": result })),
-            )
-                .into_response(),
-            Err(error) => dto::application_error_response(&error),
-        }
-    })
+        },
+    )
     .await
 }
 
@@ -1693,23 +1701,29 @@ async fn signal_workflow(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    with_idempotency(&state, &headers, &body, |state, body| async move {
-        // A signal can resume a waiting session, so it is fenced like a start.
-        let _ticket = match state.admit_work(crate::lifecycle::WorkKind::WorkflowResume) {
-            Ok(ticket) => ticket,
-            Err(refusal) => return refusal.into_response(),
-        };
-        // The signal body is forwarded verbatim; typed signal validation stays
-        // in the application service (INV-3).
-        match state.svc.workflow_signal(&session_id, body).await {
-            Ok(result) => (
-                StatusCode::OK,
-                Json(serde_json::json!({ "session_id": session_id, "result": result })),
-            )
-                .into_response(),
-            Err(error) => dto::application_error_response(&error),
-        }
-    })
+    with_idempotency_named(
+        &state,
+        &headers,
+        &body,
+        "workflow.signal",
+        |state, body| async move {
+            // A signal can resume a waiting session, so it is fenced like a start.
+            let _ticket = match state.admit_work(crate::lifecycle::WorkKind::WorkflowResume) {
+                Ok(ticket) => ticket,
+                Err(refusal) => return refusal.into_response(),
+            };
+            // The signal body is forwarded verbatim; typed signal validation stays
+            // in the application service (INV-3).
+            match state.svc.workflow_signal(&session_id, body).await {
+                Ok(result) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({ "session_id": session_id, "result": result })),
+                )
+                    .into_response(),
+                Err(error) => dto::application_error_response(&error),
+            }
+        },
+    )
     .await
 }
 
@@ -2963,6 +2977,26 @@ where
     Fut: std::future::Future<Output = T>,
     T: IntoResponse,
 {
+    with_idempotency_named(state, headers, body, "mutation", execute).await
+}
+
+/// Executes one mutation with an operation label retained in diagnostics.
+///
+/// The label is intentionally supplied by the route adapter rather than
+/// inferred from a display string or request body. It changes observability
+/// only; reservation, replay and execution semantics stay in one function.
+pub(crate) async fn with_idempotency_named<F, Fut, T>(
+    state: &ControlPlaneState,
+    headers: &HeaderMap,
+    body: &str,
+    operation: &str,
+    execute: F,
+) -> Response
+where
+    F: FnOnce(ControlPlaneState, String) -> Fut,
+    Fut: std::future::Future<Output = T>,
+    T: IntoResponse,
+{
     let key = match headers.get("Idempotency-Key").and_then(|v| v.to_str().ok()) {
         Some(key) if !key.trim().is_empty() => key.trim().to_string(),
         _ => {
@@ -2988,7 +3022,8 @@ where
         ),
         Reservation::Wait(mut rx) => {
             log::info!(
-                "[ControlPlane][phase=idempotency] Waiting for in-flight mutation result key={} body_hash={}",
+                "[ControlPlane][phase=idempotency][operation={}] Waiting for in-flight mutation result key={} body_hash={}",
+                operation,
                 key,
                 body_hash
             );
@@ -3000,7 +3035,8 @@ where
                     done
                 } else if rx.changed().await.is_err() {
                     log::warn!(
-                        "[ControlPlane][phase=idempotency] In-flight mutation ended without a result key={} body_hash={}",
+                        "[ControlPlane][phase=idempotency][operation={}] In-flight mutation ended without a result key={} body_hash={}",
+                        operation,
                         key,
                         body_hash
                     );
@@ -3010,7 +3046,8 @@ where
                         Some(done) => done,
                         None => {
                             log::debug!(
-                                "[ControlPlane][phase=idempotency] In-flight mutation published no result key={} body_hash={}",
+                                "[ControlPlane][phase=idempotency][operation={}] In-flight mutation published no result key={} body_hash={}",
+                                operation,
                                 key,
                                 body_hash
                             );
@@ -3023,7 +3060,8 @@ where
         }
         Reservation::Execute(reservation) => {
             log::debug!(
-                "[ControlPlane][phase=idempotency] Executing mutation key={} body_hash={}",
+                "[ControlPlane][phase=idempotency][operation={}] Executing mutation key={} body_hash={}",
+                operation,
                 key,
                 body_hash
             );
@@ -3031,6 +3069,7 @@ where
             let guard = InFlightGuard {
                 tracker: state.idempotency.clone(),
                 key: key.clone(),
+                operation: operation.to_string(),
                 reservation: reservation.clone(),
                 defused: false,
             };
@@ -3042,14 +3081,16 @@ where
             // Successful mutations are routine; keep non-success statuses visible.
             if status.is_success() {
                 log::debug!(
-                    "[ControlPlane][phase=idempotency] Mutation handler returned key={} body_hash={} status={}",
+                    "[ControlPlane][phase=idempotency][operation={}] Mutation handler returned key={} body_hash={} status={}",
+                    operation,
                     key,
                     body_hash,
                     status
                 );
             } else {
                 log::info!(
-                    "[ControlPlane][phase=idempotency] Mutation handler returned key={} body_hash={} status={}",
+                    "[ControlPlane][phase=idempotency][operation={}] Mutation handler returned key={} body_hash={} status={}",
+                    operation,
                     key,
                     body_hash,
                     status
@@ -7582,7 +7623,7 @@ mod chat_route_tests {
                 ),
             ])),
         });
-        let plane = start_plane_with_leases(leases, false).await;
+        let plane = start_plane_with_leases(leases.clone(), false).await;
         let http = reqwest::Client::new();
 
         let ok = http
@@ -7599,6 +7640,23 @@ mod chat_route_tests {
             body["server_name"],
             chatspeed_contracts::WEB_MCP_SERVER_NAME
         );
+
+        // Re-registering the same client replaces its lease. The provider
+        // registration path must clear the old slot immediately rather than
+        // waiting for the periodic lease sweeper.
+        leases.leases.lock().unwrap().insert(
+            "tauri-main".to_string(),
+            ("lease-tauri-main-new".to_string(), "tauri".to_string()),
+        );
+        let replaced = http
+            .post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))
+            .bearer_auth(&plane.token)
+            .headers(provider_headers("tauri-main", "lease-tauri-main-new"))
+            .body("{\"port\":41235}")
+            .send()
+            .await
+            .expect("stale lease replacement");
+        assert_eq!(replaced.status(), reqwest::StatusCode::OK);
 
         let conflict = http
             .post(url(&plane, chatspeed_contracts::WEB_MCP_REGISTER_PATH))
@@ -7618,12 +7676,12 @@ mod chat_route_tests {
             .expect("status");
         let status_body: serde_json::Value = status.json().await.expect("status body");
         assert_eq!(status_body["client_id"], "tauri-main");
-        assert_eq!(status_body["port"], 41234);
+        assert_eq!(status_body["port"], 41235);
 
         let unregister = http
             .post(url(&plane, chatspeed_contracts::WEB_MCP_UNREGISTER_PATH))
             .bearer_auth(&plane.token)
-            .headers(provider_headers("tauri-main", "lease-tauri-main"))
+            .headers(provider_headers("tauri-main", "lease-tauri-main-new"))
             .body("{}")
             .send()
             .await

@@ -46,6 +46,15 @@ pub trait WebProviderLeaseCheck: Send + Sync {
     fn is_valid(&self, client_id: &str, lease_id: &str) -> bool;
 }
 
+impl<F> WebProviderLeaseCheck for F
+where
+    F: Fn(&str, &str) -> bool + Send + Sync,
+{
+    fn is_valid(&self, client_id: &str, lease_id: &str) -> bool {
+        self(client_id, lease_id)
+    }
+}
+
 /// The runtime-owned single-slot provider lifecycle.
 ///
 /// Implemented by the standalone runtime owner; the desktop in-process control
@@ -215,6 +224,14 @@ async fn register_web_provider(
     let Some(plane) = state.web_provider.as_ref() else {
         return runtime_absent_response();
     };
+    // Lease registration replaces a stale lease for the same client id. Clear
+    // any provider slot still bound to that old lease before deciding whether
+    // this registration conflicts with a genuinely live desktop.
+    if let Some(runtime) = state.runtime.as_ref() {
+        let check =
+            |client_id: &str, lease_id: &str| runtime.validate_lease(client_id, lease_id).is_ok();
+        plane.sweep_invalid_leases(&check).await;
+    }
     match plane
         .register_provider(&registration, &lease, &proof.proof, &proof.instance_id)
         .await

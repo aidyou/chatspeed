@@ -518,6 +518,28 @@ fn is_manual_compression_request(path: &str, body: &Value) -> bool {
         && body.get("type").and_then(Value::as_str) == Some("manual_compress")
 }
 
+/// Workflow mutations may perform durable recovery or model-backed context
+/// work before they can answer. A client-side total timeout would cancel that
+/// server operation halfway through and leave a persisted `thinking` workflow
+/// without its in-memory executor. Keep the loopback connection establishment
+/// timeout, but let the server-owned workflow operation finish.
+fn is_workflow_mutation_request(path: &str) -> bool {
+    let canonical = ["/start", "/signal", "/stop"].into_iter().any(|suffix| {
+        path.strip_prefix("/control/v1/workflows/")
+            .and_then(|tail| tail.strip_suffix(suffix))
+            .is_some_and(|session_id| !session_id.is_empty() && !session_id.contains('/'))
+    });
+    let long_running_command = path
+        .strip_prefix("/control/v1/workflow-commands/")
+        .is_some_and(|command| {
+            matches!(
+                command,
+                "workflow_begin_new_context_frame" | "workflow_approve_plan"
+            )
+        });
+    canonical || long_running_command
+}
+
 /// Query parameter names that must never carry the bearer token. The runtime
 /// rejects these as well; rejecting them here keeps a misconfigured caller from
 /// putting a credential into a URL that ends up in logs or error messages.
@@ -1784,6 +1806,7 @@ impl RuntimeClient {
     ) -> Result<reqwest::RequestBuilder, ClientError> {
         if matches!(path, BACKUP_SETTING_PATH | RESTORE_SETTING_PATH)
             || is_manual_compression_request(path, body)
+            || is_workflow_mutation_request(path)
         {
             self.build_without_timeout(Method::POST, path)
         } else {
@@ -3429,7 +3452,7 @@ mod tests {
     }
 
     #[test]
-    fn streams_have_no_total_timeout_while_normal_requests_do() {
+    fn workflow_mutations_have_no_total_timeout_while_normal_requests_do() {
         let client = client();
         let request = client
             .build(Method::GET, META_PATH)
@@ -3448,12 +3471,30 @@ mod tests {
 
         for (path, body) in [
             (
+                "/control/v1/workflows/session-1/start",
+                json!({"initial_prompt": "hello"}),
+            ),
+            (
                 "/control/v1/workflows/session-1/signal",
                 json!({"type": "stop"}),
             ),
             ("/control/v1/workflows/session-1/signal", json!({})),
             (
-                "/control/v1/workflow-commands/workflow_signal",
+                "/control/v1/workflow-commands/workflow_begin_new_context_frame",
+                manual.clone(),
+            ),
+        ] {
+            let request = client
+                .build_idempotent_request(path, &body)
+                .expect("build")
+                .build()
+                .expect("request");
+            assert!(request.timeout().is_none(), "{path}");
+        }
+
+        for (path, body) in [
+            (
+                "/control/v1/workflow-commands/update_workflow_title",
                 manual.clone(),
             ),
             ("/control/v1/workflows//signal", manual.clone()),
@@ -3671,13 +3712,37 @@ mod tests {
             RuntimeClient::with_timeout(&document, Duration::from_millis(100)).expect("client");
         let error = client
             .post_with_idempotency(
-                "/control/v1/workflows/session-1/signal",
-                &json!({"type": "stop"}),
-                "ordinary-signal-test",
+                "/control/v1/mcp-enable",
+                &json!({"name": "codegraph"}),
+                "ordinary-mutation-test",
             )
             .await
-            .expect_err("ordinary signals must retain their timeout");
+            .expect_err("ordinary mutations must retain their timeout");
         assert!(matches!(error, ClientError::Transport(_)));
+    }
+
+    #[tokio::test]
+    async fn slow_workflow_start_finishes_without_a_timeout_retry() {
+        let server = FakeServer::start_with_delay(Duration::from_millis(400), |_| {
+            http_response("200 OK", r#"{"session_id":"session-1"}"#)
+        })
+        .await;
+        let document = discovery_on(server.addr.port(), "instance-a", 42);
+        let client =
+            RuntimeClient::with_timeout(&document, Duration::from_millis(100)).expect("client");
+        let value = tokio::time::timeout(
+            Duration::from_secs(3),
+            client.post_with_idempotency(
+                "/control/v1/workflows/session-1/start",
+                &json!({"initial_prompt": "hello"}),
+                "slow-start-test",
+            ),
+        )
+        .await
+        .expect("mock start must finish")
+        .expect("start must outlive the ordinary request timeout");
+        assert_eq!(value["session_id"], "session-1");
+        assert_eq!(server.requests().len(), 1, "must not retry the start");
     }
 
     #[tokio::test]

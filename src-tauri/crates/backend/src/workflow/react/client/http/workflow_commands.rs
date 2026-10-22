@@ -38,7 +38,7 @@ use axum::routing::post;
 use axum::Router;
 
 use super::dto;
-use super::server::{with_idempotency, ControlPlaneState};
+use super::server::{with_idempotency_named, ControlPlaneState};
 
 /// The compatibility command route template.
 pub const WORKFLOW_COMMANDS_PATH: &str = "/control/v1/workflow-commands/{command}";
@@ -99,10 +99,11 @@ async fn dispatch_workflow_command(
         };
     }
 
-    with_idempotency(
+    with_idempotency_named(
         &state,
         &headers,
         &body,
+        "workflow.command",
         move |state: ControlPlaneState, body: String| async move {
             let params = match parse_command_body(&body) {
                 Ok(params) => params,
