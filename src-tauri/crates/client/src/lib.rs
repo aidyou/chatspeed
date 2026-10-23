@@ -973,12 +973,27 @@ fn runtime_needs_start_with(
     decision
 }
 
-/// Opens the stable runtime-directory lock, creating it if absent.
+/// Opens the stable runtime-directory lock, creating its directory if absent.
 ///
 /// `truncate(false)` and read/write access match the runtime's own opener so the
 /// client locks the exact inode the runtime uses; the record inside is never
 /// rewritten here.
 fn open_runtime_dir_lock(runtime_dir: &Path) -> Result<std::fs::File, ClientError> {
+    // Discovery is checked before the runtime can create its own directory on
+    // first launch. Create missing parents without changing existing modes.
+    let mut directory = std::fs::DirBuilder::new();
+    directory.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        directory.mode(0o700);
+    }
+    directory.create(runtime_dir).map_err(|error| {
+        ClientError::Discovery(format!(
+            "cannot create runtime directory {}: {error}",
+            runtime_dir.display()
+        ))
+    })?;
     let path = runtime_dir.join(RUNTIME_DIR_LOCK_FILE_NAME);
     let mut options = std::fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -4463,6 +4478,53 @@ mod tests {
         let config = sandbox_launch_config(dir.path());
         assert!(runtime_needs_start(&config).expect("decision"));
         assert!(discovery_absent(&config.discovery_file()));
+    }
+
+    #[test]
+    fn runtime_needs_start_creates_missing_runtime_directory_before_locking() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime_dir = dir.path().join("Application Support/ai.aidyou.chatspeed/runtime");
+        let config = sandbox_launch_config(&runtime_dir);
+        assert!(!runtime_dir.exists());
+
+        assert!(runtime_needs_start(&config).expect("first launch can start runtime"));
+        assert!(runtime_dir.is_dir());
+        assert!(discovery_absent(&config.discovery_file()));
+        let lock_path = runtime_dir.join(RUNTIME_DIR_LOCK_FILE_NAME);
+        assert_eq!(std::fs::read(&lock_path).expect("read lock"), b"");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for (path, mode) in [(&runtime_dir, 0o700), (&lock_path, 0o600)] {
+                assert_eq!(
+                    std::fs::metadata(path)
+                        .expect("metadata")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    mode
+                );
+            }
+        }
+
+        let lock = open_runtime_dir_lock(&runtime_dir).expect("open lock");
+        lock.try_lock().expect("hold lock");
+        assert!(!runtime_needs_start(&config).expect("wait for starting owner"));
+        lock.unlock().expect("unlock");
+        assert!(runtime_needs_start(&config).expect("start after owner exits"));
+    }
+
+    #[test]
+    fn runtime_needs_start_reports_a_runtime_directory_blocked_by_a_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let parent = dir.path().join("blocked");
+        std::fs::write(&parent, b"keep").expect("write file");
+        let config = sandbox_launch_config(parent.join("runtime"));
+
+        let error = runtime_needs_start(&config).expect_err("invalid directory must fail");
+        assert!(matches!(error, ClientError::Discovery(_)));
+        assert_eq!(std::fs::read(&parent).expect("read file"), b"keep");
     }
 
     #[test]
