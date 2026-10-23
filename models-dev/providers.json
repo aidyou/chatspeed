@@ -94,7 +94,7 @@
       "documentationUrl": "https://docs.aihubmix.com",
       "id": "aihubmix",
       "logo": "https://models.dev/logos/aihubmix.svg",
-      "modelCount": 155,
+      "modelCount": 154,
       "name": "AIHubMix",
       "responses": false
     },
@@ -144,7 +144,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/en/model-studio/models",
       "id": "alibaba",
       "logo": "https://models.dev/logos/alibaba.svg",
-      "modelCount": 59,
+      "modelCount": 53,
       "name": "Alibaba",
       "protocol": "openai",
       "responses": false
@@ -154,7 +154,7 @@
       "documentationUrl": "https://www.alibabacloud.com/help/en/model-studio/models",
       "id": "alibaba-cn",
       "logo": "https://models.dev/logos/alibaba-cn.svg",
-      "modelCount": 91,
+      "modelCount": 80,
       "name": "Alibaba (China)",
       "protocol": "openai",
       "responses": false
@@ -225,7 +225,7 @@
       "documentationUrl": "https://ambient.xyz",
       "id": "ambient",
       "logo": "https://models.dev/logos/ambient.svg",
-      "modelCount": 17,
+      "modelCount": 10,
       "name": "Ambient",
       "protocol": "openai",
       "responses": false
@@ -295,7 +295,7 @@
       "documentationUrl": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",
       "id": "azure",
       "logo": "https://models.dev/logos/azure.svg",
-      "modelCount": 97,
+      "modelCount": 95,
       "name": "Azure",
       "responses": false
     },
@@ -303,7 +303,7 @@
       "documentationUrl": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",
       "id": "azure-cognitive-services",
       "logo": "https://models.dev/logos/azure-cognitive-services.svg",
-      "modelCount": 97,
+      "modelCount": 95,
       "name": "Azure Cognitive Services",
       "responses": false
     },
@@ -335,7 +335,7 @@
       "documentationUrl": "https://docs.baseten.co/inference/model-apis/overview",
       "id": "baseten",
       "logo": "https://models.dev/logos/baseten.svg",
-      "modelCount": 26,
+      "modelCount": 14,
       "name": "Baseten",
       "protocol": "openai",
       "responses": false
@@ -452,7 +452,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 72,
+      "modelCount": 73,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -503,7 +503,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 105,
+      "modelCount": 106,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.digitalocean.com/products/gradient-ai-platform/details/models/",
       "id": "digitalocean",
       "logo": "https://models.dev/logos/digitalocean.svg",
-      "modelCount": 104,
+      "modelCount": 82,
       "name": "DigitalOcean",
       "protocol": "openai",
       "responses": false
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 359,
+      "modelCount": 361,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -662,7 +662,7 @@
       "documentationUrl": "https://fastrouter.ai/models",
       "id": "fastrouter",
       "logo": "https://models.dev/logos/fastrouter.svg",
-      "modelCount": 44,
+      "modelCount": 39,
       "name": "FastRouter",
       "protocol": "openai",
       "responses": false
@@ -673,7 +673,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 24,
+      "modelCount": 29,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -714,7 +714,7 @@
       "documentationUrl": "https://docs.github.com/en/copilot",
       "id": "github-copilot",
       "logo": "https://models.dev/logos/github-copilot.svg",
-      "modelCount": 36,
+      "modelCount": 35,
       "name": "GitHub Copilot",
       "protocol": "openai",
       "responses": false
@@ -743,7 +743,7 @@
       "documentationUrl": "https://ai.google.dev/gemini-api/docs/models",
       "id": "google",
       "logo": "https://models.dev/logos/google.svg",
-      "modelCount": 41,
+      "modelCount": 38,
       "name": "Google",
       "protocol": "gemini",
       "responses": false
@@ -780,7 +780,7 @@
       "documentationUrl": "https://console.groq.com/docs/models",
       "id": "groq",
       "logo": "https://models.dev/logos/groq.svg",
-      "modelCount": 16,
+      "modelCount": 14,
       "name": "Groq",
       "protocol": "openai",
       "responses": false
@@ -821,7 +821,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 84,
+      "modelCount": 81,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -833,16 +833,6 @@
       "logo": "https://models.dev/logos/hyper.svg",
       "modelCount": 23,
       "name": "Charm Hyper",
-      "protocol": "openai",
-      "responses": false
-    },
-    {
-      "api": "https://apis.iflow.cn/v1",
-      "documentationUrl": "https://platform.iflow.cn/en/docs",
-      "id": "iflowcn",
-      "logo": "https://models.dev/logos/iflowcn.svg",
-      "modelCount": 14,
-      "name": "iFlow",
       "protocol": "openai",
       "responses": false
     },
@@ -1057,21 +1047,11 @@
       "responses": false
     },
     {
-      "api": "https://api.llama.com/compat/v1/",
-      "documentationUrl": "https://llama.developer.meta.com/docs/models",
-      "id": "llama",
-      "logo": "https://models.dev/logos/llama.svg",
-      "modelCount": 7,
-      "name": "Llama",
-      "protocol": "openai",
-      "responses": false
-    },
-    {
       "api": "https://api.llmgateway.io/v1",
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 214,
+      "modelCount": 205,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1081,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 431,
+      "modelCount": 423,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1181,7 +1161,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 211,
+      "modelCount": 200,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1243,7 +1223,7 @@
       "documentationUrl": "https://docs.mistral.ai/getting-started/models/",
       "id": "mistral",
       "logo": "https://models.dev/logos/mistral.svg",
-      "modelCount": 39,
+      "modelCount": 34,
       "name": "Mistral",
       "protocol": "openai",
       "responses": false
@@ -1355,7 +1335,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 624,
+      "modelCount": 625,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1365,7 +1345,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 56,
+      "modelCount": 57,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1405,7 +1385,7 @@
       "documentationUrl": "https://portal.neuralwatt.com/docs",
       "id": "neuralwatt",
       "logo": "https://models.dev/logos/neuralwatt.svg",
-      "modelCount": 31,
+      "modelCount": 23,
       "name": "Neuralwatt",
       "protocol": "openai",
       "responses": false
@@ -1425,7 +1405,7 @@
       "documentationUrl": "https://novita.ai/docs/guides/introduction",
       "id": "novita-ai",
       "logo": "https://models.dev/logos/novita-ai.svg",
-      "modelCount": 86,
+      "modelCount": 87,
       "name": "Novita AI",
       "protocol": "openai",
       "responses": false
@@ -1436,7 +1416,7 @@
       "documentationUrl": "https://docs.api.nvidia.com/nim/",
       "id": "nvidia",
       "logo": "https://models.dev/logos/nvidia.svg",
-      "modelCount": 51,
+      "modelCount": 52,
       "name": "Nvidia",
       "protocol": "openai",
       "responses": false
@@ -1456,7 +1436,7 @@
       "documentationUrl": "https://ofox.ai/docs",
       "id": "ofox",
       "logo": "https://models.dev/logos/ofox.svg",
-      "modelCount": 154,
+      "modelCount": 148,
       "name": "Ofox",
       "protocol": "openai",
       "responses": false
@@ -1478,7 +1458,7 @@
       "documentationUrl": "https://docs.ollama.com/cloud",
       "id": "ollama-cloud",
       "logo": "https://models.dev/logos/ollama-cloud.svg",
-      "modelCount": 29,
+      "modelCount": 23,
       "name": "Ollama Cloud",
       "protocol": "openai",
       "responses": false
@@ -1509,7 +1489,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/go/",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 33,
+      "modelCount": 34,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1540,7 +1520,7 @@
       "documentationUrl": "https://opper.ai/models",
       "id": "opper",
       "logo": "https://models.dev/logos/opper.svg",
-      "modelCount": 57,
+      "modelCount": 55,
       "name": "Opper",
       "protocol": "openai",
       "responses": false
@@ -1601,7 +1581,7 @@
       "documentationUrl": "https://docs.perplexity.ai/docs/agent-api/models",
       "id": "perplexity-agent",
       "logo": "https://models.dev/logos/perplexity-agent.svg",
-      "modelCount": 47,
+      "modelCount": 45,
       "name": "Perplexity Agent",
       "protocol": "openai",
       "responses": false
@@ -1611,7 +1591,7 @@
       "documentationUrl": "https://agent.pioneer.ai/llms.txt",
       "id": "pioneer",
       "logo": "https://models.dev/logos/pioneer.svg",
-      "modelCount": 117,
+      "modelCount": 25,
       "name": "Pioneer",
       "protocol": "openai",
       "responses": false
@@ -1621,7 +1601,7 @@
       "documentationUrl": "https://creator.poe.com/docs/external-applications/openai-compatible-api",
       "id": "poe",
       "logo": "https://models.dev/logos/poe.svg",
-      "modelCount": 142,
+      "modelCount": 139,
       "name": "Poe",
       "protocol": "openai",
       "responses": false
@@ -1672,7 +1652,7 @@
       "documentationUrl": "https://developer.qiniu.com/aitokenapi",
       "id": "qiniu-ai",
       "logo": "https://models.dev/logos/qiniu-ai.svg",
-      "modelCount": 91,
+      "modelCount": 87,
       "name": "Qiniu",
       "protocol": "openai",
       "responses": false
@@ -1769,7 +1749,7 @@
       "documentationUrl": "https://help.sap.com/docs/sap-ai-core",
       "id": "sap-ai-core",
       "logo": "https://models.dev/logos/sap-ai-core.svg",
-      "modelCount": 55,
+      "modelCount": 51,
       "name": "SAP AI Core",
       "responses": false
     },
@@ -1840,7 +1820,7 @@
       "documentationUrl": "https://cloud.siliconflow.com/models",
       "id": "siliconflow-cn",
       "logo": "https://models.dev/logos/siliconflow-cn.svg",
-      "modelCount": 44,
+      "modelCount": 40,
       "name": "SiliconFlow (China)",
       "protocol": "openai",
       "responses": false
@@ -1881,7 +1861,7 @@
       "documentationUrl": "https://platform.stepfun.com/docs/zh/overview/concept",
       "id": "stepfun",
       "logo": "https://models.dev/logos/stepfun.svg",
-      "modelCount": 9,
+      "modelCount": 7,
       "name": "StepFun (China)",
       "protocol": "openai",
       "responses": false
@@ -1891,7 +1871,7 @@
       "documentationUrl": "https://platform.stepfun.ai/docs/en/overview/concept",
       "id": "stepfun-ai",
       "logo": "https://models.dev/logos/stepfun-ai.svg",
-      "modelCount": 9,
+      "modelCount": 7,
       "name": "StepFun (Global)",
       "protocol": "openai",
       "responses": false
@@ -2142,7 +2122,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 421,
+      "modelCount": 414,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2253,7 +2233,7 @@
       "documentationUrl": "https://platform.xiaomimimo.com/#/docs",
       "id": "xiaomi",
       "logo": "https://models.dev/logos/xiaomi.svg",
-      "modelCount": 9,
+      "modelCount": 6,
       "name": "Xiaomi",
       "protocol": "openai",
       "responses": false
@@ -2263,7 +2243,7 @@
       "documentationUrl": "https://platform.xiaomimimo.com/#/docs",
       "id": "xiaomi-token-plan-ams",
       "logo": "https://models.dev/logos/xiaomi-token-plan-ams.svg",
-      "modelCount": 9,
+      "modelCount": 7,
       "name": "Xiaomi Token Plan (Europe)",
       "protocol": "openai",
       "responses": false
@@ -2273,7 +2253,7 @@
       "documentationUrl": "https://platform.xiaomimimo.com/#/docs",
       "id": "xiaomi-token-plan-cn",
       "logo": "https://models.dev/logos/xiaomi-token-plan-cn.svg",
-      "modelCount": 9,
+      "modelCount": 7,
       "name": "Xiaomi Token Plan (China)",
       "protocol": "openai",
       "responses": false
@@ -2283,7 +2263,7 @@
       "documentationUrl": "https://platform.xiaomimimo.com/#/docs",
       "id": "xiaomi-token-plan-sgp",
       "logo": "https://models.dev/logos/xiaomi-token-plan-sgp.svg",
-      "modelCount": 9,
+      "modelCount": 7,
       "name": "Xiaomi Token Plan (Singapore)",
       "protocol": "openai",
       "responses": false
@@ -2343,7 +2323,7 @@
       "documentationUrl": "https://docs.zenmux.ai",
       "id": "zenmux",
       "logo": "https://models.dev/logos/zenmux.svg",
-      "modelCount": 137,
+      "modelCount": 110,
       "name": "ZenMux",
       "protocol": "openai",
       "responses": false
@@ -2371,9 +2351,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "4b708358e32c57f66d75578bd16cde9e7220cb810c1e8b5bafac245ab407399c",
-    "generatedAt": "2026-10-22T08:38:48Z",
+    "catalogSha256": "01e6b83f055da9e9e786a583feaae4991b2f81b1a5b86442458f3a0b41fb961a",
+    "generatedAt": "2026-10-23T08:34:43Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "dd269bcae9cd54a7d14b752f5cb75bd91686587a"
+    "revision": "a051b3ca330b846f36e19afb53859258065dd1d9"
   }
 }
