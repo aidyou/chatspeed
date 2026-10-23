@@ -1687,6 +1687,9 @@ async fn recover_stopping_outdated_runtime(
     discovery_file: &Path,
     budget: Duration,
 ) -> RuntimeUnavailable {
+    #[cfg(not(target_os = "linux"))]
+    let _ = (client, discovery_file);
+
     let deadline = Instant::now() + budget;
     while process_alive(meta.pid) && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(100)).await;

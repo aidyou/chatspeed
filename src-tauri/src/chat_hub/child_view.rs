@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 
 use chatspeed_runtime_backend::error_diagnostics::FailureMessage;
-use chatspeed_runtime_backend::error_diagnostics::FailureMessage;
 use tauri::{AppHandle, PhysicalSize, Wry};
 use wry::{
     dpi::{LogicalPosition, LogicalSize},

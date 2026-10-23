@@ -21,7 +21,9 @@
 //! the window itself, which is what keeps a native view from painting over the rounded frame the
 //! window draws.
 
-use chatspeed_runtime_backend::error_diagnostics::{ErrorOrigin, FailureMessage};
+#[cfg(target_os = "linux")]
+use chatspeed_runtime_backend::error_diagnostics::ErrorOrigin;
+use chatspeed_runtime_backend::error_diagnostics::FailureMessage;
 use tauri::{AppHandle, Manager, Window, Wry};
 
 use crate::error::{AppError, Result};
