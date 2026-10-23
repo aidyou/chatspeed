@@ -1262,7 +1262,16 @@ export const useWorkflowStore = defineStore('workflow', () => {
     error.value = null;
     try {
       const result = await invokeWrapper('list_workflows');
-      workflows.value = (result || []).map(w => _parseWorkflowData(w));
+      const cachedWorkflows = new Map(workflows.value.map(workflow => [workflow.id, workflow]));
+      workflows.value = (result || []).map(w => {
+        const workflow = _parseWorkflowData(w);
+        // List rows omit runtime context; only snapshots and events replace that state.
+        const cached = cachedWorkflows.get(workflow.id);
+        if (cached?.executionContext && workflow.executionContext === undefined) {
+          workflow.executionContext = cached.executionContext;
+        }
+        return workflow;
+      });
     } catch (err) {
       await _handleError(err);
     }

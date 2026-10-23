@@ -65,10 +65,6 @@ const MCP_TOOL_DECLARATIONS_ROUTE: &str = "/control/v1/mcp-tool-declarations";
 const MCP_TOOL_STATUS_ROUTE: &str = "/control/v1/mcp-tool-status";
 const MCP_CALL_ROUTE: &str = "/control/v1/mcp-call";
 
-/// Read-only client WebView capability bridge route (U-7).
-#[cfg(test)]
-const CLIENT_CAPABILITIES_ROUTE: &str = "/control/v1/client-capabilities";
-
 /// A capability result, already carrying the stable wire code the Tauri
 /// adapters branch on.
 type CapResult<T> = Result<T, CapabilityError>;
@@ -318,31 +314,6 @@ pub async fn mcp_call(
         .post(MCP_CALL_ROUTE, &body)
         .await
         .map_err(map_client_error)
-}
-
-// ---------------------------------------------------------------------------
-// Client WebView capability bridge (U-7)
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-/// Legacy compatibility read for clients that still display the old capability
-/// inventory. Runtime workflow execution does not use this route; it uses the
-/// canonical MCP registry.
-pub async fn client_capabilities(supervisor: &RuntimeSupervisor) -> CapResult<Value> {
-    get_value(supervisor, CLIENT_CAPABILITIES_ROUTE).await
-}
-
-#[cfg(test)]
-/// Legacy typed bridge invocation retained only for protocol regression tests.
-pub async fn invoke_client_capability(
-    supervisor: &RuntimeSupervisor,
-    capability: &str,
-    request: &Value,
-) -> CapResult<Value> {
-    supervisor
-        .invoke_client_capability(capability, request)
-        .await
-        .map_err(map_runtime_error)
 }
 
 // ---------------------------------------------------------------------------

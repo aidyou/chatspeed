@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import test from 'node:test'
+import { runInNewContext } from 'node:vm'
 
 import {
   appendMissingPendingToolMessages,
@@ -12,6 +15,39 @@ import {
 } from './workflowApprovalRecovery.js'
 
 const approvalWaitingStatuses = ['awaiting_approval', 'awaiting_auto_approval']
+
+test('refreshing workflow summaries preserves recovered approvals until backend state resolves them', async () => {
+  const source = await readFile(new URL('./workflow.js', import.meta.url), 'utf8')
+  const loadSource = source.slice(
+    source.indexOf('const loadWorkflows = async'),
+    source.indexOf('const selectWorkflow = async')
+  )
+  const workflowId = 'reopened-workflow'
+  const workflows = { value: [{ id: workflowId, status: 'awaiting_approval', executionContext }] }
+  let status = 'awaiting_approval'
+  const loadWorkflows = runInNewContext(`${loadSource}; loadWorkflows`, {
+    workflows,
+    error: { value: null },
+    invokeWrapper: async () => [{ id: workflowId, status, title: 'Updated title' }],
+    _parseWorkflowData: workflow => workflow,
+    _handleError: error => { throw error }
+  })
+  const currentApprovals = () => deriveInlinePendingApprovals({
+    currentWorkflowId: workflowId,
+    status: workflows.value[0].status,
+    executionContext: workflows.value[0].executionContext,
+    approvalWaitingStatuses
+  })
+
+  await loadWorkflows()
+  assert.equal(workflows.value[0].title, 'Updated title')
+  assert.equal(workflows.value[0].executionContext, executionContext)
+  assert.deepEqual(currentApprovals().map(entry => entry.id), ['tool_571ae521'])
+
+  status = 'completed'
+  await loadWorkflows()
+  assert.deepEqual(currentApprovals(), [], 'terminal backend state must still suppress stale approvals')
+})
 
 const executionContext = {
   wait_reason: 'approval',

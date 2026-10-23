@@ -1,8 +1,6 @@
 use lazy_static::*;
 use regex::Regex;
 use std::backtrace::Backtrace;
-#[cfg(test)]
-use std::fs::File;
 use std::fs::OpenOptions;
 #[cfg(not(debug_assertions))]
 use tauri::Manager;
@@ -412,71 +410,7 @@ fn get_level(level: log::Level) -> String {
     .to_string()
 }
 
-#[cfg(test)]
-use log::SetLoggerError;
-
 use crate::constants::LOG_DIR;
-
-/// Set up logger for tests
-///
-/// Only output to console in test environment, using concise format
-#[cfg(test)]
-pub fn setup_test_logger() -> Result<(), SetLoggerError> {
-    use std::env;
-    use std::path::PathBuf;
-
-    use rust_i18n::t;
-
-    if log::logger().enabled(&log::Metadata::builder().level(log::Level::Debug).build()) {
-        return Ok(()); // Logger already initialized
-    }
-    let dev_root: PathBuf = env::var("PROJECT_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| env::current_dir().expect("Failed to get current directory"))
-        .parent()
-        .unwrap()
-        .into();
-    let log_dir = dev_root.join("dev_data").join("logs");
-    let log_file_path = log_dir.join("chatspeed.log");
-    // Ensure log directory exists
-    std::fs::create_dir_all(&log_dir).expect(&t!("main.failed_to_create_log_directory"));
-    // Create log file
-    File::create(&log_file_path).expect(&t!("main.failed_to_create_log_file"));
-
-    // Create base dispatcher
-    let base_dispatcher = fern::Dispatch::new().level(log::LevelFilter::Debug);
-
-    // Console dispatcher - concise format
-    let stdout_dispatcher = fern::Dispatch::new()
-        .level(log::LevelFilter::Debug)
-        .filter(|record| {
-            record.target().contains("chatspeed") || record.level() < log::LevelFilter::Debug
-        })
-        .format(console_log_formatter)
-        .chain(std::io::stdout());
-
-    // File dispatcher - detailed format
-    let file_dispatcher = fern::Dispatch::new()
-        .level(log::LevelFilter::Debug)
-        .filter(|record| {
-            record.target().contains("chatspeed") || record.level() < log::LevelFilter::Info
-        })
-        .format(file_log_formatter)
-        .chain(fern::log_file(&log_file_path).expect(&t!("main.failed_to_create_log_file")));
-
-    // Apply logger configuration
-    base_dispatcher
-        .chain(stdout_dispatcher)
-        .chain(file_dispatcher)
-        .apply()
-        .expect(&t!("main.failed_to_initialize_logger"));
-
-    log::debug!(
-        "Test logger initialized successfully, log file path: {:?}",
-        log_file_path
-    );
-    Ok(())
-}
 
 mod tests {
     #[test]

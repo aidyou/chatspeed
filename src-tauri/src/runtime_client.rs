@@ -1615,6 +1615,14 @@ async fn replace_outdated_runtime(
 }
 
 fn runtime_is_outdated(meta: &MetaResponse) -> bool {
+    #[cfg(target_os = "linux")]
+    let binary_replaced = chatspeed_runtime_client::runtime_binary_replaced(meta.pid);
+    #[cfg(not(target_os = "linux"))]
+    let binary_replaced = false;
+    runtime_requires_replacement(meta, binary_replaced)
+}
+
+fn runtime_requires_replacement(meta: &MetaResponse, binary_replaced: bool) -> bool {
     if meta.service != chatspeed_runtime_client::RUNTIME_SERVICE_NAME || meta.pid == 0 {
         return false;
     }
@@ -1625,11 +1633,9 @@ fn runtime_is_outdated(meta: &MetaResponse) -> bool {
         runtime_version_order(version)
             .map_or(version != env!("CARGO_PKG_VERSION"), |order| order.is_lt())
     });
-    #[cfg(target_os = "linux")]
-    let binary_replaced = chatspeed_runtime_client::runtime_binary_replaced(meta.pid);
-    #[cfg(not(target_os = "linux"))]
-    let binary_replaced = false;
-    version_changed || binary_replaced
+    // Development rebuilds must not cancel live work when the desktop reconnects.
+    // Explicitly stopping the runtime loads the rebuilt binary on the next start.
+    version_changed || (binary_replaced && !cfg!(debug_assertions))
 }
 
 fn runtime_is_newer(meta: &MetaResponse) -> bool {
@@ -3317,6 +3323,29 @@ mod tests {
         assert!(status.base_url.is_some(), "{status:?}");
         supervisor.release().await.expect("release");
         server.abort();
+    }
+
+    #[test]
+    fn runtime_replacement_preserves_same_version_development_work() {
+        let mut meta = MetaResponse {
+            service: chatspeed_runtime_client::RUNTIME_SERVICE_NAME.to_string(),
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            schema_version: chatspeed_contracts::SCHEMA_VERSION,
+            server_instance_id: "rebuilt-instance".to_string(),
+            pid: std::process::id(),
+            package_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        };
+        assert!(!runtime_requires_replacement(&meta, false));
+        assert_eq!(
+            runtime_requires_replacement(&meta, true),
+            !cfg!(debug_assertions),
+            "only packaged builds automatically replace a rebuilt same-version runtime"
+        );
+        meta.package_version = Some("0.0.0".to_string());
+        assert!(runtime_requires_replacement(&meta, false));
+        assert!(runtime_requires_replacement(&meta, true));
+        meta.package_version = Some("999.0.0".to_string());
+        assert!(!runtime_requires_replacement(&meta, true));
     }
 
     #[test]

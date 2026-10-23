@@ -630,8 +630,12 @@ const workflowEventSetup = sourceSection(
   'const setupWorkflowEvents = async',
   '/**\n     * Select workflow with session isolation'
 )
-assert.match(workflowEventSetup, /setupRevision !== workflowEventSetupRevision/)
-assert.match(workflowEventSetup, /unlisten\(\)[\s\S]*return false/)
+assert.match(workflowEventSetup, /hydrateWorkflowSession\(/)
+assert.match(
+  workflowEventSetup,
+  /isCurrent: \(\) => setupRevision === workflowEventSetupRevision && currentSessionId\.value === sessionId/
+)
+assert.match(workflowEventSetup, /if \(!applied\) \{\s*stop\(\)\s*return false/)
 assert.match(
   workflowEventSetup,
   /if \(isTerminalState\) \{[\s\S]*clearRetryTimer\(\)[\s\S]*workflowStore\.setNotification\('', 'info'\)/

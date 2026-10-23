@@ -2960,10 +2960,24 @@ pub(crate) async fn get_workflow_snapshot_core(
                     has_live_session,
                 )?;
             }
-            let execution_context = restore_context_for_signal(
+            let mut execution_context = restore_context_for_signal(
                 reconciliation_store.clone(),
                 &reconciliation_session_id,
             );
+            if !has_live_session
+                && snapshot.workflow.status == WorkflowState::Cancelled.to_string()
+                && has_restored_approval_wait(execution_context.as_ref())
+            {
+                let store = &*reconciliation_store;
+                let context = execution_context.as_ref().ok_or_else(|| {
+                    "Recovered approval context disappeared before persistence".to_string()
+                })?;
+                persist_restored_approval_wait(store, &reconciliation_session_id, context)?;
+                snapshot.workflow.status = WorkflowState::AwaitingApproval.to_string();
+                execution_context = store
+                    .get_execution_context(&reconciliation_session_id)
+                    .map_err(|error| error.to_string())?;
+            }
             let tail_rewind_kind = {
                 let store = &*reconciliation_store;
                 store
@@ -3538,10 +3552,89 @@ fn compat_is_awaiting_user_snapshot_status(status: &str) -> bool {
 }
 
 #[cfg(not(feature = "desktop"))]
+fn recover_stopped_approval_from_events(
+    mut context: ExecutionContext,
+    events: &[crate::workflow::react::events::WorkflowEventRecord],
+) -> Result<ExecutionContext, crate::workflow::react::replay::RecoveryError> {
+    if context.state != RuntimeState::Cancelled || events.is_empty() {
+        return Ok(context);
+    }
+    let cancel_index = events.iter().rposition(|event| {
+        event.event_type == "state_changed" && event.event_data["to_state"] == "cancelled"
+    });
+    let before_stop_events = match cancel_index {
+        Some(index)
+            if events[index + 1..]
+                .iter()
+                .all(|event| event.event_type == "workflow_cancelled") =>
+        {
+            &events[..index]
+        }
+        _ => events,
+    };
+    if before_stop_events.is_empty() {
+        return Ok(context);
+    }
+    let mut before_stop =
+        replay_events_to_execution_context(&context.session_id, before_stop_events)?;
+    let started_tool_ids: std::collections::HashSet<&str> = before_stop_events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type.as_str(),
+                "tool_started" | "tool_completed" | "tool_failed"
+            )
+        })
+        .filter_map(|event| event.event_data["tool_call_id"].as_str())
+        .collect();
+    before_stop
+        .pending_tools
+        .retain(|tool| !started_tool_ids.contains(tool.tool_call_id.as_str()));
+    if before_stop.wait_reason == Some(WaitReason::Approval)
+        && !before_stop.pending_tools.is_empty()
+    {
+        log::info!(
+            "[Workflow][session={}][phase=restore] Recovered {} unexecuted approval(s) after stop",
+            context.session_id,
+            before_stop.pending_tools.len()
+        );
+        context.state = RuntimeState::Waiting;
+        context.wait_reason = Some(WaitReason::Approval);
+        context.pending_tools = before_stop.pending_tools;
+    }
+    Ok(context)
+}
+
+#[cfg(not(feature = "desktop"))]
 fn restore_context_for_signal(store: Arc<MainStore>, session_id: &str) -> Option<ExecutionContext> {
-    match restore_execution_context(store, session_id) {
+    match restore_execution_context(store.clone(), session_id) {
         RecoveryResult::SnapshotHit { context } | RecoveryResult::ReplayFallback { context } => {
-            Some(context)
+            if context.state != RuntimeState::Cancelled {
+                return Some(context);
+            }
+            match store.list_workflow_events(session_id) {
+                Ok(events) => {
+                    match recover_stopped_approval_from_events(context.clone(), &events) {
+                        Ok(recovered) => Some(recovered),
+                        Err(error) => {
+                            log::warn!(
+                            "[Workflow][session={}][phase=restore] Approval recovery from events failed: {}",
+                            session_id,
+                            error
+                        );
+                            Some(context)
+                        }
+                    }
+                }
+                Err(error) => {
+                    log::warn!(
+                        "[Workflow][session={}][phase=restore] Approval event read failed: {}",
+                        session_id,
+                        error
+                    );
+                    Some(context)
+                }
+            }
         }
         RecoveryResult::SafeFailed { error, .. } => {
             if error.is_empty_replay_history() {
@@ -3559,6 +3652,38 @@ fn restore_context_for_signal(store: Arc<MainStore>, session_id: &str) -> Option
             None
         }
     }
+}
+
+#[cfg(not(feature = "desktop"))]
+fn has_restored_approval_wait(context: Option<&ExecutionContext>) -> bool {
+    context.is_some_and(|context| {
+        context.state == RuntimeState::Waiting
+            && context.wait_reason == Some(WaitReason::Approval)
+            && !context.pending_tools.is_empty()
+    })
+}
+
+#[cfg(not(feature = "desktop"))]
+fn persist_restored_approval_wait(
+    store: &MainStore,
+    session_id: &str,
+    context: &ExecutionContext,
+) -> Result<(), String> {
+    let persisted = store
+        .upsert_execution_context_preserving_concurrent_completions(context)
+        .map_err(|error| error.to_string())?;
+    if !persisted {
+        return Err("Recovered approval snapshot changed during persistence".to_string());
+    }
+    store
+        .update_workflow_status(session_id, &WorkflowState::AwaitingApproval.to_string())
+        .map_err(|error| error.to_string())?;
+    log::info!(
+        "[Workflow][session={}][phase=restore] Persisted approval wait with {} pending tool(s)",
+        session_id,
+        context.pending_tools.len()
+    );
+    Ok(())
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -3821,6 +3946,23 @@ pub(crate) async fn workflow_start_core(
             ApplicationError::conflict(format!("Session already exists: {}", session_id))
                 .with_reason(chatspeed_contracts::ErrorReason::SessionAlreadyExists),
         );
+    }
+
+    // A runtime shutdown may have stopped an approval before the tool began.
+    // Restore the existing waiting path only when structured recovery proves it is still pending.
+    let stopped_approval = (workflow_status == WorkflowState::Cancelled.to_string())
+        .then(|| restore_context_for_signal(main_store_arc.clone(), &session_id))
+        .flatten();
+    if has_restored_approval_wait(stopped_approval.as_ref()) {
+        log::info!(
+            "[Workflow][session={}][phase=start] Resuming interrupted approval wait",
+            session_id
+        );
+        let context = stopped_approval.as_ref().ok_or_else(|| {
+            ApplicationError::state("Recovered approval context disappeared".to_string())
+        })?;
+        persist_restored_approval_wait(&main_store_arc, &session_id, context)
+            .map_err(ApplicationError::state)?;
     }
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
@@ -6781,6 +6923,7 @@ pub(crate) async fn workflow_command_core(
 #[cfg(all(test, not(feature = "desktop")))]
 mod tests {
     use super::*;
+    use crate::workflow::react::events::WorkflowEventRecord;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -6795,6 +6938,220 @@ mod tests {
         fn deref(&self) -> &Self::Target {
             &self.store
         }
+    }
+
+    #[test]
+    fn stopped_unexecuted_approval_recovers_but_started_tool_does_not() {
+        let session_id = "reopened-approval";
+        let record = |id, event_type: &str, event_data| WorkflowEventRecord {
+            id,
+            session_id: session_id.to_string(),
+            event_type: event_type.to_string(),
+            event_version: "1.0.0".to_string(),
+            event_data,
+            created_at: "2026-01-01 00:00:00".to_string(),
+        };
+        let command = "command -v cargo rustc; cargo --version 2>&1 | head -2";
+        let prefix = vec![
+            record(
+                1,
+                "workflow_started",
+                serde_json::json!({ "agent_id": "agent" }),
+            ),
+            record(
+                2,
+                "state_changed",
+                serde_json::json!({ "from_state": "executing", "to_state": "awaiting_approval" }),
+            ),
+            record(
+                3,
+                "wait_entered",
+                serde_json::json!({
+                    "wait_reason": "approval",
+                    "pending_tools": [{
+                        "tool_call_id": "tool_48e02194",
+                        "tool_name": "bash",
+                        "arguments": { "command": command },
+                        "details": { "command": command },
+                        "display_type": "text"
+                    }]
+                }),
+            ),
+            record(
+                4,
+                "approval_requested",
+                serde_json::json!({
+                    "tool_call_id": "tool_48e02194", "tool_name": "bash",
+                    "arguments": { "command": command }, "details": { "command": command },
+                    "display_type": "text"
+                }),
+            ),
+        ];
+        let stop_events = [
+            record(
+                5,
+                "state_changed",
+                serde_json::json!({ "from_state": "awaiting_approval", "to_state": "cancelled" }),
+            ),
+            record(6, "workflow_cancelled", serde_json::json!({})),
+        ];
+        let mut events = prefix.clone();
+        events.extend(stop_events.clone());
+        let stopped = replay_events_to_execution_context(session_id, &events).expect("replay stop");
+        assert_eq!(stopped.state, RuntimeState::Cancelled);
+        assert!(stopped.pending_tools.is_empty());
+        let recovered =
+            recover_stopped_approval_from_events(stopped, &events).expect("recover approval");
+        assert_eq!(recovered.state, RuntimeState::Waiting);
+        assert_eq!(recovered.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(recovered.pending_tools.len(), 1);
+        assert_eq!(recovered.pending_tools[0].arguments["command"], command);
+        assert_eq!(recovered.last_event_id, Some(6));
+
+        let mut started_events = prefix;
+        started_events.extend([
+            record(
+                5,
+                "approval_resolved",
+                serde_json::json!({ "tool_call_id": "tool_48e02194", "approved": true }),
+            ),
+            record(
+                6,
+                "tool_started",
+                serde_json::json!({ "tool_call_id": "tool_48e02194", "tool_name": "bash" }),
+            ),
+            record(
+                7,
+                "state_changed",
+                serde_json::json!({ "from_state": "executing", "to_state": "cancelled" }),
+            ),
+            record(8, "workflow_cancelled", serde_json::json!({})),
+        ]);
+        let started = replay_events_to_execution_context(session_id, &started_events)
+            .expect("replay started tool");
+        let unrecovered = recover_stopped_approval_from_events(started, &started_events)
+            .expect("inspect started tool");
+        assert_eq!(unrecovered.state, RuntimeState::Cancelled);
+        assert!(unrecovered.pending_tools.is_empty());
+
+        let mixed_events = vec![
+            record(
+                1,
+                "workflow_started",
+                serde_json::json!({ "agent_id": "agent" }),
+            ),
+            record(
+                2,
+                "wait_entered",
+                serde_json::json!({
+                    "wait_reason": "approval",
+                    "pending_tools": [
+                        { "tool_call_id": "already_started", "tool_name": "bash", "arguments": { "command": "first" } },
+                        { "tool_call_id": "still_pending", "tool_name": "bash", "arguments": { "command": "second" } }
+                    ]
+                }),
+            ),
+            record(
+                3,
+                "tool_started",
+                serde_json::json!({ "tool_call_id": "already_started", "tool_name": "bash" }),
+            ),
+            record(
+                4,
+                "state_changed",
+                serde_json::json!({ "from_state": "executing", "to_state": "cancelled" }),
+            ),
+            record(5, "workflow_cancelled", serde_json::json!({})),
+        ];
+        let mixed = replay_events_to_execution_context(session_id, &mixed_events)
+            .expect("replay mixed tools");
+        let recovered_mixed = recover_stopped_approval_from_events(mixed, &mixed_events)
+            .expect("recover only unexecuted tool");
+        assert_eq!(recovered_mixed.state, RuntimeState::Waiting);
+        assert_eq!(recovered_mixed.pending_tools.len(), 1);
+        assert_eq!(
+            recovered_mixed.pending_tools[0].tool_call_id,
+            "still_pending"
+        );
+    }
+
+    #[test]
+    fn cancelled_snapshot_recovers_only_the_unexecuted_approval() {
+        let dir = tempdir().expect("tempdir");
+        let store =
+            Arc::new(MainStore::new(dir.path().join("approval-recovery.db")).expect("store"));
+        let session_id = "cancelled-approval-snapshot";
+        seed_agent(&store, "agent");
+        store
+            .create_workflow(session_id, "Approval recovery", "agent", None, None)
+            .expect("create workflow");
+        store
+            .update_workflow_status(session_id, &WorkflowState::Cancelled.to_string())
+            .expect("stop workflow");
+        let command = "command -v cargo rustc; cargo --version 2>&1 | head -2";
+        let pending_tool = serde_json::json!({
+            "tool_call_id": "tool_48e02194",
+            "tool_name": "bash",
+            "arguments": { "command": command },
+            "details": { "command": command },
+            "display_type": "text"
+        });
+        for event in [
+            WorkflowEvent::workflow_started(session_id.to_string(), "agent".to_string()),
+            WorkflowEvent::state_changed(
+                session_id.to_string(),
+                "executing".to_string(),
+                "awaiting_approval".to_string(),
+            ),
+            WorkflowEvent::wait_entered(
+                session_id.to_string(),
+                "approval".to_string(),
+                vec![pending_tool],
+            ),
+            WorkflowEvent::state_changed(
+                session_id.to_string(),
+                "awaiting_approval".to_string(),
+                "cancelled".to_string(),
+            ),
+            WorkflowEvent::workflow_cancelled(session_id.to_string()),
+        ] {
+            store.append_workflow_event(&event).expect("persist event");
+        }
+        let mut snapshot = ExecutionContext::new(session_id.to_string());
+        snapshot.state = RuntimeState::Cancelled;
+        store
+            .upsert_execution_context(&snapshot)
+            .expect("persist cancelled snapshot");
+
+        let recovered =
+            restore_context_for_signal(store.clone(), session_id).expect("restore snapshot");
+        assert_eq!(recovered.state, RuntimeState::Waiting);
+        assert_eq!(recovered.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(recovered.pending_tools.len(), 1);
+        assert_eq!(recovered.pending_tools[0].arguments["command"], command);
+        let persisted = store
+            .get_execution_context(session_id)
+            .expect("read snapshot")
+            .expect("persisted snapshot");
+        assert_eq!(persisted.state, RuntimeState::Cancelled);
+
+        persist_restored_approval_wait(&store, session_id, &recovered)
+            .expect("persist recovered approval");
+        let resumed = store
+            .get_execution_context(session_id)
+            .expect("read recovered snapshot")
+            .expect("recovered snapshot");
+        assert_eq!(resumed.state, RuntimeState::Waiting);
+        assert_eq!(resumed.wait_reason, Some(WaitReason::Approval));
+        assert_eq!(resumed.pending_tools.len(), 1);
+        assert_eq!(
+            store
+                .get_workflow(session_id)
+                .expect("read workflow")
+                .expect("workflow")
+                .status,
+            WorkflowState::AwaitingApproval.to_string()
+        );
     }
 
     #[test]

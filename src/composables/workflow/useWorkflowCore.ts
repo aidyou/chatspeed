@@ -26,6 +26,7 @@ import {
 } from './messageProjectionRules'
 import { formatActiveModelName } from './modelConfigSelection'
 import { removeWorkflowInputDraft } from './useWorkflowInputDraftCache'
+import { hydrateWorkflowSession } from './workflowSessionHydration.js'
 import { AGENT_ROLE, SUB_AGENT_ROLE } from '@/constants/agent'
 import { resolveExecutionStylePreference } from '@/constants/executionStyle'
 import { USER_ERROR_REASONS } from '@/constants/errorReasons'
@@ -1200,7 +1201,7 @@ export function useWorkflowCore({
      * Setup workflow event listeners with error boundary
      * Phase 9: UI exceptions must be degradable, cannot block workflow execution
      */
-    const setupWorkflowEvents = async (sessionId) => {
+    const setupWorkflowEvents = async (sessionId, hydrateSnapshot = async () => {}) => {
         const setupRevision = ++workflowEventSetupRevision
         // Update current session ID for event isolation
         currentSessionId.value = sessionId
@@ -1211,7 +1212,7 @@ export function useWorkflowCore({
         }
 
         const eventName = `workflow://event/${sessionId}`
-        const unlisten = await listen(eventName, (event) => {
+        const applyEvent = payload => {
             // Phase 9: Session isolation check - ignore events from non-current sessions
             if (currentSessionId.value !== sessionId) {
                 console.warn(`[Workflow] Ignoring event from non-active session: ${sessionId}`)
@@ -1220,7 +1221,6 @@ export function useWorkflowCore({
 
             // Phase 9: Error boundary - capture UI update exceptions
             safeExecute(() => {
-                const payload = event.payload
                 if (!payload?.type) return
                 if (payload.type === 'reset_required') {
                     console.warn(`[Workflow] Resetting active session after SSE gap: ${sessionId}`)
@@ -1498,23 +1498,49 @@ export function useWorkflowCore({
                     const { tool_id, output } = payload
                     workflowStore.appendToolStream(tool_id, output)
                 }
-            }, undefined, `workflowEvent:${event.payload?.type || 'unknown'}`)
-        })
-
-        if (setupRevision !== workflowEventSetupRevision || currentSessionId.value !== sessionId) {
-            unlisten()
-            return false
+            }, undefined, `workflowEvent:${payload?.type || 'unknown'}`)
         }
 
+        let registeredUnlisten = null
         try {
-            await invokeWrapper('workflow_subscribe', { sessionId })
+            const { stop, applied } = await hydrateWorkflowSession({
+                registerListener: async handleEvent => {
+                    const stop = await listen(eventName, event => handleEvent(event.payload))
+                    try {
+                        await invokeWrapper('workflow_subscribe', { sessionId })
+                        return stop
+                    } catch (error) {
+                        stop()
+                        throw error
+                    }
+                },
+                fetchSnapshot: () => setupRevision === workflowEventSetupRevision && currentSessionId.value === sessionId
+                    ? hydrateSnapshot()
+                    : undefined,
+                applySnapshot: () => {},
+                applyEvent,
+                isCurrent: () => setupRevision === workflowEventSetupRevision && currentSessionId.value === sessionId,
+                onListenerRegistered: stop => {
+                    registeredUnlisten = stop
+                    if (setupRevision === workflowEventSetupRevision && currentSessionId.value === sessionId) {
+                        unlistenWorkflowEvents.value = stop
+                    } else {
+                        stop()
+                    }
+                }
+            })
+            if (!applied) {
+                stop()
+                return false
+            }
         } catch (error) {
-            console.warn(`[Workflow] Failed to subscribe runtime events for session ${sessionId}:`, error)
-            unlisten()
-            return false
+            registeredUnlisten?.()
+            if (unlistenWorkflowEvents.value === registeredUnlisten) {
+                unlistenWorkflowEvents.value = null
+            }
+            throw error
         }
 
-        unlistenWorkflowEvents.value = unlisten
         await syncBackgroundStateListeners()
         return true
     }
@@ -1602,9 +1628,11 @@ export function useWorkflowCore({
             clearRetryTimer()
         }, undefined, 'cleanupPreviousSession')
 
-        // Select the workflow in store (includes Task Ledger rebuild)
+        // Subscribe before loading the snapshot so approvals issued during reconnect are buffered.
         try {
-            await workflowStore.selectWorkflow(id)
+            if (!(await setupWorkflowEvents(id, () => workflowStore.selectWorkflow(id)))) {
+                return
+            }
         } catch (error) {
             console.error('[Workflow] selectWorkflow failed:', error)
             // Automatic recovery reports through the runtime banner, never a toast loop.
@@ -1622,10 +1650,6 @@ export function useWorkflowCore({
                 selectedAgent.value = agent
             }
 
-            // Setup event listeners for the existing session (always setup, even if no agent)
-            if (!(await setupWorkflowEvents(id))) {
-                return
-            }
             await reconcilePendingSubAgentApprovals()
             if (workflowStore.currentWorkflowId !== id || currentSessionId.value !== id) {
                 return

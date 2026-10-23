@@ -8,16 +8,17 @@ import { TERMINAL_SKINS } from '../../constants/terminalThemes.js'
 const read = path => readFile(new URL(`../../../${path}`, import.meta.url), 'utf8')
 
 test('workflow terminal stays isolated from the workflow runtime and is workflow-window gated', async () => {
-  const [manager, commands, runtime] = await Promise.all([
+  const [desktop, manager, commands, runtime] = await Promise.all([
     read('src-tauri/src/terminal.rs'),
+    read('src-tauri/crates/backend/src/terminal.rs'),
     read('src-tauri/src/commands/terminal.rs'),
     read('src-tauri/crates/backend/src/workflow/react/manager.rs')
   ])
 
   assert.match(manager, /struct TerminalManager/)
-  assert.match(manager, /abort_terminal_session/)
-  assert.match(manager, /reader I\/O error or output-event delivery failure/)
-  assert.match(manager, /direct user[\s\S]*not AI shell-tool executions/)
+  assert.match(desktop, /abort_terminal_session/)
+  assert.match(desktop, /reader I\/O error or output-event delivery failure/)
+  assert.match(desktop, /direct user[\s\S]*not AI shell-tool executions/)
   assert.match(commands, /ensure_workflow_window/)
   assert.match(commands, /terminal_workflow_window_required/)
   assert.match(runtime, /struct WorkflowManager/)
