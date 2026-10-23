@@ -10,6 +10,7 @@ use crate::ccproxy::{
     adapter::{
         input::from_openai_responses,
         output::{OpenAIResponsesOutputAdapter, OutputAdapterEnum},
+        unified::UnifiedRequest,
     },
     diagnostic::{self, RequestContext},
     errors::{CCProxyError, ProxyResult},
@@ -51,6 +52,61 @@ fn get_provider_responses_full_url(base_url: &str) -> String {
     format!("{}/responses", base_url.trim_end_matches('/'))
 }
 
+fn has_active_reasoning_effort(effort: Option<&str>) -> bool {
+    effort.is_some_and(|effort| !effort.is_empty() && effort != "none")
+}
+
+fn remove_reasoning_sampling_params(body: &mut Value) {
+    if !has_active_reasoning_effort(
+        body.get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(Value::as_str),
+    ) {
+        return;
+    }
+
+    if let Some(object) = body.as_object_mut() {
+        for key in ["temperature", "top_p", "top_logprobs"] {
+            object.remove(key);
+        }
+        if let Some(include) = object.get_mut("include").and_then(Value::as_array_mut) {
+            include.retain(|item| item.as_str() != Some("message.output_text.logprobs"));
+            if include.is_empty() {
+                object.remove("include");
+            }
+        }
+    }
+}
+
+fn remove_adapted_reasoning_sampling_params(request: &mut UnifiedRequest) {
+    if !has_active_reasoning_effort(request.reasoning_effort.as_deref()) {
+        return;
+    }
+
+    request.temperature = None;
+    request.top_p = None;
+    request.top_logprobs = None;
+    request.logprobs = None;
+
+    if let Some(custom_params) = request.custom_params.as_mut() {
+        let params = if custom_params.is_array() {
+            custom_params.as_array_mut()
+        } else {
+            custom_params
+                .get_mut("customParams")
+                .and_then(Value::as_array_mut)
+        };
+        if let Some(params) = params {
+            params.retain(|param| {
+                !matches!(
+                    param.get("key").and_then(Value::as_str),
+                    Some("temperature" | "top_p" | "top_logprobs" | "logprobs")
+                )
+            });
+        }
+    }
+}
+
 fn prepare_direct_responses_body(
     client_request_body: &[u8],
     backend_model: &str,
@@ -68,6 +124,8 @@ fn prepare_direct_responses_body(
             Value::String(backend_model.trim().to_string()),
         );
     }
+
+    remove_reasoning_sampling_params(&mut body_json);
 
     Ok(body_json)
 }
@@ -585,6 +643,7 @@ pub async fn handle_responses(
             )
         })?;
     prepare_unified_request_for_proxy_model(&mut unified_request, &proxy_model);
+    remove_adapted_reasoning_sampling_params(&mut unified_request);
 
     execute_unified_chat_request(
         ChatProtocol::OpenAI,
@@ -607,9 +666,12 @@ pub async fn handle_responses(
 #[cfg(test)]
 mod tests {
     use super::{
-        direct_forward_responses, prepare_direct_responses_body, response_usage_tokens,
+        direct_forward_responses, prepare_direct_responses_body,
+        remove_adapted_reasoning_sampling_params, response_usage_tokens,
         response_usage_tokens_from_body, supports_responses_api, OpenAIResponsesRoutingRequest,
     };
+    use crate::ccproxy::adapter::unified::UnifiedRequest;
+    use crate::ccproxy::handler::chat_handler::prepare_unified_request_for_proxy_model;
     use crate::ccproxy::types::{ChatProtocol, ProxyModel};
     use crate::db::MainStore;
     use axum::body::Body;
@@ -746,6 +808,107 @@ mod tests {
         expected["model"] = json!("gpt-5.6");
 
         assert_eq!(modified, expected);
+    }
+
+    #[test]
+    fn direct_responses_removes_sampling_params_with_active_reasoning() {
+        let request = json!({
+            "model": "alias",
+            "input": "hello",
+            "reasoning": { "effort": "high" },
+            "temperature": 1,
+            "top_p": 0.9,
+            "top_logprobs": 3,
+            "include": ["reasoning.encrypted_content", "message.output_text.logprobs"]
+        });
+        let body = serde_json::to_vec(&request).expect("request should serialize");
+
+        let modified =
+            prepare_direct_responses_body(&body, "backend").expect("body should prepare");
+
+        assert_eq!(modified["model"], "backend");
+        assert_eq!(modified["reasoning"], request["reasoning"]);
+        assert_eq!(modified["include"], json!(["reasoning.encrypted_content"]));
+        for key in ["temperature", "top_p", "top_logprobs"] {
+            assert!(modified.get(key).is_none(), "{key} should be removed");
+        }
+    }
+
+    #[test]
+    fn direct_responses_removes_empty_logprobs_include() {
+        let request = json!({
+            "model": "alias",
+            "input": "hello",
+            "reasoning": { "effort": "high" },
+            "include": ["message.output_text.logprobs"]
+        });
+        let body = serde_json::to_vec(&request).expect("request should serialize");
+
+        let modified =
+            prepare_direct_responses_body(&body, "backend").expect("body should prepare");
+
+        assert!(modified.get("include").is_none());
+    }
+
+    #[test]
+    fn direct_responses_keeps_sampling_params_without_active_reasoning() {
+        for reasoning in [None, Some(json!({})), Some(json!({ "effort": "none" }))] {
+            let mut request = json!({
+                "model": "alias",
+                "input": "hello",
+                "temperature": 1,
+                "top_p": 0.9,
+                "top_logprobs": 3,
+                "include": ["message.output_text.logprobs"]
+            });
+            if let Some(reasoning) = reasoning {
+                request["reasoning"] = reasoning;
+            }
+            let body = serde_json::to_vec(&request).expect("request should serialize");
+
+            let modified =
+                prepare_direct_responses_body(&body, "backend").expect("body should prepare");
+
+            for key in ["temperature", "top_p", "top_logprobs"] {
+                assert_eq!(modified[key], request[key]);
+            }
+            assert_eq!(modified["include"], request["include"]);
+        }
+    }
+
+    #[test]
+    fn adapted_responses_removes_merged_sampling_params_with_active_reasoning() {
+        let mut model = proxy_model_with_metadata(None);
+        model.temperature = Some(1.0);
+        model.top_p = Some(0.9);
+        model.custom_params = Some(json!({
+            "customParams": [
+                { "key": "temperature", "value": 1 },
+                { "key": "top_p", "value": 0.9 },
+                { "key": "top_logprobs", "value": 3 },
+                { "key": "logprobs", "value": true },
+                { "key": "store", "value": false }
+            ]
+        }));
+        let mut request = UnifiedRequest {
+            reasoning_effort: Some("high".to_string()),
+            top_logprobs: Some(3),
+            logprobs: Some(true),
+            ..Default::default()
+        };
+
+        prepare_unified_request_for_proxy_model(&mut request, &model);
+        remove_adapted_reasoning_sampling_params(&mut request);
+
+        assert_eq!(request.temperature, None);
+        assert_eq!(request.top_p, None);
+        assert_eq!(request.top_logprobs, None);
+        assert_eq!(request.logprobs, None);
+        assert_eq!(request.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            request.custom_params.as_ref().unwrap()["customParams"],
+            json!([{ "key": "store", "value": false }])
+        );
     }
 
     #[test]
