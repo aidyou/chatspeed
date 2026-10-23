@@ -689,7 +689,17 @@ impl DbBackup {
                 )
             })?;
 
-            let outpath = match file.name() {
+            // zip 9 validates entry names on access, so a malformed name is
+            // skipped like any other unrecognized entry instead of aborting the
+            // whole restore. The name is owned because `read` below needs `file`
+            // mutably.
+            let Ok(entry_name) = file.name() else {
+                log::warn!("Skipping zip entry {i} with a malformed name");
+                continue;
+            };
+            let entry_name = entry_name.into_owned();
+            let name = entry_name.as_str();
+            let outpath = match name {
                 name if name.starts_with("themes/") => {
                     let rel_path = Path::new(name.trim_start_matches("themes/"));
                     theme_dir.join(rel_path)
@@ -717,7 +727,7 @@ impl DbBackup {
                 _ => continue, // Skip files not in themes/, uploads/, mcp_sessions/, schema/, shared/ or static/
             };
 
-            if file.name().ends_with('/') {
+            if name.ends_with('/') {
                 fs::create_dir_all(&outpath).map_err(|e| {
                     error!("Failed to create directory {}: {}", outpath.display(), e);
                     StoreError::IoError(

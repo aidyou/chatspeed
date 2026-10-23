@@ -88,7 +88,16 @@ pub fn extract_zip_with_limits(
             ))
         })?;
 
-        let raw_name = entry.name().to_string();
+        // zip 9 validates entry names on access; a name it cannot represent is
+        // refused the same way an empty or colliding name already is below.
+        let raw_name = entry
+            .name()
+            .map_err(|error| {
+                CapabilityError::refused(format!(
+                    "the skill archive contains an entry with an invalid name at index {index}: {error}"
+                ))
+            })?
+            .to_string();
         if raw_name.trim().is_empty() {
             return Err(CapabilityError::refused(
                 "the skill archive contains an entry with an empty name",

@@ -99,7 +99,7 @@ walkdir          = "2.5.0"
 whatlang         = "0.18.0"
 wildmatch        = "2.6.1"
 xxhash-rust      = { version = "0.8.15", features = ["xxh32"] }
-zip              = "8.6.0"
+zip              = "9.0.5"
 
 # Windows-only: the owned-process supervisor terminates a shell's whole tree
 # through a Job Object (`Win32_System_JobObjects`), and the idle-sleep inhibitor
