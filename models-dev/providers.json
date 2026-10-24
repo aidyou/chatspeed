@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.digitalocean.com/products/gradient-ai-platform/details/models/",
       "id": "digitalocean",
       "logo": "https://models.dev/logos/digitalocean.svg",
-      "modelCount": 82,
+      "modelCount": 83,
       "name": "DigitalOcean",
       "protocol": "openai",
       "responses": false
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 361,
+      "modelCount": 372,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -693,7 +693,7 @@
       "documentationUrl": "https://friendli.ai/docs/guides/serverless_endpoints/introduction",
       "id": "friendli",
       "logo": "https://models.dev/logos/friendli.svg",
-      "modelCount": 6,
+      "modelCount": 5,
       "name": "Friendli",
       "protocol": "openai",
       "responses": false
@@ -971,7 +971,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 397,
+      "modelCount": 398,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://www.kimi.com/code/docs/en/kimi-code/models.html",
       "id": "kimi-code-plan-cn",
       "logo": "https://models.dev/logos/kimi-code-plan-cn.svg",
-      "modelCount": 4,
+      "modelCount": 6,
       "name": "Kimi For Coding (kimi.com)",
       "protocol": "openai",
       "responses": false
@@ -991,7 +991,7 @@
       "documentationUrl": "https://www.kimi.ai/code/docs/en/kimi-code/models.html",
       "id": "kimi-code-plan-global",
       "logo": "https://models.dev/logos/kimi-code-plan-global.svg",
-      "modelCount": 4,
+      "modelCount": 6,
       "name": "Kimi For Coding (kimi.ai)",
       "protocol": "openai",
       "responses": false
@@ -1051,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 205,
+      "modelCount": 207,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 423,
+      "modelCount": 426,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1161,7 +1161,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 200,
+      "modelCount": 201,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1295,7 +1295,7 @@
       "documentationUrl": "https://platform.moonshot.ai/docs/api/chat",
       "id": "moonshotai",
       "logo": "https://models.dev/logos/moonshotai.svg",
-      "modelCount": 4,
+      "modelCount": 6,
       "name": "Moonshot AI",
       "protocol": "openai",
       "responses": false
@@ -1305,7 +1305,7 @@
       "documentationUrl": "https://platform.moonshot.cn/docs/api/chat",
       "id": "moonshotai-cn",
       "logo": "https://models.dev/logos/moonshotai-cn.svg",
-      "modelCount": 4,
+      "modelCount": 6,
       "name": "Moonshot AI (China)",
       "protocol": "openai",
       "responses": false
@@ -1335,7 +1335,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 625,
+      "modelCount": 630,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1489,7 +1489,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/go/",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 34,
+      "modelCount": 35,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1510,7 +1510,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 390,
+      "modelCount": 391,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1622,7 +1622,7 @@
       "documentationUrl": "https://docs.primeintellect.ai/inference/overview",
       "id": "prime",
       "logo": "https://models.dev/logos/prime.svg",
-      "modelCount": 69,
+      "modelCount": 70,
       "name": "Prime Inference",
       "protocol": "openai",
       "responses": false
@@ -1691,7 +1691,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 180,
+      "modelCount": 182,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -2114,7 +2114,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 124,
+      "modelCount": 128,
       "name": "Venice AI",
       "responses": false
     },
@@ -2122,7 +2122,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 414,
+      "modelCount": 416,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2351,9 +2351,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "01e6b83f055da9e9e786a583feaae4991b2f81b1a5b86442458f3a0b41fb961a",
-    "generatedAt": "2026-10-23T08:34:43Z",
+    "catalogSha256": "70eabaf3c84595b1fd0e654ca2246ff6f015048eaae9ddf75a7e4657c5aa51bc",
+    "generatedAt": "2026-10-24T08:10:03Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "a051b3ca330b846f36e19afb53859258065dd1d9"
+    "revision": "24570112d8e6b2681161f33a13984f379824f735"
   }
 }
