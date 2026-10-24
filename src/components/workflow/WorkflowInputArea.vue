@@ -140,11 +140,11 @@
 
       <div class="input-footer">
         <div class="footer-left">
-          <div v-if="canEditAgent" class="selector-wrap">
+          <div class="selector-wrap">
             <AgentSelector
               :model-value="selectedAgent"
               :agent="null"
-              :disabled="false"
+              :disabled="!canEditAgent"
               @update:model-value="$emit('update-selected-agent', $event)" />
           </div>
           <el-popover

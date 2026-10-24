@@ -6483,16 +6483,20 @@ pub(crate) async fn update_workflow_agent_config_core(
     Ok(())
 }
 
-/// Rebinds a not-yet-started workflow to another primary agent.
+/// Merges a newly selected Agent's defaults and capabilities with the existing
+/// workflow's user preferences at a task boundary.
 #[cfg(not(feature = "desktop"))]
-fn preserve_workflow_allowed_paths(agent_config: &mut AgentConfig, current_config: &AgentConfig) {
-    if current_config
-        .allowed_paths
-        .as_ref()
-        .is_some_and(|paths| !paths.is_empty())
-    {
-        agent_config.allowed_paths = current_config.allowed_paths.clone();
-    }
+fn merge_agent_switch_config(
+    store: &MainStore,
+    agent: &Agent,
+    current_config: &AgentConfig,
+) -> Result<AgentConfig, String> {
+    let agent_config = build_agent_config_from_agent(agent, None, None);
+    let mut merged = merge_inherited_workflow_config(&agent_config, current_config);
+    fill_missing_agent_config_fields(&mut merged, agent);
+    resolve_agent_sandbox_snapshot(store, agent, &mut merged)?;
+    enforce_auto_approve_tool_visibility(&mut merged);
+    Ok(merged)
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -6524,10 +6528,30 @@ pub(crate) async fn update_workflow_agent_id_core(
         ));
     }
 
-    if !snapshot.messages.is_empty() || !snapshot.workflow.user_query.trim().is_empty() {
+    let is_manual_clear_boundary = snapshot
+        .messages
+        .last()
+        .is_some_and(ContextManager::is_manual_clear_context_message);
+    if !is_manual_clear_boundary
+        && (!snapshot.messages.is_empty() || !snapshot.workflow.user_query.trim().is_empty())
+    {
         return Err(ApplicationError::state(
             "Cannot change workflow agent after the workflow has user input",
         ));
+    }
+
+    if is_manual_clear_boundary {
+        let context = svc
+            .main_store
+            .get_execution_context(&session_id)
+            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+        if context.as_ref().is_none_or(|context| {
+            context.state != RuntimeState::Pending || !context.pending_tools.is_empty()
+        }) {
+            return Err(ApplicationError::state(
+                "Cannot change workflow agent unless the cleared workflow context is pending",
+            ));
+        }
     }
 
     log::info!(
@@ -6546,17 +6570,8 @@ pub(crate) async fn update_workflow_agent_id_core(
         .as_deref()
         .and_then(AgentConfig::from_json)
         .unwrap_or_default();
-    let mut agent_config = build_agent_config_from_agent(&agent, None, None);
-    preserve_workflow_allowed_paths(&mut agent_config, &current_config);
-    agent_config.final_audit = current_config.final_audit;
-    agent_config.final_review_mode = current_config.final_review_mode.clone().or_else(|| {
-        Some(if current_config.final_audit.unwrap_or(false) {
-            "sub_agent_review".to_string()
-        } else {
-            "off".to_string()
-        })
-    });
-    agent_config.phase = current_config.phase;
+    let agent_config = merge_agent_switch_config(&svc.main_store, &agent, &current_config)
+        .map_err(ApplicationError::internal)?;
     let agent_config_json = agent_config_to_json_with_agent_shell_policy(&agent_config, &agent)?;
     svc.main_store
         .update_workflow_agent_config(&session_id, &agent_config_json)
@@ -6953,36 +6968,56 @@ mod tests {
     }
 
     #[test]
-    fn agent_switch_preserves_existing_workflow_paths_but_uses_agent_defaults_when_empty() {
-        let existing_paths = vec!["/inherited/project".to_string()];
+    fn agent_switch_config_preserves_preferences_and_filters_agent_capabilities() {
         let current_config = AgentConfig {
-            allowed_paths: Some(existing_paths.clone()),
+            allowed_paths: Some(vec!["/inherited/project".to_string()]),
+            approval_level: Some("smart".to_string()),
+            auto_compress: Some(true),
+            phase: Some("planning".to_string()),
+            personality: Some("custom style".to_string()),
+            available_tools: Some(vec![
+                crate::tools::TOOL_BASH.to_string(),
+                crate::tools::TOOL_READ_FILE.to_string(),
+                crate::tools::TOOL_GREP.to_string(),
+            ]),
+            skill_enabled: Some(true),
+            selected_skills: Some(vec!["review".to_string()]),
             ..AgentConfig::default()
         };
-        let mut next_agent_config = AgentConfig {
-            allowed_paths: Some(vec!["/agent/default".to_string()]),
+        let next_agent_config = AgentConfig {
+            allowed_paths: Some(vec!["/new-agent/default".to_string()]),
+            approval_level: Some("default".to_string()),
+            auto_compress: Some(false),
+            available_tools: Some(vec![
+                crate::tools::TOOL_BASH.to_string(),
+                crate::tools::TOOL_READ_FILE.to_string(),
+            ]),
+            skill_enabled: Some(false),
             ..AgentConfig::default()
         };
 
-        preserve_workflow_allowed_paths(&mut next_agent_config, &current_config);
-
-        assert_eq!(next_agent_config.allowed_paths, Some(existing_paths));
-
-        let empty_config = AgentConfig {
-            allowed_paths: Some(Vec::new()),
-            ..AgentConfig::default()
-        };
-        let mut next_agent_config = AgentConfig {
-            allowed_paths: Some(vec!["/agent/default".to_string()]),
-            ..AgentConfig::default()
-        };
-
-        preserve_workflow_allowed_paths(&mut next_agent_config, &empty_config);
+        let merged = merge_inherited_workflow_config(&next_agent_config, &current_config);
 
         assert_eq!(
-            next_agent_config.allowed_paths,
-            Some(vec!["/agent/default".to_string()])
+            merged.allowed_paths,
+            Some(vec!["/inherited/project".to_string()])
         );
+        assert_eq!(merged.approval_level.as_deref(), Some("smart"));
+        assert_eq!(merged.auto_compress, Some(true));
+        assert_eq!(merged.phase.as_deref(), Some("planning"));
+        assert_eq!(
+            merged.personality.as_deref(),
+            Some(AGENT_PERSONALITY_PRESET_DEFAULT_ID)
+        );
+        assert_eq!(
+            merged.available_tools,
+            Some(vec![
+                crate::tools::TOOL_BASH.to_string(),
+                crate::tools::TOOL_READ_FILE.to_string(),
+            ])
+        );
+        assert_eq!(merged.skill_enabled, Some(true));
+        assert_eq!(merged.selected_skills, Some(vec!["review".to_string()]));
     }
 
     #[test]

@@ -483,6 +483,23 @@ test('authorized root drag sorting stays on the existing structured allowed-path
   assert.match(engine, /guard\.update_allowed_roots\(paths\.clone\(\)\);[\s\S]*?self\.planning_root = Self::planning_root_for_allowed_paths\(&paths\)/)
 })
 
+test('Agent selector stays visible and only enables task-boundary changes', async () => {
+  const [inputArea, workflowView, workflowCommand, backendConstitution] = await Promise.all([
+    readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),
+    readFile('src/views/Workflow.vue', 'utf8'),
+    readFile('src-tauri/crates/backend/src/commands/workflow.rs', 'utf8'),
+    readFile('src-tauri/crates/backend/src/workflow/react/CONSTITUTION.md', 'utf8')
+  ])
+
+  assert.match(inputArea, /<div class="selector-wrap">\s*<AgentSelector[\s\S]*?:disabled="!canEditAgent"/)
+  assert.match(workflowView, /const hasClearedCurrentContext = computed\(\(\) =>\s*workflowStore\.messages\.at\(-1\)\?\.messageSubtype === 'manual_clear_context'/)
+  assert.match(workflowView, /canSwitchCurrentWorkflowAgent = computed\([\s\S]*?hasClearedCurrentContext/)
+  assert.match(backendConstitution, /Agent tool changes synchronize into an existing workflow only at canonical task boundaries:[\s\S]*?- the user manually clears context/)
+  assert.match(workflowCommand, /let is_manual_clear_boundary = snapshot[\s\S]*?if !is_manual_clear_boundary[\s\S]*?snapshot\.workflow\.user_query/)
+  assert.match(workflowCommand, /fn merge_agent_switch_config\([\s\S]*?merge_inherited_workflow_config\(&agent_config, current_config\)/)
+  assert.match(workflowCommand, /context\.state != RuntimeState::Pending \|\| !context\.pending_tools\.is_empty\(\)/)
+})
+
 test('empty new workflows require an authorized directory before accepting input', async () => {
   const [inputArea, workflowView, workflowPaths] = await Promise.all([
     readFile('src/components/workflow/WorkflowInputArea.vue', 'utf8'),

@@ -324,7 +324,7 @@
               :on-add-authorized-path="onAddPath"
               :on-remove-authorized-path="removeAuthorizedPathFromCommand"
               :selected-agent="selectedAgent"
-              :can-edit-agent="canEditCurrentWorkflowAgent"
+              :can-edit-agent="canSwitchCurrentWorkflowAgent"
               :show-planning-mode-toggle="showPlanningModeToggle"
               :can-toggle-planning-mode="canTogglePlanningMode"
               :active-model-name="activeModelName"
@@ -3050,6 +3050,14 @@ const canEditCurrentWorkflowAgent = computed(() => {
   return !hasLiveSession.value && !hasQuery && !hasMessages
 })
 
+const hasClearedCurrentContext = computed(() =>
+  workflowStore.messages.at(-1)?.messageSubtype === 'manual_clear_context'
+)
+
+const canSwitchCurrentWorkflowAgent = computed(
+  () => canEditCurrentWorkflowAgent.value || (!hasLiveSession.value && hasClearedCurrentContext.value)
+)
+
 const canTogglePlanningMode = computed(() => {
   if (!currentWorkflowId.value || !currentWorkflow.value) {
     return true
@@ -3072,12 +3080,15 @@ const onTogglePlanningMode = () => {
 }
 
 const onSelectedAgentChange = async agent => {
-  selectedAgent.value = agent
-  const sessionId = currentWorkflowId.value
-
-  if (!sessionId || !canEditCurrentWorkflowAgent.value || !agent) {
+  if (!agent || agent.id === selectedAgent.value?.id || !canSwitchCurrentWorkflowAgent.value) {
     return
   }
+  if (!currentWorkflowId.value) {
+    selectedAgent.value = agent
+    return
+  }
+
+  const sessionId = currentWorkflowId.value
 
   try {
     const agentConfigResult = await invokeWrapper('update_workflow_agent_id', {
@@ -3101,6 +3112,8 @@ const onSelectedAgentChange = async agent => {
       workflowStore.setAutoApprovedTools(agentConfig?.autoApprove || [])
     }
 
+    selectedAgent.value = agent
+
     if (agentConfig?.approvalLevel) {
       approvalLevel.value = agentConfig.approvalLevel
     }
@@ -3114,6 +3127,9 @@ const onSelectedAgentChange = async agent => {
     autoCompressEnabled.value = agentConfig?.autoCompress ?? false
   } catch (error) {
     console.error('Failed to update workflow agent:', error)
+    if (workflowStore.currentWorkflowId === sessionId) {
+      selectedAgent.value = agentStore.agents.find(item => item.id === workflowStore.currentWorkflow?.agentId) || null
+    }
   }
 }
 
