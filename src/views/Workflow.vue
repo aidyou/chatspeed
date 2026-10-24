@@ -2127,17 +2127,8 @@ function buildImageAttachmentMetadata(attachments) {
   }
 }
 
-function clearRecoverableWorkflowErrorMessages() {
-  workflowStore.removeCurrentWorkflowMessages(
-    message => message?.role !== 'tool' && Boolean(message?.isError || message?.is_error)
-  )
-}
-
 async function handleContinue() {
-  const sessionId = workflowStore.currentWorkflowId
-  if ((await onContinue()) && workflowStore.currentWorkflowId === sessionId) {
-    clearRecoverableWorkflowErrorMessages()
-  }
+  await onContinue()
 }
 
 function appendImageAnalysisErrorMessage(error, attachments = [], sessionId = null) {
@@ -2310,9 +2301,6 @@ inputComposable.onSendMessage.value = async () => {
     }
   } else if (sendResult === true) {
     removeWorkflowInputDraft(messageTarget.sessionId)
-    if (workflowStore.currentWorkflowId === messageTarget.sessionId) {
-      clearRecoverableWorkflowErrorMessages()
-    }
   }
   inFlightDraftSessionIds.delete(messageTarget.sessionId)
   return sendResult

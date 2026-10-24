@@ -29,6 +29,7 @@
       :queued-messages="agentRole === 'primary' ? workflowStore.messageQueue : []"
       :is-chatting="isChatting"
       :chat-state="resolvedChatState"
+      :tail-alert="tailAlert"
       :is-compressing="isCompressing"
       :compression-message="compressionMessage"
       :last-assistant-message="messageProjection.lastAssistantMessage.value"
@@ -65,7 +66,12 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import {
+  hasVisibleWorkflowText,
+  reconcileWorkflowTailAlert,
+  resolveWorkflowTailAlert
+} from '@/composables/workflow/messageProjectionRules'
 import { useI18n } from 'vue-i18n'
 import { useWorkflowStore } from '@/stores/workflow'
 import { useAgentStore } from '@/stores/agent'
@@ -127,6 +133,59 @@ const messageProjection = useWorkflowMessages(source)
 const resolvedChatState = computed(() =>
   props.agentRole === 'child' ? childSession.chatState.value : props.primaryChatState
 )
+const alertPresentation = ref({})
+const alertSourceMessages = computed(() =>
+  source.currentWorkflowId === props.sessionId
+    ? (source.messages || []).filter(message => !message.sessionId || message.sessionId === props.sessionId)
+    : []
+)
+const alertNotification = computed(() =>
+  props.agentRole === 'primary' && workflowStore.notification?.sessionId === props.sessionId
+    ? workflowStore.notification : null
+)
+let presentationSessionId = ''
+let previousStream = ['', '']
+watch(
+  () => [
+    props.sessionId,
+    alertSourceMessages.value,
+    alertNotification.value,
+    resolvedChatState.value?.content || '',
+    resolvedChatState.value?.reasoning || '',
+    resolvedChatState.value?.retryInfo || null
+  ],
+  ([sessionId, messages, notification, content, reasoning, retryInfo]) => {
+    if (!sessionId) return
+    const key = `workflow-tail-alert:${sessionId}`
+    if (presentationSessionId !== sessionId) {
+      presentationSessionId = sessionId
+      previousStream = ['', '']
+      try {
+        const stored = JSON.parse(localStorage.getItem(key) || '{}')
+        alertPresentation.value = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {}
+      } catch {
+        alertPresentation.value = {}
+      }
+    }
+    const hasStream =
+      (content !== previousStream[0] && hasVisibleWorkflowText(content)) ||
+      (reasoning !== previousStream[1] && hasVisibleWorkflowText(reasoning))
+    previousStream = [content, reasoning]
+    const next = reconcileWorkflowTailAlert(alertPresentation.value, { messages, notification, hasStream, retryInfo })
+    if (JSON.stringify(next) === JSON.stringify(alertPresentation.value)) return
+    alertPresentation.value = next
+    try {
+      localStorage.setItem(key, JSON.stringify(next))
+    } catch (error) {
+      console.warn('[Workflow] Unable to persist reminder presentation:', error)
+    }
+  },
+  { immediate: true, deep: true, flush: 'sync' }
+)
+const tailAlert = computed(() => resolveWorkflowTailAlert(alertSourceMessages.value, {
+  ...alertPresentation.value,
+  retryInfo: resolvedChatState.value?.retryInfo || null
+}))
 const isChatting = computed(() =>
   props.agentRole === 'child' ? childSession.isRunning.value : props.primaryIsChatting
 )

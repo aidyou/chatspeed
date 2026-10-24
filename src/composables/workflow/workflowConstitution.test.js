@@ -303,10 +303,10 @@ assert.match(
   /else if \(sendResult === true\) \{[\s\S]*removeWorkflowInputDraft\(messageTarget\.sessionId\)/,
   'a successful captured send must clear that workflow draft even after switching workflows'
 )
-assert.match(
+assert.doesNotMatch(
   queuedImageSend,
-  /if \(workflowStore\.currentWorkflowId === messageTarget\.sessionId\) \{[\s\S]*clearRecoverableWorkflowErrorMessages\(\)/,
-  'successful background sends must only clear visible recoverable errors for the active matching workflow'
+  /clearRecoverableWorkflowErrorMessages\(\)/,
+  'successful sends must not delete diagnostic history to clear a display reminder'
 )
 assert.match(
   queuedImageSend,
@@ -751,8 +751,7 @@ assert.match(messageList, /copySubAgentResult\(message\)/)
 assert.match(messageList, /message\?\.subAgentCard\?\.task/)
 assert.match(messageList, /message\?\.subAgentCard\?\.result/)
 assert.match(statusNotifier, /TERMINAL_STATUSES\.includes\(workflowStatus\.value\)/)
-assert.match(statusNotifier, /formatWorkflowRetryMessage\(retryInfo\.value, t\)/)
-assert.match(statusNotifier, /hasActiveRetry\.value/)
+assert.doesNotMatch(statusNotifier, /formatWorkflowRetryMessage|hasActiveRetry|latestTerminalError|workflowStore\.notification/)
 assert.match(statusNotifier, /const getPreviewSegment = text =>/)
 assert.match(statusNotifier, /const latestTextActivity = computed\(\(\) => \{/)
 assert.match(statusNotifier, /sort\(\(left, right\) => getToolTimestamp\(right\) - getToolTimestamp\(left\)\)/)

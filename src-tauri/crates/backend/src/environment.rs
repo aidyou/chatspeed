@@ -153,18 +153,85 @@ fn run_path_probe(shell: &str, args: &[&str]) -> Option<String> {
     run_path_probe_with_timeout(shell, args, PATH_PROBE_TIMEOUT)
 }
 
-fn append_env_path(paths: &mut Vec<PathBuf>, name: &str, suffix: &[&str]) {
-    if let Some(mut path) = env::var_os(name).map(PathBuf::from) {
-        for component in suffix {
-            path.push(component);
+fn append_fnm_paths(paths: &mut Vec<PathBuf>, root: &Path) {
+    let runtime_bin = |installation: PathBuf| {
+        if cfg!(windows) {
+            installation
+        } else {
+            installation.join("bin")
         }
-        paths.push(path);
+    };
+    // fnm aliases normally link to an installation. Also accept an alias to a
+    // version directory without depending on a live multishell session.
+    let default = root.join("aliases/default");
+    let default_bins = [
+        runtime_bin(default.clone()),
+        runtime_bin(default.join("installation")),
+    ];
+    let has_default = default_bins.iter().any(|path| path.is_dir());
+    paths.extend(default_bins);
+
+    // Do not borrow globally installed tools from a different version when a
+    // default runtime is available.
+    if !has_default {
+        if let Ok(entries) = std::fs::read_dir(root.join("node-versions")) {
+            let mut versions = entries
+                .flatten()
+                .take(128)
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>();
+            versions.sort();
+            for version in versions {
+                paths.push(runtime_bin(version.join("installation")));
+            }
+        }
     }
+    paths.push(root.to_path_buf());
 }
 
 fn user_tool_paths() -> Vec<PathBuf> {
-    let home = dirs::home_dir();
+    user_tool_paths_with(dirs::home_dir(), |name| env::var_os(name))
+}
+
+fn user_tool_paths_with(
+    home: Option<PathBuf>,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let append_env_path = |paths: &mut Vec<PathBuf>, name: &str, suffix: &[&str]| {
+        if let Some(mut path) = var(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+        {
+            for component in suffix {
+                path.push(component);
+            }
+            paths.push(path);
+        }
+    };
     let mut paths = Vec::new();
+    let multishell_suffix: &[&str] = if cfg!(windows) { &[] } else { &["bin"] };
+    append_env_path(&mut paths, "FNM_MULTISHELL_PATH", multishell_suffix);
+
+    let mut fnm_roots = Vec::new();
+    append_env_path(&mut fnm_roots, "FNM_DIR", &[]);
+    append_env_path(&mut fnm_roots, "XDG_DATA_HOME", &["fnm"]);
+    #[cfg(windows)]
+    {
+        append_env_path(&mut fnm_roots, "APPDATA", &["fnm"]);
+        append_env_path(&mut fnm_roots, "LOCALAPPDATA", &["fnm"]);
+    }
+    if let Some(home) = &home {
+        #[cfg(target_os = "macos")]
+        fnm_roots.push(home.join("Library/Application Support/fnm"));
+        fnm_roots.push(home.join(".local/share/fnm"));
+        fnm_roots.push(home.join(".fnm"));
+    }
+    let mut seen = HashSet::new();
+    for root in fnm_roots {
+        if seen.insert(root.clone()) {
+            append_fnm_paths(&mut paths, &root);
+        }
+    }
 
     if let Some(home) = &home {
         paths.extend([
@@ -228,15 +295,26 @@ fn user_tool_paths() -> Vec<PathBuf> {
     append_env_path(&mut paths, "CARGO_HOME", &["bin"]);
     append_env_path(&mut paths, "PNPM_HOME", &[]);
     append_env_path(&mut paths, "XDG_DATA_HOME", &["pnpm"]);
-    append_env_path(&mut paths, "NPM_CONFIG_PREFIX", &["bin"]);
+    let npm_prefix_suffix: &[&str] = if cfg!(windows) { &[] } else { &["bin"] };
+    append_env_path(&mut paths, "NPM_CONFIG_PREFIX", npm_prefix_suffix);
     append_env_path(&mut paths, "GOBIN", &[]);
-    append_env_path(&mut paths, "GOPATH", &["bin"]);
+    if let Some(gopath) = var("GOPATH") {
+        for root in env::split_paths(&gopath).filter(|path| !path.as_os_str().is_empty()) {
+            paths.push(root.join("bin"));
+        }
+    }
     append_env_path(&mut paths, "PYENV_ROOT", &["bin"]);
     append_env_path(&mut paths, "PYENV_ROOT", &["shims"]);
     append_env_path(&mut paths, "UV_TOOL_BIN_DIR", &[]);
     append_env_path(&mut paths, "PIPX_BIN_DIR", &[]);
     append_env_path(&mut paths, "POETRY_HOME", &["bin"]);
-    append_env_path(&mut paths, "CONDA_PREFIX", &["bin"]);
+    if cfg!(windows) {
+        append_env_path(&mut paths, "CONDA_PREFIX", &[]);
+        append_env_path(&mut paths, "CONDA_PREFIX", &["Scripts"]);
+        append_env_path(&mut paths, "CONDA_PREFIX", &["Library", "bin"]);
+    } else {
+        append_env_path(&mut paths, "CONDA_PREFIX", &["bin"]);
+    }
     append_env_path(&mut paths, "PIXI_HOME", &["bin"]);
     append_env_path(&mut paths, "MISE_BIN_PATH", &[]);
     append_env_path(&mut paths, "MISE_DATA_DIR", &["shims"]);
@@ -246,7 +324,6 @@ fn user_tool_paths() -> Vec<PathBuf> {
     append_env_path(&mut paths, "RVM_BIN", &[]);
     append_env_path(&mut paths, "COMPOSER_HOME", &["vendor/bin"]);
     append_env_path(&mut paths, "PHP_PEAR_BIN_DIR", &[]);
-    append_env_path(&mut paths, "FNM_MULTISHELL_PATH", &[]);
     append_env_path(&mut paths, "VOLTA_HOME", &["bin"]);
     append_env_path(&mut paths, "NVM_BIN", &[]);
     append_env_path(&mut paths, "NVM_SYMLINK", &[]);
@@ -290,7 +367,10 @@ fn user_tool_paths() -> Vec<PathBuf> {
             PathBuf::from(r"C:\ProgramData\chocolatey\bin"),
             PathBuf::from(r"C:\Program Files\nodejs"),
         ]);
-        if let Some(local_app_data) = env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        if let Some(local_app_data) = var("LOCALAPPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+        {
             paths.extend([
                 local_app_data.join("pnpm"),
                 local_app_data.join("Volta/bin"),
@@ -298,14 +378,17 @@ fn user_tool_paths() -> Vec<PathBuf> {
                 local_app_data.join("fnm"),
             ]);
         }
-        if let Some(app_data) = env::var_os("APPDATA").map(PathBuf::from) {
+        if let Some(app_data) = var("APPDATA")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+        {
             paths.push(app_data.join("npm"));
         }
-        if let Some(nvm_home) = env::var_os("NVM_HOME").map(PathBuf::from) {
+        if let Some(nvm_home) = var("NVM_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+        {
             paths.push(nvm_home);
-        }
-        if let Some(fnm_dir) = env::var_os("FNM_DIR").map(PathBuf::from) {
-            paths.push(fnm_dir);
         }
     }
 
@@ -628,7 +711,8 @@ fn base_child_environment() -> Vec<(String, String)> {
     let mut environment = env::vars().collect::<Vec<_>>();
     let original_path = env::var("PATH").unwrap_or_default();
     let discovered_path = discovered_tool_path();
-    let merged_path = merge_paths(&original_path, &discovered_path);
+    // Guessed tool directories are fallbacks, not a replacement for an active runtime.
+    let merged_path = merge_paths(&discovered_path, &original_path);
     set_environment_value(&mut environment, "PATH", merged_path);
 
     if !environment.iter().any(|(key, _)| key == "HOME") {
@@ -723,6 +807,223 @@ mod tests {
         dedupe_shells, merge_paths, run_path_probe, select_default_shell, supports_terminal_shell,
         ShellDescriptor,
     };
+
+    #[test]
+    fn tool_directory_variables_do_not_gain_an_extra_bin_suffix() {
+        let directory = tempfile::tempdir().expect("directory");
+        for name in [
+            "PNPM_HOME",
+            "GOBIN",
+            "UV_TOOL_BIN_DIR",
+            "PIPX_BIN_DIR",
+            "RVM_BIN",
+            "PHP_PEAR_BIN_DIR",
+            "NVM_BIN",
+            "NVM_SYMLINK",
+        ] {
+            let paths = super::user_tool_paths_with(None, |key| {
+                (key == name).then(|| directory.path().as_os_str().to_owned())
+            });
+            assert!(paths.contains(&directory.path().to_path_buf()), "{name}");
+            assert!(!paths.contains(&directory.path().join("bin")), "{name}");
+        }
+    }
+
+    #[test]
+    fn gopath_list_adds_bin_to_each_nonempty_root() {
+        let directory = tempfile::tempdir().expect("directory");
+        let roots = [
+            directory.path().join("go one"),
+            directory.path().join("go two"),
+        ];
+        let value = std::env::join_paths([
+            roots[0].as_path(),
+            std::path::Path::new(""),
+            roots[1].as_path(),
+        ])
+        .expect("GOPATH");
+        let paths =
+            super::user_tool_paths_with(None, |key| (key == "GOPATH").then(|| value.clone()));
+        for root in roots {
+            assert!(paths.contains(&root.join("bin")));
+        }
+        assert!(!paths.contains(&std::path::PathBuf::from("bin")));
+    }
+
+    #[test]
+    fn npm_and_conda_prefixes_use_platform_executable_directories() {
+        let directory = tempfile::tempdir().expect("directory");
+        for name in ["NPM_CONFIG_PREFIX", "CONDA_PREFIX"] {
+            let paths = super::user_tool_paths_with(None, |key| {
+                (key == name).then(|| directory.path().as_os_str().to_owned())
+            });
+            if cfg!(windows) {
+                assert!(paths.contains(&directory.path().to_path_buf()));
+                assert!(!paths.contains(&directory.path().join("bin")));
+                if name == "CONDA_PREFIX" {
+                    assert!(paths.contains(&directory.path().join("Scripts")));
+                    assert!(paths.contains(&directory.path().join("Library/bin")));
+                }
+            } else {
+                assert!(paths.contains(&directory.path().join("bin")));
+                assert!(!paths.contains(&directory.path().to_path_buf()));
+            }
+        }
+    }
+
+    #[test]
+    fn empty_tool_directory_variables_do_not_add_relative_fallbacks() {
+        let unset = super::user_tool_paths_with(None, |_| None);
+        let empty = super::user_tool_paths_with(None, |_| Some(std::ffi::OsString::new()));
+        assert_eq!(empty, unset);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fnm_discovery_runs_pnpm_with_its_node_without_shell_initialization() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let home = tempfile::tempdir().expect("home");
+        let root = home.path().join(".local/share/fnm");
+        let installation = root.join("node-versions/v24.10.0/installation");
+        let bin = installation.join("bin");
+        std::fs::create_dir_all(&bin).expect("runtime bin");
+        std::fs::create_dir_all(root.join("aliases")).expect("aliases");
+        symlink(&installation, root.join("aliases/default")).expect("default alias");
+        for (name, script) in [
+            ("node", "#!/bin/sh\nprintf 'fnm-node-ok'\n"),
+            ("pnpm", "#!/bin/sh\nexec node\n"),
+        ] {
+            let tool = bin.join(name);
+            std::fs::write(&tool, script).expect("tool");
+            std::fs::set_permissions(tool, std::fs::Permissions::from_mode(0o755))
+                .expect("executable tool");
+        }
+        let paths = super::user_tool_paths_with(Some(home.path().to_path_buf()), |_| None);
+        let path = super::format_path_entries(paths.into_iter().filter(|path| path.is_dir()));
+        let output = std::process::Command::new("/bin/sh")
+            .args(["-c", "pnpm --version"])
+            .env("PATH", path)
+            .output()
+            .expect("non-login shell");
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"fnm-node-ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fnm_custom_roots_and_multishell_use_runtime_bin_directories() {
+        let directory = tempfile::tempdir().expect("directory");
+        for (name, suffix) in [("FNM_DIR", ""), ("XDG_DATA_HOME", "fnm")] {
+            let root = directory.path().join(suffix);
+            let bin = root.join("node-versions/v24.10.0/installation/bin");
+            std::fs::create_dir_all(&bin).expect("runtime");
+            let paths = super::user_tool_paths_with(None, |key| {
+                (key == name).then(|| directory.path().as_os_str().to_owned())
+            });
+            assert!(paths.contains(&bin), "{name}");
+        }
+        let paths = super::user_tool_paths_with(None, |key| {
+            (key == "FNM_MULTISHELL_PATH").then(|| directory.path().as_os_str().to_owned())
+        });
+        assert_eq!(paths.first(), Some(&directory.path().join("bin")));
+        assert!(!paths.contains(&directory.path().to_path_buf()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fnm_default_alias_prevents_cross_version_tool_fallback() {
+        let root = tempfile::tempdir().expect("root");
+        let default = root.path().join("aliases/default/bin");
+        let other = root.path().join("node-versions/v25.0.0/installation/bin");
+        std::fs::create_dir_all(&default).expect("default");
+        std::fs::create_dir_all(&other).expect("other");
+        let mut paths = Vec::new();
+        super::append_fnm_paths(&mut paths, root.path());
+        assert_eq!(paths.first(), Some(&default));
+        assert!(!paths.contains(&other));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fnm_version_fallback_is_bounded_and_sorted_without_a_default() {
+        let root = tempfile::tempdir().expect("root");
+        for version in ["v24.10.0", "v20.0.0"] {
+            std::fs::create_dir_all(
+                root.path()
+                    .join("node-versions")
+                    .join(version)
+                    .join("installation/bin"),
+            )
+            .expect("runtime");
+        }
+        let mut paths = Vec::new();
+        super::append_fnm_paths(&mut paths, root.path());
+        let existing = paths
+            .into_iter()
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            existing[0],
+            root.path().join("node-versions/v20.0.0/installation/bin")
+        );
+        assert_eq!(
+            existing[1],
+            root.path().join("node-versions/v24.10.0/installation/bin")
+        );
+
+        for version in 0..140 {
+            std::fs::create_dir_all(
+                root.path()
+                    .join("node-versions")
+                    .join(format!("v{version}")),
+            )
+            .expect("version");
+        }
+        let mut paths = Vec::new();
+        super::append_fnm_paths(&mut paths, root.path());
+        assert_eq!(paths.len(), 128 + 2 + 1);
+    }
+
+    #[test]
+    fn inherited_path_precedes_discovered_fallbacks() {
+        let original = std::env::var("PATH").unwrap_or_default();
+        let expected = super::normalized_path_entries(&original);
+        let environment = super::base_child_environment();
+        let path = &environment
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .expect("PATH")
+            .1;
+        assert!(super::normalized_path_entries(path).starts_with(&expected));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fnm_macos_application_support_root_is_discovered() {
+        let home = tempfile::tempdir().expect("home");
+        let bin = home
+            .path()
+            .join("Library/Application Support/fnm/node-versions/v24.10.0/installation/bin");
+        std::fs::create_dir_all(&bin).expect("runtime");
+        let paths = super::user_tool_paths_with(Some(home.path().to_path_buf()), |_| None);
+        assert!(paths.contains(&bin));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fnm_windows_runtime_and_multishell_do_not_add_bin() {
+        let root = tempfile::tempdir().expect("root");
+        let installation = root.path().join("node-versions/v24.10.0/installation");
+        std::fs::create_dir_all(&installation).expect("runtime");
+        let paths = super::user_tool_paths_with(None, |key| {
+            matches!(key, "FNM_DIR" | "FNM_MULTISHELL_PATH")
+                .then(|| root.path().as_os_str().to_owned())
+        });
+        assert_eq!(paths.first(), Some(&root.path().to_path_buf()));
+        assert!(paths.contains(&installation));
+        assert!(!paths.contains(&installation.join("bin")));
+    }
 
     #[tokio::test]
     async fn child_path_wait_observes_the_completed_probe_before_resolution() {

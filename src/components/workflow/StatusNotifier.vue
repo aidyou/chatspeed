@@ -15,10 +15,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import {
-  formatWorkflowRetryMessage,
-  resolveWorkflowErrorDisplay
-} from '@/composables/workflow/messageProjectionRules'
+import { isWorkflowAlertMessage } from '@/composables/workflow/messageProjectionRules'
 import { resolveWorkflowToolIcon } from '@/composables/workflow/toolIcons'
 import { normalizeShellCommandForDisplay, formatDisplayPath } from '@/composables/workflow/toolDisplay'
 import { TERMINAL_STATUSES } from '@/composables/workflow/signalTypes'
@@ -65,16 +62,10 @@ const isWaitingForApproval = computed(
     workflowStatus.value === 'awaiting_approval' ||
     workflowStatus.value === 'awaiting_auto_approval'
 )
-const retryInfo = computed(() => props.chatState?.retryInfo || null)
-const hasActiveRetry = computed(() => Number(retryInfo.value?.nextRetryIn || 0) > 0)
 const visible = computed(
   () =>
     !isTerminal.value &&
-    (workflowStore.isRunning ||
-      isWaitingForUser.value ||
-      isWaitingForApproval.value ||
-      hasActiveRetry.value ||
-      workflowStore.notification.message)
+    (workflowStore.isRunning || isWaitingForUser.value || isWaitingForApproval.value)
 )
 
 const currentWorkflowMessages = computed(() => {
@@ -216,7 +207,7 @@ const latestTranscriptActivity = computed(() => {
   const candidates = []
 
   currentStepMessages.value.forEach((message, index) => {
-    if (message?.role !== 'assistant') return
+    if (message?.role !== 'assistant' || isWorkflowAlertMessage(message)) return
 
     const updatedAt = getMessageTimestamp(message, index + 1)
     const contentText = truncateText(getPreviewSegment(message?.message || ''), 72)
@@ -284,20 +275,6 @@ watch(
 )
 
 onBeforeUnmount(stopElapsedTimer)
-
-const latestTerminalError = computed(() => {
-  for (let index = currentStepMessages.value.length - 1; index >= 0; index -= 1) {
-    const message = currentStepMessages.value[index]
-    if (message?.role === 'user') continue
-
-    const isError = !!(message?.isError || message?.is_error || message?.metadata?.is_error)
-    if (!isError) return ''
-
-    return resolveWorkflowErrorDisplay(message, message?.message).display
-  }
-
-  return ''
-})
 
 const getToolName = tool => String(tool?.toolName || '').toLowerCase()
 
@@ -464,9 +441,6 @@ const buildToolState = tool => {
 }
 
 const displayState = computed(() => {
-  const notification = workflowStore.notification || {}
-  const notificationMessage = sanitizePreviewText(notification.message || '')
-  const notificationCategory = String(notification.category || 'info')
   const latestTool = latestToolState.value
   const latestToolDisplay = buildToolState(latestTool)
   const latestToolUpdatedAt = latestTool ? getToolTimestamp(latestTool) : 0
@@ -481,25 +455,6 @@ const displayState = computed(() => {
     latestToolDisplay &&
     !textIsLatestActivity &&
     elapsedNow.value - latestToolUpdatedAt < 5000
-
-  if (hasActiveRetry.value) {
-    const retryMessage = formatWorkflowRetryMessage(retryInfo.value, t)
-    return {
-      text: retryMessage,
-      tone: 'warning',
-      icon: 'loading',
-      spinning: true
-    }
-  }
-
-  if (notificationMessage && ['warning', 'error'].includes(notificationCategory)) {
-    return {
-      text: notificationMessage,
-      tone: notificationCategory,
-      icon: 'warning',
-      spinning: false
-    }
-  }
 
   if (isWaitingForPlanApproval.value) {
     return {
@@ -532,15 +487,6 @@ const displayState = computed(() => {
     }
   }
 
-  if (latestTerminalError.value) {
-    return {
-      text: `${t('common.error') || 'Error'}: ${latestTerminalError.value}`,
-      tone: 'error',
-      icon: 'warning',
-      spinning: false
-    }
-  }
-
   if (latestText?.text && textIsLatestActivity) {
     return {
       text: latestText.text,
@@ -563,21 +509,6 @@ const displayState = computed(() => {
     }
   }
 
-  if (notificationMessage) {
-    return {
-      text: notificationMessage,
-      tone:
-        notificationCategory === 'error'
-          ? 'error'
-          : notificationCategory === 'warning'
-            ? 'warning'
-            : 'info',
-      icon:
-        notificationCategory === 'warning' || notificationCategory === 'error' ? 'warning' : 'info',
-      spinning: false
-    }
-  }
-
   return {
     text: buildToolText('workflow.statusNotifier.thinking', {}, t('workflow.thinking') || 'Thinking...'),
     tone: 'info',
@@ -587,30 +518,6 @@ const displayState = computed(() => {
 })
 
 const displayMessage = computed(() => displayState.value.text)
-
-watch(() => workflowStore.notification.timestamp, () => {
-  if (workflowStore.notification.message && !workflowStore.isRunning) {
-    setTimeout(() => {
-      workflowStore.setNotification('', 'info')
-    }, 10000)
-  }
-})
-
-watch(() => workflowStore.currentWorkflow?.status, (newStatus, oldStatus) => {
-  if (oldStatus && newStatus !== oldStatus) {
-    if (TERMINAL_STATUSES.includes(String(newStatus || '').toLowerCase())) {
-      workflowStore.setNotification('', 'info')
-      return
-    }
-
-    const specialCategories = ['warning', 'error']
-    const shouldKeep = specialCategories.includes(workflowStore.notification.category)
-
-    if (!shouldKeep) {
-      workflowStore.setNotification('', 'info')
-    }
-  }
-})
 </script>
 
 <style lang="scss" scoped>
@@ -633,10 +540,6 @@ watch(() => workflowStore.currentWorkflow?.status, (newStatus, oldStatus) => {
 
   &.warning {
     color: var(--el-color-warning);
-  }
-
-  &.error {
-    color: var(--el-color-danger);
   }
 
   .notifier-content {

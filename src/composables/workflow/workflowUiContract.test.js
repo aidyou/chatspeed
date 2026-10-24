@@ -5,6 +5,10 @@ import {
   mergeWorkflowMessagePages,
   normalizeWorkflowErrorAlertContent,
   resolveWorkflowErrorDisplay,
+  getWorkflowAlertIdentity,
+  hasVisibleWorkflowText,
+  reconcileWorkflowTailAlert,
+  resolveWorkflowTailAlert,
   projectWorkflowMessageList,
   isWorkflowCompletionMessage,
   isWorkflowMessagePendingApproval
@@ -143,7 +147,7 @@ test('workflow error branches use structured reasons and localized presentation'
   assert.match(model, /normalizedError\.reason === USER_ERROR_REASONS\.UNSUPPORTED_LIST_MODELS/)
   assert.doesNotMatch(model, /Method Not Allowed|status_code\\\":405|not available for Coding Agents/)
 })
-test('both workflow retry displays share structured retry formatting', async () => {
+test('workflow retry status has a single footer alert', async () => {
   const [messageList, notifier, ...locales] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
     readFile('src/components/workflow/StatusNotifier.vue', 'utf8'),
@@ -151,12 +155,17 @@ test('both workflow retry displays share structured retry formatting', async () 
       readFile(`src/i18n/locales/${locale}.json`, 'utf8').then(JSON.parse)
     )
   ])
-  const messageListCall = messageList.match(/formatWorkflowRetryMessage\(chatState\.retryInfo, \$t\)/)?.[0]
-  const notifierCall = notifier.match(/formatWorkflowRetryMessage\(retryInfo\.value, t\)/)?.[0]
-  assert.ok(messageListCall, 'the inline countdown must call the shared formatter')
-  assert.ok(notifierCall, 'the status notifier must call the shared formatter')
+  const footerCall = messageList.match(/formatWorkflowRetryMessage\(tailAlert\.retryInfo, \$t\)/)?.[0]
+  assert.ok(footerCall, 'the tail alert must call the shared formatter')
+  assert.equal(
+    messageList.match(/formatWorkflowRetryMessage\(/g)?.length,
+    1,
+    'retry text must be rendered by exactly one footer alert'
+  )
+  assert.match(messageList, /import \{[^}]*\bformatWorkflowRetryMessage\b[^}]*\} from '@\/composables\/workflow\/messageProjectionRules'/)
+  assert.doesNotMatch(messageList, /retry-status-alert|chatState\.retryInfo/)
+  assert.doesNotMatch(notifier, /formatWorkflowRetryMessage|retryInfo|hasActiveRetry/)
   for (const source of [messageList, notifier]) {
-    assert.match(source, /import \{[^}]*\bformatWorkflowRetryMessage\b[^}]*\} from '@\/composables\/workflow\/messageProjectionRules'/)
     assert.doesNotMatch(source, /(?:\$t|\bt)\('workflow\.retrying(?:Classified)?'/)
   }
 
@@ -167,21 +176,18 @@ test('both workflow retry displays share structured retry formatting', async () 
       const retry = { attempt: 2, total: 5, nextRetryIn: 7, errorKind, errorSummary: 'backend detail' }
       const context = {
         formatWorkflowRetryMessage,
-        chatState: { retryInfo: retry },
-        retryInfo: { value: retry },
+        tailAlert: { retryInfo: retry },
         $t: translate,
         t: translate
       }
-      const inlineText = runInNewContext(messageListCall, context)
-      const notifierText = runInNewContext(notifierCall, context)
-      assert.equal(inlineText, notifierText, 'both Vue paths must produce identical localized retry text')
+      const footerText = runInNewContext(footerCall, context)
       if (errorKind === 'rate_limited') {
-        assert.equal(inlineText, translate('workflow.retrying', { attempt: 2, total: 5, seconds: 7 }))
+        assert.equal(footerText, translate('workflow.retrying', { attempt: 2, total: 5, seconds: 7 }))
       } else {
-        assert.equal(inlineText, translate('workflow.retryingClassified', {
+        assert.equal(footerText, translate('workflow.retryingClassified', {
           attempt: 2, total: 5, seconds: 7, kind: errorKind || 'unknown', summary: 'backend detail'
         }))
-        assert.ok(inlineText.includes('backend detail'), 'non-rate-limit retries must retain backend details')
+        assert.ok(footerText.includes('backend detail'), 'non-rate-limit retries must retain backend details')
       }
     }
   }
@@ -225,22 +231,29 @@ test('workflow terminal model errors use structured localized alert titles', asy
   }
 })
 
-test('terminal provider errors survive live projection and history reload as visible alerts', async () => {
-  const [messageList, locale] = await Promise.all([
+test('terminal provider errors survive live projection and history reload as tail alerts', async () => {
+  const [messageList, locale, rules] = await Promise.all([
     readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8'),
-    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse)
+    readFile('src/i18n/locales/zh-Hans.json', 'utf8').then(JSON.parse),
+    import('./messageProjectionRules.js')
   ])
-  const start = messageList.indexOf('const shouldShowErrorAlert = message =>')
+  const start = messageList.indexOf('const getErrorAlertTitle = message =>')
   const end = messageList.indexOf('const getExplorationBatchSummary = message =>', start)
   assert.ok(start >= 0 && end > start)
   const alerts = runInNewContext(
-    `${messageList.slice(start, end)}\n;({ shouldShowErrorAlert, getErrorAlertContent, getErrorAlertTitle })`,
+    `${messageList.slice(start, end)}\n;({ getErrorAlertContent, getErrorAlertTitle })`,
     {
       resolveWorkflowErrorDisplay,
       normalizeWorkflowErrorAlertContent,
       props: { removeSystemReminder: value => value },
       t: key => key.split('.').reduce((value, part) => value?.[part], locale)
     }
+  )
+  const { resolveWorkflowTailAlert } = rules
+  assert.equal(
+    typeof resolveWorkflowTailAlert,
+    'function',
+    'the message pane must resolve terminal errors into one tail alert'
   )
   for (const [status, errorType, detail] of [
     [401, 'llm_authentication', 'Invalid API key'],
@@ -269,13 +282,148 @@ test('terminal provider errors survive live projection and history reload as vis
     const historyMessage = { ...liveMessage, id: Number(liveMessage.id) }
     for (const messages of [[liveMessage], [historyMessage], mergeWorkflowMessagePages([historyMessage], [liveMessage])]) {
       const projected = projectWorkflowMessageList(messages)
-      assert.equal(projected.length, 1, `${status}: live/history overlap must render exactly one error`)
-      assert.equal(alerts.shouldShowErrorAlert(projected[0]), true)
-      assert.equal(alerts.getErrorAlertContent(projected[0]), detail)
-      assert.notEqual(alerts.getErrorAlertTitle(projected[0]), locale.workflow.retrying)
-      assert.equal(projected[0].metadata.upstream_status_code, status)
+      assert.equal(
+        projected.filter(message => message?.role !== 'tool' && message?.isError).length,
+        0,
+        `${status}: a non-tool error must not render as an inline transcript message`
+      )
+      const tailAlert = resolveWorkflowTailAlert(messages, {
+        notification: null,
+        retryInfo: null,
+        consumedIdentity: ''
+      })
+      assert.ok(tailAlert, `${status}: terminal errors must survive as one visible tail alert`)
+      assert.equal(tailAlert.category, 'error')
+      assert.ok(tailAlert.message, `${status}: the tail alert must retain the original error message`)
+      assert.equal(alerts.getErrorAlertContent(tailAlert.message), detail)
+      assert.notEqual(alerts.getErrorAlertTitle(tailAlert.message), locale.workflow.retrying)
+      assert.equal(tailAlert.message.metadata.upstream_status_code, status)
     }
   }
+})
+
+test('status notifier reports only workflow activity, not notifications or errors', async () => {
+  const notifier = await readFile('src/components/workflow/StatusNotifier.vue', 'utf8')
+
+  assert.doesNotMatch(notifier, /workflowStore\.notification/)
+  assert.doesNotMatch(notifier, /setNotification/)
+  assert.doesNotMatch(notifier, /retryInfo|hasActiveRetry|formatWorkflowRetryMessage/)
+  assert.doesNotMatch(notifier, /latestTerminalError|is_error|isError|resolveWorkflowErrorDisplay/)
+  assert.match(notifier, /const latestToolState = computed/)
+  assert.match(notifier, /latestTextActivity/)
+  assert.match(notifier, /isWaitingForUser/)
+  assert.match(notifier, /isWaitingForApproval/)
+  assert.match(notifier, /workflowStore\.isRunning/)
+  assert.match(notifier, /workflow\.statusNotifier\.runningElapsed/)
+})
+
+test('message list renders one tail alert after queued messages', async () => {
+  const messageList = await readFile('src/components/workflow/WorkflowMessageList.vue', 'utf8')
+
+  assert.match(
+    messageList,
+    /tailAlert: \{\s*type: Object,\s*default: \(\) => null\s*\}/
+  )
+  const queuedIndex = messageList.indexOf('class="queued-list"')
+  const tailIndex = messageList.indexOf('v-if="tailAlert"')
+  const tailEnd = messageList.indexOf('</el-alert>', tailIndex)
+  const templateEnd = messageList.indexOf('</template>', tailEnd)
+  assert.ok(queuedIndex >= 0 && tailIndex > queuedIndex && tailEnd > tailIndex)
+  assert.ok(templateEnd > tailEnd, 'the tail alert must be the last block before the list template closes')
+  assert.doesNotMatch(messageList, /shouldShowErrorAlert/)
+  assert.match(messageList, /v-if="getCopyableAiOutput\(message\)"/,
+    'normal assistant output must remain independent from the reasoning block')
+  assert.doesNotMatch(messageList, /retry-status-alert/)
+  assert.doesNotMatch(messageList, /getParsedMessage\(tailAlert/)
+
+  const tailSource = messageList.slice(tailIndex, tailEnd)
+  assert.match(tailSource, /:type="tailAlert\.category"/)
+  assert.match(tailSource, /:closable="false"/)
+  assert.match(tailSource, /show-icon/)
+  assert.match(tailSource, /role="alert"/)
+  assert.match(tailSource, /workflow-error-alert/)
+  assert.match(tailSource, /getErrorAlertTitle\(tailAlert\.message\)/)
+  assert.match(tailSource, /formatWorkflowRetryMessage\(tailAlert\.retryInfo, \$t\)/)
+  assert.match(tailSource, /common\.warning/)
+  assert.match(tailSource, /MarkdownSimple/)
+  assert.match(
+    messageList,
+    /const getTailAlertBody = \(\) => \{[\s\S]*?alert\.message[\s\S]*?getErrorAlertContent\(alert\.message\)[\s\S]*?\}\n/,
+    'fatal tail alerts must reuse the formatted error content'
+  )
+  assert.match(
+    messageList,
+    /const getCopyableAiOutput = message => \{\s*if \(message\?\.isError/,
+    'error bodies must not fall through to the normal AI output renderer'
+  )
+})
+
+test('tail reminder presentation survives reload and consumes only on new message activity', async () => {
+  const source = await readFile('src/components/workflow/WorkflowSessionMessagePane.vue', 'utf8')
+  const start = source.indexOf('const alertPresentation = ref({})')
+  const end = source.indexOf('const isChatting = computed', start)
+  assert.ok(start >= 0 && end > start)
+  const storage = new Map()
+  const fatal = { id: 10, sessionId: 'a', role: 'assistant', message: 'Failure', isError: true }
+  const props = { sessionId: 'a', agentRole: 'primary' }
+  const store = { notification: null }
+  const sourceMessages = { currentWorkflowId: 'a', messages: [fatal] }
+  const stream = { value: { content: '', reasoning: '', retryInfo: null } }
+  let tick
+  const mount = () => runInNewContext(`${source.slice(start, end)};({ tailAlert, alertPresentation })`, {
+    ref: value => ({ value }),
+    computed: getter => ({ get value() { return getter() } }),
+    watch: (getter, callback) => { tick = () => callback(getter()); tick() },
+    props, source: sourceMessages, workflowStore: store, resolvedChatState: stream,
+    hasVisibleWorkflowText, reconcileWorkflowTailAlert, resolveWorkflowTailAlert,
+    localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
+    console
+  })
+  let pane = mount()
+  assert.equal(pane.tailAlert.value.message, fatal)
+  pane = mount()
+  assert.equal(pane.tailAlert.value.message, fatal, 'an unconsumed fatal survives reload')
+  stream.value.content = 'Recovered stream'
+  tick()
+  assert.equal(pane.tailAlert.value, null)
+  stream.value.content = ''
+  pane = mount()
+  assert.equal(pane.tailAlert.value, null, 'consumption survives reload before stream persistence')
+  const warning = { sessionId: 'a', message: 'Warning', category: 'warning', timestamp: 1 }
+  store.notification = warning
+  tick()
+  assert.equal(pane.tailAlert.value.text, 'Warning')
+  store.notification = { sessionId: 'a', message: '', category: 'info', timestamp: 2 }
+  tick()
+  pane = mount()
+  assert.equal(pane.tailAlert.value.text, 'Warning', 'terminal notification cleanup is not new message activity')
+  sourceMessages.messages.push({ id: 11, sessionId: 'a', role: 'user', message: 'Next' })
+  tick()
+  pane = mount()
+  assert.equal(pane.tailAlert.value, null)
+  assert.equal(sourceMessages.messages[0], fatal, 'original diagnostics remain available')
+  props.sessionId = 'b'
+  sourceMessages.currentWorkflowId = 'b'
+  sourceMessages.messages = [{ ...fatal, sessionId: 'b' }]
+  tick()
+  assert.equal(pane.tailAlert.value.message.sessionId, 'b')
+  assert.equal(pane.tailAlert.value.message.id, 10, 'session A consumption does not consume B')
+  props.sessionId = 'a'
+  sourceMessages.currentWorkflowId = 'a'
+  sourceMessages.messages = [fatal]
+  tick()
+  assert.equal(pane.tailAlert.value, null)
+  const finalError = { ...fatal, id: 12 }
+  sourceMessages.messages.push(finalError)
+  tick()
+  assert.equal(pane.tailAlert.value.message, finalError)
+  stream.value.retryInfo = { attempt: 1, total: 3, nextRetryIn: 3 }
+  tick()
+  assert.equal(pane.tailAlert.value.retryInfo, stream.value.retryInfo)
+  stream.value.retryInfo = null
+  tick()
+  assert.equal(pane.tailAlert.value, null, 'retry end must not resurrect a superseded fatal')
+  assert.equal(pane.alertPresentation.value.consumedIdentity, getWorkflowAlertIdentity(finalError))
 })
 
 test('workflow uses a persistent navigation rail beside the collapsible task list', async () => {
@@ -686,7 +834,7 @@ test('workflow quick actions expose manual compression through the slash-command
   assert.match(signalTypes, /MANUAL_COMPRESS: 'manual_compress'/)
 })
 
-test('compression skip warnings remain visible when terminal state clears inline status', async () => {
+test('workflow warnings use only the tail reminder, not a duplicate toast', async () => {
   const source = await readFile('src/composables/workflow/useWorkflowCore.ts', 'utf8')
   const branch = source.match(
     /else if \(payload.type === 'notification'\) \{([\s\S]*?)\n\s*} else if \(payload.type === 'auto_approved_tools_updated'\)/
@@ -703,15 +851,15 @@ test('compression skip warnings remain visible when terminal state clears inline
   const message = '当前没有可安全压缩的上下文片段'
   handle({ type: 'notification', category: 'warning', message })
   assert.deepEqual(notifications, [[message, 'warning']])
-  assert.deepEqual(toasts, [[message, 'warning', 5000]])
+  assert.deepEqual(toasts, [])
 
-  // Ending compression clears inline state but must not erase the independent toast.
+  // Empty/progress notifications still follow the existing event path without duplicate toasts.
   notifications.length = 0
   handle({ type: 'notification', category: 'info', message: '' })
   handle({ type: 'notification', category: 'warning', message: '   ' })
   handle({ type: 'notification', category: 'warning' })
   handle({ type: 'notification', category: 'info', message: 'Compressing context...' })
-  assert.equal(toasts.length, 1, 'empty and progress notifications must not create toasts')
+  assert.equal(toasts.length, 0, 'notifications must not create a second reminder surface')
 })
 
 test('workflow slash commands manage authorized directories', async () => {

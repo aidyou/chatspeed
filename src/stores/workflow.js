@@ -1173,6 +1173,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
     notification.value = {
       message,
       category,
+      sessionId: currentWorkflowId.value,
       timestamp: Date.now()
     };
   };

@@ -25,6 +25,10 @@ import {
   normalizeVisibleCompletionReport,
   normalizeWorkflowErrorAlertContent,
   projectWorkflowMessageList,
+  getWorkflowAlertIdentity,
+  isWorkflowAlertMessage,
+  reconcileWorkflowTailAlert,
+  resolveWorkflowTailAlert,
   reconcileWorkflowTaskWindowState,
   resolveAskUserResponse,
   resolveFinalReviewSubAgentCompletion,
@@ -35,6 +39,55 @@ import {
   selectVisibleWorkflowTaskGroups,
   shouldRenderSubAgentCard
 } from './messageProjectionRules.js'
+
+const fatalAlert = { id: 901, role: 'assistant', message: 'Provider unavailable', isError: true }
+const originalFatal = JSON.stringify(fatalAlert)
+for (const alias of [fatalAlert, { ...fatalAlert, isError: false, is_error: true }, {
+  ...fatalAlert, isError: false, metadata: { is_error: true }
+}]) {
+  assert.equal(isWorkflowAlertMessage(alias), true)
+  assert.equal(resolveWorkflowTailAlert([alias]).message, alias)
+  assert.deepEqual(projectWorkflowMessageList([alias]), [], 'diagnostics render only at the tail')
+}
+for (const next of [
+  { id: 902, role: 'user', message: 'Continue' },
+  { id: 902, role: 'assistant', message: 'Recovered' },
+  { id: 902, role: 'tool', message: '' }
+]) {
+  assert.equal(resolveWorkflowTailAlert([fatalAlert, next]), null)
+}
+assert.equal(JSON.stringify(fatalAlert), originalFatal, 'consuming a reminder never mutates history')
+const toolFailure = { ...fatalAlert, role: 'tool', metadata: { tool_name: 'ask_user' } }
+assert.equal(isWorkflowAlertMessage(toolFailure), false)
+assert.equal(isWorkflowAlertMessage({ ...fatalAlert, metadata: { error_type: 'SubAgentInterrupted' } }), false)
+assert.equal(isWorkflowAlertMessage({ ...fatalAlert, metadata: { ui_visibility: 'hide' } }), false)
+assert.equal(resolveWorkflowTailAlert([fatalAlert, { id: 902, role: 'assistant', message: '' }]).message, fatalAlert)
+assert.equal(projectWorkflowMessageList([toolFailure]).length, 1, 'tool failures remain inspectable')
+let presentation = reconcileWorkflowTailAlert({}, { messages: [fatalAlert] })
+assert.equal(resolveWorkflowTailAlert([fatalAlert], presentation).message.id, 901)
+presentation = reconcileWorkflowTailAlert(presentation, { messages: [fatalAlert], hasStream: true })
+assert.equal(resolveWorkflowTailAlert([fatalAlert], presentation), null)
+presentation = reconcileWorkflowTailAlert(JSON.parse(JSON.stringify(presentation)), { messages: [fatalAlert] })
+assert.equal(resolveWorkflowTailAlert([fatalAlert], presentation), null, 'reload cannot revive a consumed streamed error')
+const laterFatal = { ...fatalAlert, id: 903 }
+assert.equal(resolveWorkflowTailAlert([fatalAlert, laterFatal], presentation).message.id, 903)
+assert.equal(resolveWorkflowTailAlert([fatalAlert], {}).message.id, 901, 'another session has independent state')
+const warning = { message: 'Compression skipped', category: 'warning', timestamp: 10 }
+presentation = reconcileWorkflowTailAlert({}, { messages: [], notification: warning })
+assert.equal(resolveWorkflowTailAlert([], presentation).text, warning.message)
+presentation = reconcileWorkflowTailAlert(presentation, {
+  messages: [], notification: { message: '', category: 'info', timestamp: 11 }
+})
+assert.equal(resolveWorkflowTailAlert([], presentation).text, warning.message, 'terminal cleanup does not consume the warning')
+presentation = reconcileWorkflowTailAlert(presentation, {
+  messages: [{ id: 904, role: 'user', message: 'Next' }], notification: { ...warning, timestamp: 11 }
+})
+assert.equal(resolveWorkflowTailAlert([], presentation), null)
+const retry = { attempt: 1, total: 3, nextRetryIn: 2, errorKind: 'rate_limited' }
+assert.equal(resolveWorkflowTailAlert([], { retryInfo: retry }).retryInfo, retry)
+assert.equal(resolveWorkflowTailAlert([], { retryInfo: { ...retry, nextRetryIn: 0 } }), null)
+assert.equal(resolveWorkflowTailAlert([laterFatal], { retryInfo: null }).message.id, 903)
+assert.notEqual(getWorkflowAlertIdentity(laterFatal), getWorkflowAlertIdentity(fatalAlert))
 
 assert.equal(
   normalizeWorkflowErrorAlertContent(

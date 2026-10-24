@@ -1482,10 +1482,7 @@ export function useWorkflowCore({
                 } else if (payload.type === 'notification') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.setNotification(payload.message, payload.category)
-                    // Terminal state reconciliation clears the inline status immediately.
-                    if (payload.category === 'warning' && payload.message?.trim()) {
-                        showMessage(payload.message, 'warning', 5000)
-                    }
+                    // Warnings share the message-list footer with errors; do not duplicate them as toasts.
                 } else if (payload.type === 'auto_approved_tools_updated') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.setAutoApprovedTools(payload.tools)

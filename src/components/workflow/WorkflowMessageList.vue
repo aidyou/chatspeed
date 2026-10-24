@@ -1060,19 +1060,8 @@
                   {{ message.reasoning || message.message }}
                 </div>
               </div>
-              <el-alert
-                v-if="!isContextSnapshotMessage(message) && shouldShowErrorAlert(message)"
-                type="error"
-                :closable="false"
-                show-icon
-                class="workflow-error-alert">
-                <template #title>{{ getErrorAlertTitle(message) }}</template>
-                <div class="workflow-error-alert__body">
-                  <MarkdownSimple v-link :content="getErrorAlertContent(message)" />
-                </div>
-              </el-alert>
               <div
-                v-else-if="getCopyableAiOutput(message)"
+                v-if="getCopyableAiOutput(message)"
                 class="ai-output-content">
                 <MarkdownSimple v-link :content="getParsedMessage(message).content" />
                 <button
@@ -1168,19 +1157,6 @@
                 <span>{{ $t('common.copy') }}</span>
               </button>
             </div>
-
-            <!-- Retry Countdown... -->
-            <div
-              v-if="chatState.retryInfo && chatState.retryInfo.nextRetryIn > 0"
-              class="retry-status-alert">
-              <el-alert type="warning" :closable="false" show-icon>
-                <template #title>
-                  {{
-                    formatWorkflowRetryMessage(chatState.retryInfo, $t)
-                  }}
-                </template>
-              </el-alert>
-            </div>
           </div>
         </div>
       </div>
@@ -1236,6 +1212,27 @@
           </button>
         </div>
       </div>
+
+      <el-alert
+        v-if="tailAlert"
+        :type="tailAlert.category"
+        :closable="false"
+        show-icon
+        role="alert"
+        :class="['workflow-error-alert', `workflow-error-alert--${tailAlert.category}`]">
+        <template #title>
+          <template v-if="tailAlert.message">{{ getErrorAlertTitle(tailAlert.message) }}</template>
+          <template v-else-if="tailAlert.retryInfo">
+            {{ formatWorkflowRetryMessage(tailAlert.retryInfo, $t) }}
+          </template>
+          <template v-else>
+            {{ tailAlert.category === 'warning' ? $t('common.warning') : $t('common.error') }}
+          </template>
+        </template>
+        <div v-if="getTailAlertBody()" class="workflow-error-alert__body">
+          <MarkdownSimple v-link :content="getTailAlertBody()" />
+        </div>
+      </el-alert>
     </template>
   </div>
 </template>
@@ -1293,6 +1290,10 @@ const props = defineProps({
   queuedMessages: {
     type: Array,
     default: () => []
+  },
+  tailAlert: {
+    type: Object,
+    default: () => null
   },
   isRunning: {
     type: Boolean,
@@ -2127,12 +2128,6 @@ const getRunningPlaceholderText = message =>
     ? t('workflow.awaitingExecution')
     : message?.toolDisplay?.summary || t('workflow.executing')
 
-const shouldShowErrorAlert = message => {
-  if (!message?.isError) return false
-  if (message?.role === 'tool') return false
-  return !!getErrorAlertContent(message)
-}
-
 const getErrorAlertTitle = message => {
   const rawContent = props.removeSystemReminder(message?.message || '').trim()
   if (/^critical error:/i.test(rawContent)) {
@@ -2172,6 +2167,14 @@ const getErrorAlertContent = message => {
     maxAttempts
   })
   return [content, retrySummary].filter(Boolean).join('\n\n')
+}
+
+const getTailAlertBody = () => {
+  const alert = props.tailAlert
+  if (!alert) return ''
+  if (alert.message) return getErrorAlertContent(alert.message)
+  // Plain notification text is already user-facing; it must not be re-parsed as assistant output.
+  return String(alert.text || '').trim()
 }
 
 const getExplorationBatchSummary = message => {
@@ -2667,7 +2670,9 @@ const getSubAgentResultPreview = message => {
 }
 
 const getCopyableAiOutput = message => {
-  if (isContextSnapshotMessage(message) || message?.stepType === 'Think') return ''
+  if (message?.isError || isContextSnapshotMessage(message) || message?.stepType === 'Think') {
+    return ''
+  }
   return props.getParsedMessage(message).content
 }
 
@@ -2914,8 +2919,7 @@ const streamingLayoutState = computed(() => {
     props.chatState?.content?.length || 0,
     props.chatState?.reasoning?.length || 0,
     blocks.length,
-    lastBlock?.content?.length || 0,
-    props.chatState?.retryInfo?.nextRetryIn ?? ''
+    lastBlock?.content?.length || 0
   ]
 })
 
@@ -2973,7 +2977,15 @@ const messageTailLayoutState = computed(() => [
       item.statusText?.length || 0,
       item.attachments?.length || 0
     ].join(':'))
-    .join('|')
+    .join('|'),
+  props.tailAlert
+    ? [
+        props.tailAlert.category,
+        props.tailAlert.text?.length || 0,
+        props.tailAlert.message?.message?.length || 0,
+        props.tailAlert.retryInfo?.nextRetryIn ?? ''
+      ].join(':')
+    : ''
 ])
 
 watch(
@@ -3222,6 +3234,10 @@ defineExpose({
   :deep(.el-alert__content) {
     width: 100%;
   }
+}
+
+.workflow-error-alert--warning {
+  border-color: var(--el-color-warning-light-5);
 }
 
 .workflow-error-alert__body {

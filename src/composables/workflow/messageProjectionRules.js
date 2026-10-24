@@ -27,6 +27,86 @@ export const formatWorkflowRetryMessage = (retryInfo, translate) => {
   })
 }
 
+export const isWorkflowAlertMessage = message => {
+  if (
+    !message || message.role === 'tool' || message.metadata?.ui_visibility === 'hide' ||
+    message.metadata?.error_type === 'SubAgentInterrupted'
+  ) return false
+  return Boolean(
+    message.isError || message.is_error || message.metadata?.is_error ||
+    message.errorType || message.error_type || message.metadata?.error_type ||
+    ['warning', 'error'].includes(message.metadata?.category)
+  )
+}
+
+export const getWorkflowAlertIdentity = message => {
+  if (!message) return ''
+  const id = message.id ?? message.persistedMessageId ?? message.message_id
+  if (id != null) return `message:${id}`
+  // Legacy client-only diagnostics have no durable ID. Keep their display key
+  // stable across re-projection without changing the original record.
+  return JSON.stringify([message.role, message.stepIndex, message.message, message.metadata?.error_type])
+}
+
+const isWorkflowAlertActivity = message => {
+  if (message?.metadata?.ui_visibility === 'hide' && message?.role !== 'user') return false
+  return Boolean(message && (
+    isWorkflowAlertMessage(message) || message.role === 'tool' || hasVisibleWorkflowText(message.message) ||
+    hasVisibleWorkflowText(message.reasoning) || message.metadata?.tool_calls?.length
+  ))
+}
+
+export const resolveWorkflowTailAlert = (
+  messages = [],
+  { notification = null, retryInfo = null, consumedIdentity = '' } = {}
+) => {
+  const last = messages.filter(isWorkflowAlertActivity).at(-1)
+  const message = isWorkflowAlertMessage(last) && getWorkflowAlertIdentity(last) !== consumedIdentity
+    ? last : null
+  if (message) {
+    return { category: message.metadata?.category === 'warning' ? 'warning' : 'error', message }
+  }
+  if (notification?.message?.trim() && ['warning', 'error'].includes(notification.category)) {
+    return { category: notification.category, text: notification.message }
+  }
+  if (retryInfo && Number(retryInfo.nextRetryIn) > 0) {
+    return { category: 'warning', retryInfo }
+  }
+  return null
+}
+
+// This state belongs only to reminder presentation, never workflow execution.
+// Persisting the consumed identity prevents an unfinished streamed reply from
+// resurrecting an older durable error when the page reloads.
+export const reconcileWorkflowTailAlert = (
+  state = {},
+  { messages = [], notification = null, hasStream = false, retryInfo = null } = {}
+) => {
+  const next = { ...state }
+  const retryIdentity = retryInfo ? JSON.stringify([retryInfo.attempt, retryInfo.total, retryInfo.errorKind]) : ''
+  const hasNewRetry = Boolean(retryIdentity && retryIdentity !== next.retryIdentity)
+  next.retryIdentity = retryIdentity
+  const latestAlert = messages.findLast(isWorkflowAlertMessage)
+  const last = messages.filter(isWorkflowAlertActivity).at(-1)
+  const activityIdentity = last ? getWorkflowAlertIdentity(last) : ''
+  const hasNewActivity = Boolean(activityIdentity && activityIdentity !== next.activityIdentity)
+  if (hasStream || hasNewRetry || (hasNewActivity && !isWorkflowAlertMessage(last))) {
+    if (latestAlert) next.consumedIdentity = getWorkflowAlertIdentity(latestAlert)
+    next.notification = null
+  } else if (hasNewActivity && isWorkflowAlertMessage(last)) {
+    next.notification = null
+  }
+  if (activityIdentity) next.activityIdentity = activityIdentity
+  if (notification?.timestamp && notification.timestamp !== next.notificationTimestamp) {
+    next.notificationTimestamp = notification.timestamp
+    if (notification.message?.trim() && ['warning', 'error'].includes(notification.category)) {
+      next.notification = { message: notification.message, category: notification.category }
+      if (latestAlert) next.consumedIdentity = getWorkflowAlertIdentity(latestAlert)
+    }
+  }
+  return next
+}
+
 export const normalizeWorkflowErrorAlertContent = value => {
   const content = String(value ?? '')
     .replace(/<SYSTEM_REMINDER>[\s\S]*?<\/SYSTEM_REMINDER>/gi, '')
@@ -1449,7 +1529,8 @@ export const projectWorkflowMessageList = (
             sourceMessages.filter(
               message =>
                 (!isHiddenSystemObservation(message) || isWorkflowManualClearContextMessage(message)) &&
-                !isEmptyAssistantMessage(message)
+                !isEmptyAssistantMessage(message) &&
+                !isWorkflowAlertMessage(message)
             )
           )
         )
