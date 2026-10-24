@@ -6485,6 +6485,17 @@ pub(crate) async fn update_workflow_agent_config_core(
 
 /// Rebinds a not-yet-started workflow to another primary agent.
 #[cfg(not(feature = "desktop"))]
+fn preserve_workflow_allowed_paths(agent_config: &mut AgentConfig, current_config: &AgentConfig) {
+    if current_config
+        .allowed_paths
+        .as_ref()
+        .is_some_and(|paths| !paths.is_empty())
+    {
+        agent_config.allowed_paths = current_config.allowed_paths.clone();
+    }
+}
+
+#[cfg(not(feature = "desktop"))]
 pub(crate) async fn update_workflow_agent_id_core(
     svc: &WorkflowApplicationService,
     session_id: String,
@@ -6536,6 +6547,7 @@ pub(crate) async fn update_workflow_agent_id_core(
         .and_then(AgentConfig::from_json)
         .unwrap_or_default();
     let mut agent_config = build_agent_config_from_agent(&agent, None, None);
+    preserve_workflow_allowed_paths(&mut agent_config, &current_config);
     agent_config.final_audit = current_config.final_audit;
     agent_config.final_review_mode = current_config.final_review_mode.clone().or_else(|| {
         Some(if current_config.final_audit.unwrap_or(false) {
@@ -6938,6 +6950,39 @@ mod tests {
         fn deref(&self) -> &Self::Target {
             &self.store
         }
+    }
+
+    #[test]
+    fn agent_switch_preserves_existing_workflow_paths_but_uses_agent_defaults_when_empty() {
+        let existing_paths = vec!["/inherited/project".to_string()];
+        let current_config = AgentConfig {
+            allowed_paths: Some(existing_paths.clone()),
+            ..AgentConfig::default()
+        };
+        let mut next_agent_config = AgentConfig {
+            allowed_paths: Some(vec!["/agent/default".to_string()]),
+            ..AgentConfig::default()
+        };
+
+        preserve_workflow_allowed_paths(&mut next_agent_config, &current_config);
+
+        assert_eq!(next_agent_config.allowed_paths, Some(existing_paths));
+
+        let empty_config = AgentConfig {
+            allowed_paths: Some(Vec::new()),
+            ..AgentConfig::default()
+        };
+        let mut next_agent_config = AgentConfig {
+            allowed_paths: Some(vec!["/agent/default".to_string()]),
+            ..AgentConfig::default()
+        };
+
+        preserve_workflow_allowed_paths(&mut next_agent_config, &empty_config);
+
+        assert_eq!(
+            next_agent_config.allowed_paths,
+            Some(vec!["/agent/default".to_string()])
+        );
     }
 
     #[test]
