@@ -747,6 +747,22 @@ Any change to this path must cover, at minimum:
 3. overlap/idempotency and stale-response rejection
 4. scroll-anchor preservation for an off-bottom reader
 
+### 10.13 Streaming UI work must stay bounded and batched
+
+Workflow stream events can arrive continuously for the full duration of a task. Treat assistant chunks, reasoning chunks, tool output, status updates, and countdowns as hot paths. Their cost must not grow with the total durable message history.
+
+On these paths:
+
+- event handlers may append or update the affected stream/tool record, but must not rescan or rebuild the full message list, tool ledger, or session projection for every event;
+- derived UI state must depend on the smallest useful inputs (for example, a message identity, version, count, or boolean state), not the full mutable stream text when only presence or length matters;
+- do not use deep or synchronous watchers over messages, tool records, or stream buffers; watchers on hot-path state must remain shallow, cheap, and free of persistence, DOM measurement, and other blocking work;
+- batch or throttle rendering, persistence, and layout work when events arrive faster than the UI needs to display them; persist only meaningful state transitions, not every token or output fragment;
+- DOM measurement and resize handling must target changed content and run after batched rendering, rather than repeatedly measuring the entire history per stream event.
+
+Any new hot-path watcher, computed projection, or rendering callback must state its expected update frequency and work bound. A change that makes per-event work proportional to total history must be redesigned or accompanied by evidence that the affected collection is strictly bounded and small.
+
+Before merging a change to streaming or message-list behavior, validate with a sustained stream and a realistic long conversation (hundreds of messages). Confirm that input, scrolling, and session switching remain responsive while text and tool output continue arriving. Focused automated tests should assert batching or bounded projection behavior where practical; report any manual performance check.
+
 ## 11. Command-Layer Discipline
 
 `commands/workflow.rs` is allowed to do orchestration.
@@ -804,6 +820,8 @@ The following patterns are forbidden unless they are strictly isolated compatibi
 - hiding tool mutations behind generic truncation
 - adding new signal names on only one side of the wire
 - fixing a structured payload problem by adding more frontend string parsing
+- deep or synchronous watchers over message history, tool ledgers, or stream buffers on a hot path
+- per-event full-history scans, projections, persistence, or DOM measurement during streaming
 
 ## 15. Required Review Questions
 

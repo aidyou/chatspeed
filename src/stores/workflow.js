@@ -1098,58 +1098,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
   };
 
   /**
-   * 追加工具流式输出
-   */
-  const appendToolStream = (toolId, line) => {
-    // 更新传统流式存储
-    if (!toolStreams.value.has(toolId)) {
-      toolStreams.value.set(toolId, []);
-    }
-    const lines = toolStreams.value.get(toolId);
-    lines.push(line);
-    if (lines.length > 100) {
-      lines.splice(0, lines.length - 100);
-    }
-
-    // 更新 Task Ledger
-    if (taskLedgerEnabled.value) {
-      const ledger = currentTaskLedger.value;
-      const existing = ledger?.tools.get(toolId);
-      if (existing) {
-        const streamOutput = [...(existing.streamOutput || []), line];
-        if (streamOutput.length > 100) {
-          streamOutput.splice(0, streamOutput.length - 100);
-        }
-
-        const summaryLine = typeof line === 'string' ? line.trim() : '';
-        upsertToolViewState({
-          toolCallId: toolId,
-          status: existing.status === 'pending' ? 'approved_running' : existing.status,
-          approvalStatus: 'approved',
-          streamOutput,
-          summary: summaryLine.substring(0, 100) || existing.summary
-        });
-      }
-    }
-
-    // 同时更新旧的消息元数据
-    const summaryLine = typeof line === 'string' ? line.trim() : '';
-    if (summaryLine) {
-      patchToolMessage(toolId, (existing, meta) => ({
-        ...existing,
-        message: '',
-        metadata: {
-          ...meta,
-          approval_status: meta.approval_status === 'pending' ? 'approved' : meta.approval_status,
-          execution_status: 'running',
-          hide_approval_details: true,
-          summary: summaryLine
-        }
-      }));
-    }
-  };
-
-  /**
    * 清理指定 workflow 的 Task Ledger
    */
   const clearTaskLedger = (workflowId) => {
@@ -1219,6 +1167,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
   };
 
   const clearToolStream = (toolId) => {
+    pendingToolStreams.delete(toolId);
     toolStreams.value.delete(toolId);
   };
 
@@ -2082,7 +2031,6 @@ export const useWorkflowStore = defineStore('workflow', () => {
     clearApprovalSubmissionsForSession,
     reconcilePendingApprovalSubmissions,
     isApprovalSubmitted,
-    appendToolStream,
     clearToolStream,
     getToolStream,
     setTodoList,

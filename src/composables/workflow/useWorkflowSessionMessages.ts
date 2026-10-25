@@ -192,10 +192,6 @@ export function useWorkflowSessionMessages({ sessionId, agentRole }) {
       if (!['thinking', 'executing'].includes(String(payload.state || '').toLowerCase())) {
         chatState.value = { content: '', reasoning: '', reasoningStatus: 'idle', blocks: [], retryInfo: null }
       }
-    } else if (payload.type === 'tool_stream') {
-      const next = new Map(toolStreams.value)
-      next.set(payload.tool_id, [...(next.get(payload.tool_id) || []), payload.output])
-      toolStreams.value = next
     } else if (payload.type === 'compression_status') {
       compression.value = { isCompressing: payload.is_compressing === true, message: payload.message || '' }
     } else if (payload.type === 'task_completed') {

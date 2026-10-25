@@ -1489,11 +1489,6 @@ export function useWorkflowCore({
                 } else if (payload.type === 'shell_policy_updated') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.setShellPolicy(payload.policy)
-                } else if (payload.type === 'tool_stream') {
-                    markSessionLiveFromNonTerminalEvent()
-                    // Handle tool streaming output
-                    const { tool_id, output } = payload
-                    workflowStore.appendToolStream(tool_id, output)
                 }
             }, undefined, `workflowEvent:${payload?.type || 'unknown'}`)
         }

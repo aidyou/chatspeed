@@ -3265,6 +3265,7 @@ impl ShellExecute {
         }
         let timeout_ms = crate::tools::effective_timeout_ms(&execution_plan, requested_timeout_ms);
         Self::log_execution_backend_debug(&tool_id, command_str, &execution_plan);
+        let gateway = ResultOnlyShellGateway::new(configured_gateway.as_ref());
 
         if let Some(sandbox_command) =
             crate::tools::sandbox_command_for_plan(&execution_plan, command_str)?
@@ -3274,7 +3275,7 @@ impl ShellExecute {
                     command_str,
                     timeout_ms,
                     sandbox_command,
-                    configured_gateway.as_ref(),
+                    &gateway,
                     session_id,
                     &tool_id,
                     Some(execution_plan.clone()),
@@ -3282,7 +3283,6 @@ impl ShellExecute {
                 .await;
         }
 
-        let gateway = ResultOnlyShellGateway::new(configured_gateway.as_ref());
         let execution_plan_metadata = serde_json::to_value(&execution_plan).ok();
         // Execute host compound commands through the platform shell as one command.
         // `parse_safe_compound_command` remains available for policy/output analysis,
@@ -4634,6 +4634,33 @@ mod tests {
             structured["execution_plan"]["backend"].as_str(),
             Some("host")
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_shell_call_keeps_output_in_result_without_tool_stream_events() {
+        let temp_root = stable_temp_dir();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let gateway = Arc::new(RecordingGateway::default());
+        let shell = test_shell_execute(project_root)
+            .with_gateway(gateway.clone(), "test-session".to_string());
+
+        let result = shell
+            .call(json!({
+                "command": "printf 'result output\n'",
+                "timeout": 10_000,
+            }))
+            .await
+            .unwrap();
+
+        assert!(gateway.streams.lock().unwrap().is_empty());
+        let structured = result
+            .structured_content
+            .expect("structured content missing");
+        assert!(structured["llm_content"]
+            .as_str()
+            .expect("LLM result missing")
+            .contains("result output"));
     }
 
     #[cfg(unix)]
