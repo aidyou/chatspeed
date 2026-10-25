@@ -3230,6 +3230,7 @@ defineExpose({
 .workflow-error-alert {
   margin-top: var(--cs-space-sm);
   border: 1px solid var(--el-color-danger-light-5);
+  border-radius: var(--cs-border-radius-md);
 
   :deep(.el-alert__content) {
     width: 100%;
