@@ -143,23 +143,26 @@ const alertNotification = computed(() =>
   props.agentRole === 'primary' && workflowStore.notification?.sessionId === props.sessionId
     ? workflowStore.notification : null
 )
+const hasVisibleStream = computed(() =>
+  hasVisibleWorkflowText(resolvedChatState.value?.content) ||
+  hasVisibleWorkflowText(resolvedChatState.value?.reasoning)
+)
 let presentationSessionId = ''
-let previousStream = ['', '']
 watch(
   () => [
     props.sessionId,
     alertSourceMessages.value,
-    alertNotification.value,
-    resolvedChatState.value?.content || '',
-    resolvedChatState.value?.reasoning || '',
+    alertNotification.value?.timestamp || 0,
+    alertNotification.value?.message || '',
+    alertNotification.value?.category || '',
+    hasVisibleStream.value,
     resolvedChatState.value?.retryInfo || null
   ],
-  ([sessionId, messages, notification, content, reasoning, retryInfo]) => {
+  ([sessionId, messages, notificationTimestamp, notificationMessage, notificationCategory, hasStream, retryInfo]) => {
     if (!sessionId) return
     const key = `workflow-tail-alert:${sessionId}`
     if (presentationSessionId !== sessionId) {
       presentationSessionId = sessionId
-      previousStream = ['', '']
       try {
         const stored = JSON.parse(localStorage.getItem(key) || '{}')
         alertPresentation.value = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {}
@@ -167,10 +170,9 @@ watch(
         alertPresentation.value = {}
       }
     }
-    const hasStream =
-      (content !== previousStream[0] && hasVisibleWorkflowText(content)) ||
-      (reasoning !== previousStream[1] && hasVisibleWorkflowText(reasoning))
-    previousStream = [content, reasoning]
+    const notification = notificationTimestamp
+      ? { timestamp: notificationTimestamp, message: notificationMessage, category: notificationCategory }
+      : null
     const next = reconcileWorkflowTailAlert(alertPresentation.value, { messages, notification, hasStream, retryInfo })
     if (JSON.stringify(next) === JSON.stringify(alertPresentation.value)) return
     alertPresentation.value = next
@@ -180,7 +182,7 @@ watch(
       console.warn('[Workflow] Unable to persist reminder presentation:', error)
     }
   },
-  { immediate: true, deep: true, flush: 'sync' }
+  { immediate: true }
 )
 const tailAlert = computed(() => resolveWorkflowTailAlert(alertSourceMessages.value, {
   ...alertPresentation.value,
