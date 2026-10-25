@@ -103,7 +103,7 @@
       "documentationUrl": "https://docs.aimlapi.com",
       "id": "aimlapi",
       "logo": "https://models.dev/logos/aimlapi.svg",
-      "modelCount": 177,
+      "modelCount": 178,
       "name": "AI/ML API",
       "protocol": "openai",
       "responses": false
@@ -403,7 +403,7 @@
       "documentationUrl": "https://llm.chutes.ai/v1/models",
       "id": "chutes",
       "logo": "https://models.dev/logos/chutes.svg",
-      "modelCount": 14,
+      "modelCount": 16,
       "name": "Chutes",
       "protocol": "openai",
       "responses": false
@@ -503,7 +503,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 106,
+      "modelCount": 107,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -971,7 +971,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 398,
+      "modelCount": 397,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 426,
+      "modelCount": 430,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1321,6 +1321,26 @@
       "responses": false
     },
     {
+      "api": "https://api.munito.ai/inference/v1",
+      "documentationUrl": "https://docs.munito.ai/models",
+      "id": "munito",
+      "logo": "https://models.dev/logos/munito.svg",
+      "modelCount": 5,
+      "name": "Munito AI",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://api.eu.munito.ai/inference/v1",
+      "documentationUrl": "https://docs.munito.ai/regions",
+      "id": "munito-eu",
+      "logo": "https://models.dev/logos/munito-eu.svg",
+      "modelCount": 4,
+      "name": "Munito AI (EU)",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://api.nan.builders/v1",
       "documentationUrl": "https://nan.builders/docs/models",
       "id": "nan",
@@ -1335,7 +1355,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 630,
+      "modelCount": 649,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1355,7 +1375,7 @@
       "documentationUrl": "https://docs.tokenfactory.nebius.com/",
       "id": "nebius",
       "logo": "https://models.dev/logos/nebius.svg",
-      "modelCount": 24,
+      "modelCount": 26,
       "name": "Nebius Token Factory",
       "protocol": "openai",
       "responses": false
@@ -1405,7 +1425,7 @@
       "documentationUrl": "https://novita.ai/docs/guides/introduction",
       "id": "novita-ai",
       "logo": "https://models.dev/logos/novita-ai.svg",
-      "modelCount": 87,
+      "modelCount": 89,
       "name": "Novita AI",
       "protocol": "openai",
       "responses": false
@@ -1489,7 +1509,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/go/",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 35,
+      "modelCount": 37,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -1510,7 +1530,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 391,
+      "modelCount": 390,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2351,9 +2371,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "70eabaf3c84595b1fd0e654ca2246ff6f015048eaae9ddf75a7e4657c5aa51bc",
-    "generatedAt": "2026-10-24T08:10:03Z",
+    "catalogSha256": "a40cf3cc3a690ff76f80c84e99c0307601db80097ab255156b4a430bc67933dc",
+    "generatedAt": "2026-10-25T08:27:24Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "24570112d8e6b2681161f33a13984f379824f735"
+    "revision": "b7ea0f2912b64f9d486a382aa2923279283fc8c0"
   }
 }
