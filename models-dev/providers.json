@@ -216,7 +216,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 199,
+      "modelCount": 200,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 372,
+      "modelCount": 369,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -723,7 +723,7 @@
       "documentationUrl": "https://docs.gitlab.com/user/duo_agent_platform/",
       "id": "gitlab",
       "logo": "https://models.dev/logos/gitlab.svg",
-      "modelCount": 30,
+      "modelCount": 31,
       "name": "GitLab Duo",
       "responses": false
     },
@@ -1315,7 +1315,7 @@
       "documentationUrl": "https://docs.morphllm.com/api-reference/introduction",
       "id": "morph",
       "logo": "https://models.dev/logos/morph.svg",
-      "modelCount": 3,
+      "modelCount": 11,
       "name": "Morph",
       "protocol": "openai",
       "responses": false
@@ -1365,7 +1365,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 57,
+      "modelCount": 56,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1711,7 +1711,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 182,
+      "modelCount": 183,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -2371,9 +2371,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "a40cf3cc3a690ff76f80c84e99c0307601db80097ab255156b4a430bc67933dc",
-    "generatedAt": "2026-10-25T08:27:24Z",
+    "catalogSha256": "7ec29fac426342d499ecbf3138bfe4af3f5550bb747f4fb650936ba228b98295",
+    "generatedAt": "2026-10-26T08:58:17Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "b7ea0f2912b64f9d486a382aa2923279283fc8c0"
+    "revision": "b988aaf528f94307a4b81791220d8f2e9b820c8e"
   }
 }
