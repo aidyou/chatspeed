@@ -14,7 +14,7 @@ export function useRuntimeStatus(invoke, refresh, {
   const loading = ref(true)
   const error = ref(null)
   const statusError = ref(null)
-  const ready = computed(() => isRuntimeReady(status.value))
+  const ready = computed(() => isRuntimeInitialized(status.value))
   const usable = computed(() => ready.value && !loading.value && !error.value)
   let stopped = false
   let timer
@@ -55,7 +55,7 @@ export function useRuntimeStatus(invoke, refresh, {
     try {
       const next = await invoke('runtime_status')
       if (stopped) return
-      if (isRuntimeReady(next) && (!ready.value || next.generation !== status.value?.generation)) {
+      if (isRuntimeInitialized(next) && (!ready.value || next.generation !== status.value?.generation)) {
         revision += 1
         failures = 0
         retryAt = 0

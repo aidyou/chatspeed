@@ -40,6 +40,9 @@ import { ElMessage } from 'element-plus'
 import { useSettingStore } from '@/stores/setting'
 import { useModelStore } from '@/stores/model'
 import { useChatStore } from '@/stores/chat'
+import { useChatHubStore } from '@/stores/chatHub'
+import { useNoteStore } from '@/stores/note'
+import { useSensitiveStore } from '@/stores/sensitiveStore'
 import { useSkillStore } from '@/stores/skill'
 import { useAgentStore } from '@/stores/agent'
 import { useSandboxSchemeStore } from '@/stores/sandbox_scheme'
@@ -55,6 +58,9 @@ const settingStore = useSettingStore()
 const mcpStore = useMcpStore()
 const modelStore = useModelStore()
 const chatStore = useChatStore()
+const chatHubStore = useChatHubStore()
+const noteStore = useNoteStore()
+const sensitiveStore = useSensitiveStore()
 const skillStore = useSkillStore()
 const agentStore = useAgentStore()
 const sandboxSchemeStore = useSandboxSchemeStore()
@@ -121,7 +127,10 @@ const refreshRuntimeStores = async generation => {
         ['proxy groups', () => proxyGroupStore.getList()],
         ['agents', () => agentStore.fetchAgents()],
         ['available tools', () => agentStore.fetchAvailableTools()],
-        ['sandbox schemes', () => sandboxSchemeStore.fetchSchemes()]
+        ['sandbox schemes', () => sandboxSchemeStore.fetchSchemes()],
+        ['chat hubs', () => chatHubStore.load()],
+        ['note tags', () => noteStore.getTagList()],
+        ['sensitive filtering', () => sensitiveStore.fetchConfig()]
       ]
       const results = await Promise.allSettled(refreshes.map(([, refresh]) => refresh()))
       results.forEach((result, index) => {

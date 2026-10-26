@@ -26,6 +26,72 @@ test('readiness uses authoritative state and heartbeat', () => {
 
 })
 
+test('connected runtimes wait for initialization before hydrating each generation', async () => {
+  let status = { ...ready(1), ready_generation: 0 }
+  let loads = 0
+  const app = mount(async () => status, async () => { loads++ })
+  try {
+    await wait(20)
+    assert.equal(loads, 0)
+    assert.equal(app.runtime.usable.value, false)
+    status = ready(1)
+    await wait(20)
+    assert.equal(loads, 1)
+    status = { ...ready(2), ready_generation: 1 }
+    await wait(20)
+    assert.equal(loads, 1)
+    assert.equal(app.runtime.usable.value, false)
+    status = ready(2)
+    await wait(20)
+    assert.equal(loads, 2)
+  } finally { app.stop() }
+})
+
+test('ChatHub recovery restores the dock only after a successful inventory and retries after failure', async () => {
+  const source = readFileSync(new URL('../views/Workflow.vue', import.meta.url), 'utf8')
+  const body = source.split('async function refreshChatHubRuntimeData(isCurrent) {')[1]
+    .split('\nasync function refreshRuntimeData')[0]
+  const calls = []
+  let fail = true
+  const refresh = new Function('chatHubStore', 'maybeRestoreDockLayout', 'console',
+    `let dockHubsReady = false; return async function(isCurrent) {${body}`)(
+    {
+      load: async () => { calls.push('load'); if (fail) throw new Error('not ready') },
+      loadViewLayout: async () => { calls.push('layout') },
+      startSyncListener: async () => { calls.push('listen') }
+    }, () => { calls.push('restore') }, { error() {} })
+  await refresh(() => true)
+  assert.deepEqual(calls, ['load'])
+  fail = false
+  await refresh(() => true)
+  assert.deepEqual(calls, ['load', 'load', 'layout', 'listen', 'restore'])
+  calls.length = 0
+  await refresh(() => false)
+  assert.deepEqual(calls, ['load'], 'stale hydration cannot restore the dock or register listeners')
+})
+
+test('global runtime-ready refresh includes ChatHub, note tags and sensitive filtering with generation deduplication', async () => {
+  const source = readFileSync(new URL('../App.vue', import.meta.url), 'utf8')
+  const body = source.split('const refreshRuntimeStores = async generation => {')[1]
+    .split('\nwatch(')[0]
+  const calls = []
+  const store = method => ({ [method]: async () => { calls.push(method) } })
+  const refresh = new Function('settingStore', 'setTheme', 'modelStore', 'skillStore', 'mcpStore',
+    'proxyGroupStore', 'agentStore', 'sandboxSchemeStore', 'chatHubStore', 'noteStore', 'sensitiveStore',
+    `let lastRuntimeReadyGeneration = 0; let runtimeStoreRefreshPromise = null;
+     return async generation => {${body}`)(
+    store('updateSettingStore'), () => {}, store('updateModelStore'), store('updateSkillStore'),
+    store('fetchMcpServers'), store('getList'),
+    { ...store('fetchAgents'), ...store('fetchAvailableTools') }, store('fetchSchemes'),
+    store('load'), store('getTagList'), store('fetchConfig'))
+  await refresh(1)
+  await refresh(1)
+  await refresh(2)
+  for (const method of ['load', 'getTagList', 'fetchConfig']) {
+    assert.equal(calls.filter(call => call === method).length, 2, method)
+  }
+})
+
 test('refreshes once on first ready, generation change and same-generation recovery', async () => {
   let status = { state: 'disconnected' }
   let loads = 0
@@ -144,9 +210,10 @@ test('background snapshot failure propagates to the banner without a toast; manu
   const failure = new Error('snapshot transport failed')
   const messages = []
   const select = new Function('canSwitchWorkflow', 'workflowStore', 'currentSessionId', 'safeExecute',
-    'resetChatState', 'clearRetryTimer', 'showMessage', 't', 'console', `return async ${body}`)(
+    'resetChatState', 'clearRetryTimer', 'showMessage', 't', 'console', 'setupWorkflowEvents', 'formatUserError', `return async ${body}`)(
     { value: true }, { selectWorkflow: async () => { throw failure } }, { value: null }, fn => fn(),
-    () => {}, () => {}, (...args) => messages.push(args), key => key, { error() {} })
+    () => {}, () => {}, (...args) => messages.push(args), key => key, { error() {} },
+    async (_id, hydrate) => { await hydrate(); return true }, error => error.message)
   for (let i = 0; i < 3; i++) {
     await assert.rejects(select('chosen', { background: true }), error => error === failure)
   }
@@ -162,9 +229,9 @@ test('background workflow bootstrap failures also propagate without toasts', asy
   const failure = new Error('create transport failed')
   const messages = []
   const create = new Function('selectedAgent', 'workflowStore', 'getCurrentWorkflowAgentConfig',
-    'invokeWrapper', 'showMessage', 'console', 't', `return async ${body}`)(
+    'invokeWrapper', 'showMessage', 'console', 't', 'formatUserError', `return async ${body}`)(
     { value: { id: 'agent' } }, {}, () => ({}), async () => { throw failure },
-    (...args) => messages.push(args), { error() {} }, key => key)
+    (...args) => messages.push(args), { error() {} }, key => key, error => error.message)
   await assert.rejects(create({ background: true }), error => error === failure)
   assert.equal(messages.length, 0)
   assert.equal(await create(), false)
@@ -217,7 +284,8 @@ test('workflow recovery executes snapshot/SSE selection again and never bootstra
   const listeners = { value: null }
   const refresh = new Function('modelStore', 'workflowStore', 'workflowAutomationStore', 'agentStore',
     'resolveInitialWorkflowId', 'selectWorkflow', 'unlistenWorkflowEvents', 'lastHistoryWorkflowId',
-    'coreCreateNewWorkflow', `return async function(isCurrent) {${body}`)(
+    'coreCreateNewWorkflow', 'refreshChatHubRuntimeData', 'fetchSystemSkills', 'invokeWrapper',
+    'defaultImageRecognitionPrompt', `return async function(isCurrent) {${body}`)(
     { updateModelStore: async () => { calls.push('models') } }, workflowStore,
     { fetchAutomations: async () => { calls.push('automations') } },
     { agents: [{}], fetchAgents: async () => { calls.push('agents') } }, () => null,
@@ -226,7 +294,9 @@ test('workflow recovery executes snapshot/SSE selection again and never bootstra
       calls.push(`snapshot/SSE:${id}`)
       listeners.value = () => {}
     },
-    listeners, { value: null }, async () => { calls.push('create') })
+    listeners, { value: null }, async () => { calls.push('create') },
+    async () => { calls.push('hubs') }, async () => { calls.push('system skills') },
+    async () => { calls.push('image prompt'); return 'prompt' }, { value: '' })
   let status = ready(1)
   const app = mount(async () => status, refresh)
   try {
@@ -234,7 +304,9 @@ test('workflow recovery executes snapshot/SSE selection again and never bootstra
     status = ready(2)
     await wait(20)
     assert.equal(calls.filter(call => call === 'snapshot/SSE:chosen').length, 2)
-    assert.equal(calls.filter(call => call === 'models').length, 2)
+    for (const inventory of ['hubs', 'system skills', 'image prompt']) {
+      assert.equal(calls.filter(call => call === inventory).length, 2)
+    }
     assert.equal(calls.includes('create'), false)
     workflowStore.currentWorkflowId = null
     workflowStore.loadWorkflows = async () => { throw new Error('offline') }

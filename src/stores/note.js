@@ -22,7 +22,7 @@ export const useNoteStore = defineStore('note', () => {
    * Gets a list of all note tags.
    */
   const getTagList = () => {
-    invokeWrapper('get_tags').then(result => {
+    return invokeWrapper('get_tags').then(result => {
       if (!result) {
         tags.value = []
         return

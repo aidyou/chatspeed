@@ -3405,7 +3405,33 @@ watch(
   { immediate: true }
 )
 
+async function refreshChatHubRuntimeData(isCurrent) {
+  try {
+    await chatHubStore.load()
+    if (!isCurrent()) return
+    // Failed inventories must not discard saved dock tabs.
+    dockHubsReady = true
+    await chatHubStore.loadViewLayout()
+    if (!isCurrent()) return
+    await chatHubStore.startSyncListener()
+    if (isCurrent()) maybeRestoreDockLayout()
+  } catch (error) {
+    console.error('Failed to load chat hubs:', error)
+  }
+}
+
 async function refreshRuntimeData(isCurrent) {
+  if (!isCurrent()) return
+  // Optional inventories must recover after startup without blocking session/SSE recovery.
+  await Promise.allSettled([
+    refreshChatHubRuntimeData(isCurrent),
+    fetchSystemSkills(),
+    invokeWrapper('get_default_image_recognition_prompt').then(prompt => {
+      if (isCurrent()) defaultImageRecognitionPrompt.value = prompt
+    }).catch(error => {
+      console.error('Failed to load default image recognition prompt:', error)
+    })
+  ])
   if (!isCurrent()) return
   await workflowStore.loadWorkflows()
   if (workflowStore.error) throw new Error('Workflow list refresh failed')
@@ -3480,29 +3506,6 @@ onMounted(async () => {
     osType.value = osInfo.os
   } catch (error) {
     console.error('Failed to get OS info:', error)
-  }
-
-  try {
-    await chatHubStore.load()
-    // The hub inventory is the other inventory that owns a dock tab, so a restore may only run
-    // once it answered: a list that failed to load must not drop the saved chat tabs.
-    dockHubsReady = true
-    // How the page is docked and how wide it may be both belong to the backend.
-    await chatHubStore.loadViewLayout()
-    await chatHubStore.startSyncListener()
-  } catch (error) {
-    console.error('Failed to load chat hubs:', error)
-  }
-  // The saved dock is applied only once both inventories answered; a plugin inventory that is
-  // still loading defers the restore to a successful refresh below.
-  maybeRestoreDockLayout()
-  await fetchSystemSkills()
-  try {
-    defaultImageRecognitionPrompt.value = await invokeWrapper(
-      'get_default_image_recognition_prompt'
-    )
-  } catch (error) {
-    console.error('Failed to load default image recognition prompt:', error)
   }
 
   if (viewDisposed) return
