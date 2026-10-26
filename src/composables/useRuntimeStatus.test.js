@@ -2,10 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { effectScope } from 'vue'
 import { readFileSync } from 'node:fs'
-import { isRuntimeReady, useRuntimeStatus } from './useRuntimeStatus.js'
+import { isRuntimeInitialized, isRuntimeReady, useRuntimeStatus } from './useRuntimeStatus.js'
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
-const ready = generation => ({ state: 'attached', heartbeat_ok: null, generation })
+const ready = generation => ({
+  state: 'attached', heartbeat_ok: null, generation, ready_generation: generation
+})
 function mount(invoke, refresh) {
   const scope = effectScope()
   const runtime = scope.run(() => useRuntimeStatus(invoke, refresh, { interval: 5, retryDelay: 5 }))
@@ -18,7 +20,10 @@ test('readiness uses authoritative state and heartbeat', () => {
     assert.equal(isRuntimeReady({ state, heartbeat_ok: true }), false)
   }
   assert.equal(isRuntimeReady(ready(1)), true)
+  assert.equal(isRuntimeInitialized(ready(1)), true)
+  assert.equal(isRuntimeInitialized({ ...ready(1), ready_generation: 0 }), false)
   assert.equal(isRuntimeReady({ state: 'spawned', heartbeat_ok: false }), false)
+
 })
 
 test('refreshes once on first ready, generation change and same-generation recovery', async () => {
@@ -261,7 +266,7 @@ test('chat recovery reloads models, conversations and selected messages without 
     chat.currentConversationId = 9
     status = ready(1)
     await wait(20)
-    assert.deepEqual(calls, ['models', 'conversations', 'messages:7', 'models', 'conversations', 'messages:9'])
+    assert.deepEqual(calls, ['conversations', 'messages:7', 'conversations', 'messages:9'])
     assert.equal(chat.currentConversationId, 9)
   } finally { app.stop() }
 })
@@ -269,7 +274,7 @@ test('chat recovery reloads models, conversations and selected messages without 
 test('views refresh through existing data and SSE paths without clearing drafts', () => {
   const workflow = readFileSync(new URL('../views/Workflow.vue', import.meta.url), 'utf8')
   const section = workflow.split('async function refreshRuntimeData(isCurrent) {')[1].split('onMounted(')[0]
-  for (const call of ['modelStore.updateModelStore()', 'workflowStore.loadWorkflows()',
+  for (const call of ['workflowStore.loadWorkflows()',
     'workflowAutomationStore.fetchAutomations()', 'agentStore.fetchAgents()', 'selectWorkflow(sessionId, { background: true })']) {
     assert.ok(section.includes(call), call)
   }
@@ -278,6 +283,7 @@ test('views refresh through existing data and SSE paths without clearing drafts'
   assert.ok(section.indexOf('await workflowStore.loadWorkflows()') < section.indexOf('await coreCreateNewWorkflow({ background: true })'))
   const chat = readFileSync(new URL('../views/Index.vue', import.meta.url), 'utf8')
   const refresh = chat.split('const runtime = useRuntimeStatus')[1].split('const { usable:')[0]
+  assert.doesNotMatch(refresh, /modelStore\.updateModelStore\(\)/)
   assert.match(refresh, /await chatStore.loadConversations\(\)/)
   assert.match(refresh, /await chatStore.loadMessages\(chatStore.currentConversationId/)
   assert.doesNotMatch(refresh, /inputMessage.value\s*=|newChat\(/)

@@ -1,7 +1,7 @@
 import { FrontendAppError, invokeWrapper } from '@/libs/tauri';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { defineStore } from 'pinia';
-import { computed, nextTick, ref } from 'vue';
+import { computed, ref } from 'vue';
 
 import { sendSyncState } from '@/libs/sync';
 import { isEmpty } from '@/libs/util';
@@ -148,18 +148,15 @@ export const useSkillStore = defineStore('skill', () => {
     })
   }
 
-  let isSkillLoading = false
+  let skillLoadingPromise = null
   /**
    * Fetches all AI skills from the backend and updates the state.
    * Uses Tauri's invoke method to call the backend command `get_all_ai_skills`.
    * If the result is empty, it sets the skills to an empty array.
    */
   const updateSkillStore = () => {
-    if (isSkillLoading) {
-      return
-    }
-    isSkillLoading = true
-    invokeWrapper('get_all_ai_skills')
+    if (skillLoadingPromise) return skillLoadingPromise
+    skillLoadingPromise = invokeWrapper('get_all_ai_skills')
       .then((result) => {
         if (isEmpty(result)) {
           skills.value = [];
@@ -175,10 +172,12 @@ export const useSkillStore = defineStore('skill', () => {
         } else {
           console.error('Failed to update skill store:', error);
         }
+        return false
       })
       .finally(() => {
-        isSkillLoading = false
+        skillLoadingPromise = null
       })
+    return skillLoadingPromise
   };
 
 
@@ -223,11 +222,6 @@ export const useSkillStore = defineStore('skill', () => {
       logo: skill.logo ? getSettingStore()?.settings.httpServer + skill.logo : ''
     }
   }
-
-  // Initialize the skill store by fetching the skills
-  nextTick(() => {
-    updateSkillStore();
-  })
 
   return {
     skills,

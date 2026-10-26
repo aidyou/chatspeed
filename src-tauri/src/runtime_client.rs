@@ -369,6 +369,8 @@ pub struct RuntimeStatus {
     /// Monotonically increasing connection generation. It changes only after
     /// the lease and all connection state have been installed.
     pub generation: u64,
+    /// Connection generation whose desktop-side initialization has completed.
+    pub ready_generation: u64,
 }
 
 /// Runtime instance identity a coordinated shutdown must target.
@@ -459,6 +461,7 @@ struct SupervisorState {
     connecting: bool,
     stopping: bool,
     generation: u64,
+    ready_generation: u64,
     pending_child: Option<RuntimeChild>,
     pending_pid: Option<u32>,
 }
@@ -519,6 +522,7 @@ impl SupervisorState {
             lease_expires_at: connection.map(|c| c.lease.expires_at().to_string()),
             last_error: self.last_error.clone(),
             generation: self.generation,
+            ready_generation: self.ready_generation,
         }
     }
 }
@@ -542,6 +546,7 @@ impl RuntimeSupervisor {
                 connecting: false,
                 stopping: false,
                 generation: 0,
+                ready_generation: 0,
                 pending_child: None,
                 pending_pid: None,
             })),
@@ -656,6 +661,22 @@ impl RuntimeSupervisor {
         self.monitor.stop.send_replace(false);
         self.monitor.started.store(false, Ordering::SeqCst);
         self.start_health_monitor();
+    }
+
+    /// Marks one connected generation as fully initialized by the desktop.
+    pub async fn mark_ready(&self, generation: u64) -> bool {
+        let mut state = self.inner.lock().await;
+        if state.generation != generation
+            || !matches!(
+                state.state,
+                RuntimeConnectionState::Attached | RuntimeConnectionState::Spawned
+            )
+            || state.connection.is_none()
+        {
+            return false;
+        }
+        state.ready_generation = generation;
+        true
     }
 
     /// Returns a clone of the connected control-plane client.

@@ -3,6 +3,9 @@ import { computed, onScopeDispose, ref } from 'vue'
 export const isRuntimeReady = status =>
   ['attached', 'spawned'].includes(status?.state) && status.heartbeat_ok !== false
 
+export const isRuntimeInitialized = status =>
+  isRuntimeReady(status) && status.ready_generation === status.generation && status.generation > 0
+
 // Polling and hydration have separate single flights so a slow load cannot hide a restart.
 export function useRuntimeStatus(invoke, refresh, {
   interval = 1000, retryDelay = 2000, maxRetryDelay = 30000

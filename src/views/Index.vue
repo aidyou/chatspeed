@@ -651,7 +651,6 @@ const currentModelAlias = computed(() => {
 })
 
 const runtime = useRuntimeStatus(invokeWrapper, async isCurrent => {
-  if (await modelStore.updateModelStore() === false) throw new Error('Model refresh failed')
   if (!isCurrent()) return
   await chatStore.loadConversations()
   if (!isCurrent()) return

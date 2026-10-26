@@ -347,9 +347,6 @@ export const useModelStore = defineStore('modelProvider', () => {
     csSetStorage(csStorageKey.defaultProvider, { id: persistedDefaultProvider.id })
   }
 
-  // Initialize the model store
-  updateModelStore();
-
   return {
     providers,
     getAvailableProviders,

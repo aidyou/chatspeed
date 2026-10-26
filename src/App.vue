@@ -28,6 +28,7 @@ import { useDark, usePreferredDark } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { formatUserError } from '@/libs/error'
 import i18n, { setI18nLanguage } from '@/i18n'
+import { isRuntimeInitialized } from '@/composables/useRuntimeStatus'
 
 import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -61,6 +62,9 @@ const updateStore = useUpdateStore()
 const windowStore = useWindowStore()
 const proxyGroupStore = useProxyGroupStore()
 const listener = ref(null)
+const runtimeReadyListener = ref(null)
+let lastRuntimeReadyGeneration = 0
+let runtimeStoreRefreshPromise = null
 const requiresApiKeyUnlock = ['main', 'assistant', 'workflow', 'settings', 'proxy_switcher'].includes(
   windowStore.windowLabel
 )
@@ -96,7 +100,45 @@ const applyPrimaryColor = value => {
   document.documentElement.dataset.primaryColor = PRIMARY_COLORS.has(value) ? value : 'green'
 }
 
+const RUNTIME_READY_EVENT = 'cs://runtime_ready'
 const updateTrayFlag = ref(false)
+const refreshRuntimeStores = async generation => {
+  const runtimeGeneration = Number(generation)
+  if (!Number.isFinite(runtimeGeneration) || runtimeGeneration <= lastRuntimeReadyGeneration) return
+  if (runtimeStoreRefreshPromise) {
+    await runtimeStoreRefreshPromise
+    if (runtimeGeneration <= lastRuntimeReadyGeneration) return
+  }
+
+  runtimeStoreRefreshPromise = (async () => {
+    try {
+      await settingStore.updateSettingStore()
+      setTheme()
+      const refreshes = [
+        ['models', () => modelStore.updateModelStore()],
+        ['skills', () => skillStore.updateSkillStore()],
+        ['MCP servers', () => mcpStore.fetchMcpServers()],
+        ['proxy groups', () => proxyGroupStore.getList()],
+        ['agents', () => agentStore.fetchAgents()],
+        ['available tools', () => agentStore.fetchAvailableTools()],
+        ['sandbox schemes', () => sandboxSchemeStore.fetchSchemes()]
+      ]
+      const results = await Promise.allSettled(refreshes.map(([, refresh]) => refresh()))
+      results.forEach((result, index) => {
+        if (result.status === 'rejected' || result.value === false) {
+          console.error(`Failed to refresh ${refreshes[index][0]} after runtime became ready:`, result.reason || 'refresh returned false')
+        }
+      })
+      lastRuntimeReadyGeneration = runtimeGeneration
+    } catch (error) {
+      console.error('Failed to initialize frontend data after runtime became ready:', error)
+    } finally {
+      runtimeStoreRefreshPromise = null
+    }
+  })()
+  await runtimeStoreRefreshPromise
+}
+
 watch(
   () => settings.value.interfaceLanguage,
   newLang => {
@@ -165,9 +207,18 @@ onMounted(async () => {
   windowType.value = router.currentRoute.value.name
 
   await settingStore.getEnv(true)
-  // update the setting store
-  await settingStore.updateSettingStore()
-
+  runtimeReadyListener.value = await listen(RUNTIME_READY_EVENT, event => {
+    void refreshRuntimeStores(event?.payload?.generation)
+  })
+  let runtimeStatus = null
+  try {
+    runtimeStatus = await invokeWrapper('runtime_status')
+  } catch (error) {
+    console.warn('Failed to inspect runtime readiness during app startup:', error)
+  }
+  if (isRuntimeInitialized(runtimeStatus)) {
+    void refreshRuntimeStores(runtimeStatus.generation)
+  }
   setTheme()
 
   if (settingStore.windowLabel === 'main' || settingStore.windowLabel === 'note') {
@@ -260,6 +311,9 @@ onMounted(async () => {
 onUnmounted(() => {
   if (listener.value) {
     listener.value()
+  }
+  if (runtimeReadyListener.value) {
+    runtimeReadyListener.value()
   }
   window.removeEventListener('keydown', handleShortcut)
 })

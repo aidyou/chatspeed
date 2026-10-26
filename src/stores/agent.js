@@ -383,10 +383,6 @@ export const useAgentStore = defineStore('agent', () => {
     }
   };
 
-  // Initial data fetch
-  fetchAgents();
-  fetchAvailableTools();
-
   return {
     agents,
     primaryAgents: computed(() => agents.value.filter(agent => (agent.role || AGENT_ROLE.PRIMARY) === AGENT_ROLE.PRIMARY && !agent.disabled)),

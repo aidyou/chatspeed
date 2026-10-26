@@ -97,6 +97,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use tauri::async_runtime::{spawn, JoinHandle};
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::PhysicalSize;
 #[cfg(not(debug_assertions))]
@@ -246,6 +247,8 @@ fn hide_then_destroy_window(window: &tauri::Window) {
         }
     });
 }
+
+const RUNTIME_READY_EVENT: &str = "cs://runtime_ready";
 
 pub async fn run() -> crate::error::Result<()> {
     let builder = tauri::Builder::default();
@@ -978,6 +981,17 @@ pub async fn run() -> crate::error::Result<()> {
                                         .set_enabled(snapshot.get_bool(CFG_WORKFLOW_PREVENT_IDLE_SLEEP, false));
                                 }
                                 initialized_generation = generation;
+                                if supervisor.mark_ready(generation).await {
+                                    if let Err(error) = app_handle.emit(
+                                        RUNTIME_READY_EVENT,
+                                        serde_json::json!({ "generation": generation }),
+                                    ) {
+                                        log::warn!(
+                                            "[RuntimeSupervisor] failed to publish runtime ready event: {}",
+                                            error
+                                        );
+                                    }
+                                }
                             }
                             Err(error) => {
                                 log::error!(

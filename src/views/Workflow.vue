@@ -3406,7 +3406,6 @@ watch(
 )
 
 async function refreshRuntimeData(isCurrent) {
-  if (await modelStore.updateModelStore() === false) throw new Error('Model refresh failed')
   if (!isCurrent()) return
   await workflowStore.loadWorkflows()
   if (workflowStore.error) throw new Error('Workflow list refresh failed')

@@ -441,9 +441,6 @@ export const useMcpStore = defineStore('mcp', () => {
     }
   };
 
-
-  fetchMcpServers();
-
   // Helper to get or initialize UI state for a server, meant for internal store use or direct component use
   const getOrInitServerUiState = (serverId) => {
     if (!serverUiStates.value[serverId]) {
