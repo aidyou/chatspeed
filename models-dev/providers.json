@@ -85,7 +85,7 @@
       "documentationUrl": "https://docs.aiand.com/",
       "id": "aiand",
       "logo": "https://models.dev/logos/aiand.svg",
-      "modelCount": 13,
+      "modelCount": 10,
       "name": "ai&",
       "protocol": "openai",
       "responses": false
@@ -103,7 +103,7 @@
       "documentationUrl": "https://docs.aimlapi.com",
       "id": "aimlapi",
       "logo": "https://models.dev/logos/aimlapi.svg",
-      "modelCount": 178,
+      "modelCount": 172,
       "name": "AI/ML API",
       "protocol": "openai",
       "responses": false
@@ -295,7 +295,7 @@
       "documentationUrl": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",
       "id": "azure",
       "logo": "https://models.dev/logos/azure.svg",
-      "modelCount": 95,
+      "modelCount": 96,
       "name": "Azure",
       "responses": false
     },
@@ -303,7 +303,7 @@
       "documentationUrl": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",
       "id": "azure-cognitive-services",
       "logo": "https://models.dev/logos/azure-cognitive-services.svg",
-      "modelCount": 95,
+      "modelCount": 96,
       "name": "Azure Cognitive Services",
       "responses": false
     },
@@ -403,7 +403,7 @@
       "documentationUrl": "https://llm.chutes.ai/v1/models",
       "id": "chutes",
       "logo": "https://models.dev/logos/chutes.svg",
-      "modelCount": 16,
+      "modelCount": 17,
       "name": "Chutes",
       "protocol": "openai",
       "responses": false
@@ -483,7 +483,7 @@
       "documentationUrl": "https://commandcode.ai/docs/provider",
       "id": "commandcode",
       "logo": "https://models.dev/logos/commandcode.svg",
-      "modelCount": 71,
+      "modelCount": 72,
       "name": "CommandCode",
       "protocol": "openai",
       "responses": false
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 369,
+      "modelCount": 371,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -632,7 +632,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 63,
+      "modelCount": 62,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -714,7 +714,7 @@
       "documentationUrl": "https://docs.github.com/en/copilot",
       "id": "github-copilot",
       "logo": "https://models.dev/logos/github-copilot.svg",
-      "modelCount": 35,
+      "modelCount": 36,
       "name": "GitHub Copilot",
       "protocol": "openai",
       "responses": false
@@ -821,7 +821,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 81,
+      "modelCount": 82,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -1051,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 207,
+      "modelCount": 208,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 430,
+      "modelCount": 432,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1111,7 +1111,7 @@
       "documentationUrl": "https://lowrouter.ai/docs/models/available",
       "id": "lowrouter",
       "logo": "https://models.dev/logos/lowrouter.svg",
-      "modelCount": 31,
+      "modelCount": 32,
       "name": "LowRouter",
       "protocol": "openai",
       "responses": false
@@ -1161,7 +1161,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 201,
+      "modelCount": 202,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1355,7 +1355,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 649,
+      "modelCount": 648,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1365,7 +1365,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 56,
+      "modelCount": 57,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1385,7 +1385,7 @@
       "documentationUrl": "https://neon.com/docs",
       "id": "neon",
       "logo": "https://models.dev/logos/neon.svg",
-      "modelCount": 57,
+      "modelCount": 58,
       "name": "Neon",
       "protocol": "openai",
       "responses": true
@@ -1489,7 +1489,7 @@
       "documentationUrl": "https://platform.openai.com/docs/models",
       "id": "openai",
       "logo": "https://models.dev/logos/openai.svg",
-      "modelCount": 51,
+      "modelCount": 52,
       "name": "OpenAI",
       "protocol": "openai",
       "responses": false
@@ -1711,7 +1711,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 183,
+      "modelCount": 185,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -2134,7 +2134,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 128,
+      "modelCount": 129,
       "name": "Venice AI",
       "responses": false
     },
@@ -2142,7 +2142,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 416,
+      "modelCount": 418,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2371,9 +2371,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "7ec29fac426342d499ecbf3138bfe4af3f5550bb747f4fb650936ba228b98295",
-    "generatedAt": "2026-10-26T08:58:17Z",
+    "catalogSha256": "dfe370d0a651c808fd8fdb253fcf03c7bf482cc31c5c56e2e07769e3cb806563",
+    "generatedAt": "2026-10-27T09:02:20Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "b988aaf528f94307a4b81791220d8f2e9b820c8e"
+    "revision": "018efeee8549161fa2dbed51850c21b18a43eb54"
   }
 }
