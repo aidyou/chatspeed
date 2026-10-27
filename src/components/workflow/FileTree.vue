@@ -370,7 +370,7 @@ onMounted(() => {
   font-size: 13px;
 
   .tree-header {
-    padding: 10px 15px;
+    padding: var(--cs-space-sm) var(--cs-space);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -414,7 +414,7 @@ onMounted(() => {
   .tree-content {
     flex: 1;
     overflow-y: auto;
-    padding: 10px 0;
+    padding: var(--cs-space-sm) 0;
 
     .root-container {
       margin-bottom: 4px;
@@ -438,7 +438,7 @@ onMounted(() => {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 6px 15px;
+      padding: var(--cs-space-sm) var(--cs-space);
       cursor: pointer;
       transition: background 0.2s;
       position: relative;
@@ -500,7 +500,7 @@ onMounted(() => {
     .children {
       position: relative;
       padding-left: 0;
-      margin-left: 15px;
+      margin-left: var(--cs-space);
 
       // Tree guide line (dashed)
       &::before {
@@ -592,7 +592,7 @@ onMounted(() => {
 
   .unsupported-preview__path {
     max-width: 100%;
-    padding: 10px 14px;
+    padding: var(--cs-space-sm) var(--cs-space);
     word-break: break-all;
     border-radius: 8px;
     color: var(--cs-text-color-secondary);

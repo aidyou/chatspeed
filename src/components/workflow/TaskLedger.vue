@@ -626,7 +626,7 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: var(--cs-space-sm) 12px;
   background: var(--cs-bg-color-light);
   border-bottom: 1px solid var(--cs-border-color-light);
   cursor: grab;
@@ -657,14 +657,14 @@ defineExpose({
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--cs-space-sm);
 
     .collapsed-progress,
     .task-count {
       font-size: var(--cs-font-size-xs);
       color: var(--el-color-primary);
       font-weight: 600;
-      padding: 2px 6px;
+      padding: var(--cs-space-xxs) var(--cs-space-sm);
       background: var(--el-color-primary-light-9);
       border-radius: var(--cs-border-radius);
     }
@@ -739,7 +739,7 @@ defineExpose({
   .progress-bar-container {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--cs-space-sm);
 
     .progress-bar {
       flex: 1;
@@ -792,7 +792,7 @@ defineExpose({
 .task-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--cs-space-sm);
 }
 
 .task-item {
@@ -827,7 +827,7 @@ defineExpose({
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 12px;
+    padding: var(--cs-space-sm) 12px;
 
     .task-status-icon {
       flex-shrink: 0;
@@ -905,7 +905,7 @@ defineExpose({
       color: var(--cs-text-color-secondary);
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      margin-bottom: 6px;
+      margin-bottom: var(--cs-space-sm);
 
       &.error {
         color: var(--el-color-danger);
@@ -939,7 +939,7 @@ defineExpose({
           }
 
           &.status-badge {
-            padding: 1px 6px;
+            padding: 1px var(--cs-space-sm);
             border-radius: var(--cs-border-radius);
             font-size: 10px;
             font-weight: 500;
@@ -1091,8 +1091,8 @@ defineExpose({
     right: -4px;
     font-size: 10px;
     font-weight: 600;
-    padding: 2px 5px;
-    border-radius: 10px;
+    padding: var(--cs-space-xxs) var(--cs-space-xs);
+    border-radius: var(--cs-border-radius-pill);
     min-width: 20px;
     text-align: center;
 
@@ -1128,6 +1128,7 @@ defineExpose({
 
 .panel-body::-webkit-scrollbar-thumb {
   background: var(--cs-border-color);
+  // Half the 4px scrollbar width keeps the thumb ends round.
   border-radius: 2px;
 }
 

@@ -3551,7 +3551,7 @@ defineExpose({
 .exploration-card__header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--cs-space-sm);
   padding: var(--cs-space-sm) var(--cs-space);
   cursor: pointer;
   background: var(--cs-bg-color);
@@ -3564,7 +3564,7 @@ defineExpose({
 .exploration-card__title-wrap {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--cs-space-sm);
   min-width: 0;
   flex: 0 1 auto;
 }
@@ -3620,7 +3620,7 @@ defineExpose({
 
 .exploration-card__step-card {
   min-width: 0;
-  padding: 8px 10px;
+  padding: var(--cs-space-sm);
   border-radius: var(--cs-border-radius);
 }
 
@@ -3678,7 +3678,7 @@ defineExpose({
   flex: 0 0 auto;
   width: var(--cs-size-md);
   height: var(--cs-size-md);
-  margin-left: 10px;
+  margin-left: var(--cs-space-sm);
   padding: 0;
   border: 0;
   border-radius: var(--cs-border-radius);

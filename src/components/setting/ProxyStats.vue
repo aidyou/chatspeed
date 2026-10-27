@@ -8,7 +8,7 @@
             v-model="selectedDays"
             size="small"
             @change="fetchDailyStats(false)"
-            style="width: 140px; margin-left: 10px">
+            style="width: 140px; margin-left: var(--cs-space-sm)">
             <el-option :label="$t('settings.proxy.stats.today')" :value="0" />
             <el-option :label="$t('settings.proxy.stats.last1Day')" :value="1" />
             <el-option :label="$t('settings.proxy.stats.last7Days')" :value="7" />
@@ -27,12 +27,12 @@
             v-if="canAutoRefresh"
             v-model="autoRefreshEnabled"
             size="small"
-            style="margin-right: 15px">
+            style="margin-right: var(--cs-space)">
             {{ $t('settings.proxy.stats.autoRefresh') }}
           </el-checkbox>
         </el-space>
 
-        <el-dropdown trigger="click" @command="handleDeleteStats" style="margin-left: 10px">
+        <el-dropdown trigger="click" @command="handleDeleteStats" style="margin-left: var(--cs-space-sm)">
           <el-button :icon="Delete" type="danger" plain size="small" circle />
           <template #dropdown>
             <el-dropdown-menu>
@@ -1843,7 +1843,7 @@ onUnmounted(() => {
 .rank-bar-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--cs-space-sm);
 }
 
 .rank-bar-header {
@@ -1868,7 +1868,7 @@ onUnmounted(() => {
   width: 100%;
   height: 10px;
   background: var(--cs-bg-color-light);
-  border-radius: 999px;
+  border-radius: var(--cs-border-radius-pill);
   overflow: hidden;
 }
 
@@ -1911,7 +1911,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   flex: 0 0 18px;
-  margin-right: 6px;
+  margin-right: var(--cs-space-sm);
   color: var(--cs-color-primary);
   line-height: 1;
 }

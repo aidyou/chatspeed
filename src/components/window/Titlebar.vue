@@ -369,7 +369,7 @@ init()
     white-space: nowrap;
     text-overflow: ellipsis;
     min-width: 0;
-    margin: 0 10px;
+    margin: 0 var(--cs-space-sm);
   }
 
   .window-controls {
@@ -460,8 +460,8 @@ init()
       overflow: hidden;
       white-space: nowrap;
       text-overflow: ellipsis;
-      margin: 0 10px;
-      max-width: calc(100% - 20px);
+      margin: 0 var(--cs-space-sm);
+      max-width: calc(100% - var(--cs-space-sm) * 2);
     }
   }
 

@@ -1399,7 +1399,7 @@ const trimQuotes = str => {
         .value {
           display: flex;
           align-items: center;
-          margin-left: 10px;
+          margin-left: var(--cs-space-sm);
 
           :deep(.mcp-server-switch.is-loading) {
             opacity: 1;
@@ -1465,7 +1465,7 @@ const trimQuotes = str => {
         color: var(--cs-color-primary);
         cursor: pointer;
         padding: 0;
-        margin-left: 5px;
+        margin-left: var(--cs-space-xs);
         font-size: var(--cs-font-size);
       }
     }
@@ -1474,7 +1474,7 @@ const trimQuotes = str => {
   // Styles for icons within .title and .value
   .icon {
     cursor: pointer;
-    padding: 5px; // Add some clickable area
+    padding: var(--cs-space-xs); // Add some clickable area
     display: flex; // Center icon if needed
     align-items: center;
     justify-content: center;
@@ -1490,11 +1490,11 @@ const trimQuotes = str => {
 
     .form-group {
       // This class was in your original HTML, but El-Form uses el-form-item
-      margin-bottom: 15px;
+      margin-bottom: var(--cs-space);
 
       label {
         display: block;
-        margin-bottom: 5px;
+        margin-bottom: var(--cs-space-xs);
         font-weight: bold;
       }
 
@@ -1516,7 +1516,7 @@ const trimQuotes = str => {
 
       input[type='checkbox'] {
         width: auto; // Checkboxes shouldn't be 100% width
-        margin-right: 5px;
+        margin-right: var(--cs-space-xs);
       }
     }
 
@@ -1524,11 +1524,11 @@ const trimQuotes = str => {
       width: 100%;
       min-height: 300px;
       font-family: monospace;
-      padding: 10px;
+      padding: var(--cs-space-sm);
       border: 1px solid var(--cs-border-color); // Theme border
       border-radius: 4px;
       box-sizing: border-box;
-      margin-top: 10px; // Space if it's directly after a tab title
+      margin-top: var(--cs-space-sm); // Space if it's directly after a tab title
     }
   }
 
@@ -1537,12 +1537,12 @@ const trimQuotes = str => {
     .preset-item {
       display: flex;
       align-items: center;
-      padding: 10px;
+      padding: var(--cs-space-sm);
       border-bottom: 1px solid var(--cs-border-color-lighter);
 
       .preset-info {
         flex-grow: 1;
-        margin-left: 10px;
+        margin-left: var(--cs-space-sm);
 
         .preset-title {
           font-weight: bold;
@@ -1558,7 +1558,7 @@ const trimQuotes = str => {
         background: none;
         border: none;
         cursor: pointer;
-        padding: 5px;
+        padding: var(--cs-space-xs);
 
         i {
           font-size: 16px;
@@ -1630,7 +1630,7 @@ const trimQuotes = str => {
         min-width: 0; // For text ellipsis
 
         h3 {
-          margin: 0 0 5px 0;
+          margin: 0 0 var(--cs-space-xs) 0;
           font-size: 16px;
           line-height: 1.2;
         }

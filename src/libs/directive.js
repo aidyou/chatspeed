@@ -271,6 +271,7 @@ function resolveCssVariables(svg) {
         font-size: calc(1em - 2px);
         color: ${resolvedVars['--markmap-code-color']};
         background-color: transparent !important;
+        /* Keep exported SVG code markers compact and independent of app layout tokens. */
         border-radius: 2px;
       }
     `

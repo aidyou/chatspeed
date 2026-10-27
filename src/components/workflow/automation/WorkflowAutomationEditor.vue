@@ -950,7 +950,7 @@ watch(
 .selection-button {
   flex: 1;
   width: 100%;
-  padding: 0 14px;
+  padding: 0 var(--cs-space);
 }
 
 :deep(.selection-button.el-button) {
@@ -1084,7 +1084,7 @@ watch(
   gap: var(--cs-space-sm);
   width: 100%;
   min-height: 32px;
-  padding: 0 14px;
+  padding: 0 var(--cs-space);
   border: 1px solid var(--cs-border-color);
   border-radius: var(--el-border-radius-round);
   background: var(--cs-fill-color-light);

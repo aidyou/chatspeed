@@ -1610,7 +1610,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: var(--cs-space-sm) 12px;
   background: var(--cs-bg-color-light);
   border-bottom: 1px solid var(--cs-border-color-light);
   cursor: grab;
@@ -1671,14 +1671,14 @@ watch(
     z-index: 1;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--cs-space-sm);
 
     .collapsed-progress,
     .task-count {
       font-size: var(--cs-font-size-xs);
       color: var(--el-color-primary);
       font-weight: 600;
-      padding: 2px 6px;
+      padding: var(--cs-space-xxs) var(--cs-space-sm);
       background: var(--el-color-primary-light-9);
       border-radius: var(--cs-border-radius);
     }
@@ -1731,14 +1731,14 @@ watch(
     background: transparent;
     color: var(--cs-text-color-secondary);
     border-radius: var(--cs-border-radius);
-    padding: 7px 8px;
+    padding: var(--cs-space-sm);
     font-size: var(--cs-font-size-xs);
     font-weight: 600;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: var(--cs-space-sm);
     white-space: nowrap;
     transition:
       background-color 0.2s ease,
@@ -1762,7 +1762,7 @@ watch(
   .tab-badge {
     min-width: 16px;
     height: 16px;
-    border-radius: 10px;
+    border-radius: var(--cs-border-radius-pill);
     background: var(--el-color-primary);
     color: var(--cs-text-color-on-primary);
     font-size: 10px;
@@ -1782,7 +1782,7 @@ watch(
   background: var(--cs-bg-color-light);
   color: var(--cs-text-color-secondary);
   border-radius: var(--cs-border-radius);
-  padding: 3px 8px;
+  padding: var(--cs-space-xs) var(--cs-space-sm);
   font-size: 10px;
   cursor: pointer;
 
@@ -1808,7 +1808,7 @@ watch(
   .section-header {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--cs-space-sm);
     font-size: var(--cs-font-size-xs);
     color: var(--cs-text-color-secondary);
     font-weight: 500;
@@ -1831,7 +1831,7 @@ watch(
 }
 
 .efficiency-error {
-  padding: 10px 12px;
+  padding: var(--cs-space-sm) 12px;
   border-radius: var(--cs-border-radius-sm);
   background: var(--el-color-danger-light-9);
   color: var(--el-color-danger);
@@ -1841,7 +1841,7 @@ watch(
 
 .efficiency-card,
 .efficiency-agent-item {
-  padding: 10px 12px;
+  padding: var(--cs-space-sm) 12px;
   border-radius: var(--cs-border-radius-sm);
   background: var(--cs-bg-color-light);
   border: 1px solid var(--cs-border-color);
@@ -1877,8 +1877,8 @@ watch(
 
 .efficiency-status {
   flex-shrink: 0;
-  padding: 1px 6px;
-  border-radius: 999px;
+  padding: 1px var(--cs-space-sm);
+  border-radius: var(--cs-border-radius-pill);
   font-size: 10px;
   line-height: 1.5;
   background: var(--cs-bg-color);
@@ -1905,7 +1905,7 @@ watch(
 .score-row {
   display: flex;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: var(--cs-space-sm);
 
   &.compact {
     margin-bottom: 8px;
@@ -1918,7 +1918,7 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px;
+  padding: var(--cs-space-sm);
   border-radius: var(--cs-border-radius-sm);
   background: var(--cs-bg-color);
   border: 1px solid var(--cs-border-color);
@@ -1949,7 +1949,7 @@ watch(
 }
 
 .score-hint {
-  margin-bottom: 10px;
+  margin-bottom: var(--cs-space-sm);
   font-size: 10px;
   line-height: 1.5;
   color: var(--cs-text-color-secondary);
@@ -1958,7 +1958,7 @@ watch(
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: var(--cs-space-sm);
 
   &.compact {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1969,7 +1969,7 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 6px 8px;
+  padding: var(--cs-space-sm);
   border-radius: var(--cs-border-radius-sm);
   background: var(--cs-bg-color);
 }
@@ -1988,7 +1988,7 @@ watch(
 }
 
 .efficiency-notes {
-  margin-top: 10px;
+  margin-top: var(--cs-space-sm);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2006,12 +2006,12 @@ watch(
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: var(--cs-space-sm);
+    padding: var(--cs-space-sm) 12px;
     font-size: var(--cs-font-size-xs);
     background: var(--cs-bg-color-light);
     border-radius: var(--cs-border-radius-sm);
-    margin-bottom: 6px;
+    margin-bottom: var(--cs-space-sm);
     border: 1px solid var(--cs-border-color);
     border-left-width: 3px;
 
@@ -2045,7 +2045,7 @@ watch(
       min-width: 0;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: var(--cs-space-sm);
       flex: 1;
     }
 
@@ -2074,7 +2074,7 @@ watch(
       gap: 4px;
       min-width: 58px;
       padding: 2px 8px;
-      border-radius: 999px;
+      border-radius: var(--cs-border-radius-pill);
       font-size: 10px;
       line-height: 1.4;
       background: var(--cs-bg-color);
@@ -2109,7 +2109,7 @@ watch(
     .child-metrics {
       display: flex;
       align-items: flex-start;
-      gap: 6px;
+      gap: var(--cs-space-sm);
       min-width: 0;
     }
 
@@ -2129,8 +2129,8 @@ watch(
     .child-context {
       display: inline-flex;
       align-items: center;
-      padding: 1px 6px;
-      border-radius: 999px;
+      padding: 1px var(--cs-space-sm);
+      border-radius: var(--cs-border-radius-pill);
       font-family: var(--cs-font-family-mono, monospace);
       font-size: 10px;
       line-height: 1.5;
@@ -2153,7 +2153,7 @@ watch(
   .progress-bar-container {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--cs-space-sm);
 
     .progress-bar {
       flex: 1;
@@ -2238,7 +2238,7 @@ watch(
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 6px 10px;
+    padding: var(--cs-space-sm);
     margin-bottom: 4px;
     border-radius: var(--cs-border-radius-sm);
     background: var(--cs-bg-color-light);
@@ -2276,8 +2276,8 @@ watch(
 
   .model-status-source {
     flex-shrink: 0;
-    padding: 1px 6px;
-    border-radius: 999px;
+    padding: 1px var(--cs-space-sm);
+    border-radius: var(--cs-border-radius-pill);
     font-size: 10px;
     line-height: 1.5;
     background: var(--cs-bg-color);
@@ -2304,7 +2304,7 @@ watch(
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 0;
+    padding: var(--cs-space-sm) 0;
     font-size: var(--cs-font-size-sm);
     color: var(--cs-text-color-regular);
 
@@ -2387,7 +2387,7 @@ watch(
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 6px 10px;
+    padding: var(--cs-space-sm);
     font-size: var(--cs-font-size-xs);
     color: var(--cs-text-color-regular);
     background: var(--cs-bg-color-light);
@@ -2439,7 +2439,7 @@ watch(
     .op-main {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: var(--cs-space-sm);
       flex: 1;
       min-width: 0; // Allow flex child to shrink
     }
@@ -2574,8 +2574,8 @@ watch(
     color: white;
     font-size: 10px;
     font-weight: 600;
-    padding: 2px 5px;
-    border-radius: 10px;
+    padding: var(--cs-space-xxs) var(--cs-space-xs);
+    border-radius: var(--cs-border-radius-pill);
     border: 2px solid var(--cs-bg-color);
     min-width: 20px;
     text-align: center;
@@ -2593,6 +2593,7 @@ watch(
 
 .panel-body::-webkit-scrollbar-thumb {
   background: var(--cs-border-color);
+  // Half the 4px scrollbar width keeps the thumb ends round.
   border-radius: 2px;
 }
 

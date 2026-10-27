@@ -263,7 +263,7 @@
                       :step="1024" size="small" controls-position="right" style="width: 120px" />
                   </div>
                 </div>
-                <div v-if="supportsThinking(role.key)" class="params-row compact-params" style="margin-top: 6px">
+                <div v-if="supportsThinking(role.key)" class="params-row compact-params" style="margin-top: var(--cs-space-sm)">
                   <div class="param-item">
                     <span class="param-label">{{ $t('settings.model.reasoningCompact') }}</span>
                     <el-switch v-model="agentForm[role.key + 'Model'].thinkingEnabled" size="small" />
@@ -2230,7 +2230,7 @@ watch(
   }
 
   .form-tip {
-    margin-top: 6px;
+    margin-top: var(--cs-space-sm);
     font-size: 12px;
     color: var(--cs-text-color-secondary);
     line-height: 1.5;
@@ -2348,7 +2348,7 @@ watch(
       display: flex;
       flex-direction: column;
       gap: 4px;
-      padding: 8px 10px;
+      padding: var(--cs-space-sm);
       border-radius: var(--cs-border-radius-sm);
       background-color: var(--cs-bg-color);
       cursor: pointer;
@@ -2363,6 +2363,7 @@ watch(
     &__description {
       font-size: 12px;
       color: var(--cs-text-color-secondary);
+      // Match the checkbox indicator and label inset, not the layout spacing scale.
       padding-left: 26px;
       /* white-space: nowrap;
       text-overflow: ellipsis; */
@@ -2716,12 +2717,12 @@ watch(
 
     &::-webkit-scrollbar-track {
       background: var(--cs-bg-color-light);
-      border-radius: 3px;
+      border-radius: var(--cs-border-radius-sm);
     }
 
     &::-webkit-scrollbar-thumb {
       background: var(--cs-border-color);
-      border-radius: 3px;
+      border-radius: var(--cs-border-radius-sm);
 
       &:hover {
         background: var(--cs-text-color-secondary);

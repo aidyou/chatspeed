@@ -269,7 +269,7 @@
             </div>
 
             <div v-for="(header, index) in modelForm.customHeaders" :key="index" class="header-row"
-              style="display: flex; gap: 10px; margin-bottom: 10px">
+              style="display: flex; gap: var(--cs-space-sm); margin-bottom: var(--cs-space-sm)">
               <el-input v-model="header.key" :placeholder="$t('settings.model.headerKey')" style="flex: 1" />
               <el-input v-model="header.value" :placeholder="$t('settings.model.headerValue')" style="flex: 2" />
               <el-button type="danger" link @click="removeCustomHeader(index)" style="padding: 0; min-width: 24px">
@@ -320,7 +320,7 @@
   <el-dialog v-model="modelImportDialogVisible" align-center width="500px" :title="$t('settings.model.modelConfig')"
     :show-close="false" :close-on-click-modal="false" :close-on-press-escape="false">
     <el-input v-model="providerModelKeyword" :placeholder="$t('settings.model.searchByIdOrName')" clearable
-      style="margin-bottom: 15px" />
+      style="margin-bottom: var(--cs-space)" />
     <div class="card card-col-list card-model-import">
       <div v-if="Object.keys(providerModelToShow).length > 0" class="card-container">
         <el-card v-for="(providerModels, group) in providerModelToShow" :key="group" body-class="edit-card-body">
@@ -462,7 +462,7 @@
             </div>
 
             <div v-for="(param, index) in modelConfigForm.customParams" :key="index" class="header-row"
-              style="display: flex; gap: 10px; margin-bottom: 10px">
+              style="display: flex; gap: var(--cs-space-sm); margin-bottom: var(--cs-space-sm)">
               <el-input v-model="param.key" :placeholder="$t('settings.model.paramKey')" style="flex: 1" />
               <el-input v-model="param.value" :placeholder="$t('settings.model.paramValue')" style="flex: 2" />
               <el-button type="danger" link @click="removeModelConfigParam(index)" style="padding: 0; min-width: 24px">
@@ -1911,7 +1911,7 @@ const importPresetModel = provider => {
 
         &::-webkit-scrollbar-thumb {
           background: var(--el-border-color);
-          border-radius: 3px;
+          border-radius: var(--cs-border-radius-sm);
         }
       }
     }
@@ -1927,7 +1927,7 @@ const importPresetModel = provider => {
 .provider-logo {
   width: 18px;
   height: 18px;
-  border-radius: 18px;
+  border-radius: var(--cs-border-radius-round);
   margin-right: var(--cs-space-xs);
 }
 
@@ -1967,12 +1967,12 @@ const importPresetModel = provider => {
           width: 40px;
           height: 40px;
           flex-shrink: 0;
-          border-radius: 40px;
+          border-radius: var(--cs-border-radius-round);
 
           img {
             width: 100%;
             height: 100%;
-            border-radius: 40px;
+            border-radius: var(--cs-border-radius-round);
           }
         }
       }
@@ -1995,7 +1995,7 @@ const importPresetModel = provider => {
       }
 
       p {
-        margin: 5px 0 0;
+        margin: var(--cs-space-xs) 0 0;
         font-size: 14px;
         color: var(--el-text-color-secondary);
         overflow: hidden;

@@ -122,7 +122,7 @@ const editorTheme = EditorView.theme({
   },
   '.cm-lineNumbers .cm-gutterElement': {
     minWidth: '3.2em',
-    padding: '0 10px 0 8px',
+    padding: '0 var(--cs-space-sm)',
     textAlign: 'right'
   },
   '.cm-activeLine, .cm-activeLineGutter': {
@@ -144,13 +144,13 @@ const editorTheme = EditorView.theme({
     display: 'flex',
     flexWrap: 'wrap',
     alignItems: 'center',
-    gap: '6px',
-    padding: '8px 10px'
+    gap: 'var(--cs-space-sm)',
+    padding: 'var(--cs-space-sm)'
   },
   '.cm-search input': {
     height: '24px',
     border: '1px solid var(--cs-border-color)',
-    borderRadius: '6px',
+    borderRadius: 'var(--cs-border-radius)',
     padding: '0 8px',
     color: 'var(--cs-text-color-primary)',
     backgroundColor: 'var(--cs-bg-color)'
@@ -158,7 +158,7 @@ const editorTheme = EditorView.theme({
   '.cm-search button': {
     height: '24px',
     border: '1px solid var(--cs-border-color)',
-    borderRadius: '6px',
+    borderRadius: 'var(--cs-border-radius)',
     padding: '0 8px',
     color: 'var(--cs-text-color-primary)',
     backgroundColor: 'var(--cs-bg-color)',
@@ -278,7 +278,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   min-height: 40px;
-  padding: 6px 8px;
+  padding: var(--cs-space-sm);
   border-bottom: 1px solid var(--cs-border-color);
   background: var(--cs-bg-color-light);
 }
@@ -295,13 +295,13 @@ onBeforeUnmount(() => {
 .code-editor-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--cs-space-sm);
   min-width: 0;
   max-width: 180px;
   height: 28px;
-  padding: 0 6px;
+  padding: 0 var(--cs-space-sm);
   border: 1px solid var(--cs-border-color);
-  border-radius: 6px;
+  border-radius: var(--cs-border-radius);
   background: var(--cs-bg-color);
   color: var(--cs-text-color-secondary);
 
@@ -318,7 +318,7 @@ onBeforeUnmount(() => {
 .tab-select {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--cs-space-sm);
   min-width: 0;
   padding: 0;
   border: 0;
@@ -331,7 +331,7 @@ onBeforeUnmount(() => {
 .dirty-dot {
   width: 7px;
   height: 7px;
-  border-radius: 999px;
+  border-radius: var(--cs-border-radius-pill);
   background: transparent;
   flex: none;
 }
@@ -354,16 +354,16 @@ onBeforeUnmount(() => {
 .code-editor-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--cs-space-sm);
   flex: none;
 }
 
 .code-editor-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--cs-space-sm);
   min-height: 30px;
-  padding: 4px 10px;
+  padding: var(--cs-space-xs) var(--cs-space-sm);
   color: var(--cs-text-color-secondary);
   font-size: 12px;
   border-bottom: 1px solid var(--cs-border-color);

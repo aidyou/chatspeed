@@ -54,7 +54,7 @@
             </span>
           </div>
 
-          <div class="params-row compact-params" style="margin-top: 8px; display: flex; gap: 10px;">
+          <div class="params-row compact-params" style="margin-top: 8px; display: flex; gap: var(--cs-space-sm);">
             <div class="param-item" style="flex: 1;">
               <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.contextSize') }}</span>
               <el-input-number v-model="currentModel.contextSize" :min="1024" :max="2000000" :step="1024"
@@ -67,7 +67,7 @@
             </div>
           </div>
 
-          <div v-if="supportsThinking(activeTab)" class="params-row compact-params" style="margin-top: 8px; display: flex; gap: 10px;">
+          <div v-if="supportsThinking(activeTab)" class="params-row compact-params" style="margin-top: 8px; display: flex; gap: var(--cs-space-sm);">
             <div class="param-item" style="flex: 1;">
               <span class="param-label" style="display: block; margin-bottom: 4px;">{{ $t('settings.model.reasoningCompact') }}</span>
               <el-switch v-model="currentModel.thinkingEnabled" size="small" />
@@ -488,7 +488,7 @@ watch(() => props.initialTab, (val) => {
 
     .selectors-row {
       display: flex;
-      gap: 6px;
+      gap: var(--cs-space-sm);
     }
 
     .params-row {
@@ -507,6 +507,6 @@ watch(() => props.initialTab, (val) => {
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--cs-space-sm);
 }
 </style>

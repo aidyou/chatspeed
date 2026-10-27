@@ -158,8 +158,8 @@ watch(isExpanded, (newVal) => {
   .node-item {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 15px;
+    gap: var(--cs-space-sm);
+    padding: var(--cs-space-xs) var(--cs-space);
     cursor: pointer;
     transition: background 0.2s;
     position: relative;
@@ -230,7 +230,7 @@ watch(isExpanded, (newVal) => {
     .node-actions {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: var(--cs-space-sm);
       flex-shrink: 0;
       opacity: 0;
       transition: opacity 0.2s ease;
@@ -252,6 +252,7 @@ watch(isExpanded, (newVal) => {
   .node-children {
     position: relative;
     padding-left: 0;
+    // Keep the guide origin paired with the connector's -21px offset below.
     margin-left: 21px;
 
     // Tree guide line (dashed) - vertical line

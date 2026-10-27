@@ -191,7 +191,7 @@ SYSTEM_REMINDER {
     .provider-logo-sm {
       width: 14px;
       height: 14px;
-      border-radius: 14px;
+      border-radius: var(--cs-border-radius-round);
     }
 
     .cs {

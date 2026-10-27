@@ -180,13 +180,13 @@ watch(selectableSkills, () => {
   border: 1px solid var(--cs-border-color);
   border-radius: var(--cs-border-radius-md);
   background: var(--cs-bg-color-light);
-  padding: 8px 10px;
+  padding: var(--cs-space-sm);
 }
 
 .skill-checklist__group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--cs-space-sm);
   width: 100%;
 }
 
@@ -221,6 +221,6 @@ watch(selectableSkills, () => {
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--cs-space-sm);
 }
 </style>

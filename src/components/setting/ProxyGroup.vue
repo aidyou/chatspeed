@@ -270,7 +270,7 @@
                     v-for="(item, index) in currentGroup.metadata.promptReplace"
                     :key="index"
                     class="header-row"
-                    style="display: flex; gap: 10px; margin-bottom: 10px">
+                    style="display: flex; gap: var(--cs-space-sm); margin-bottom: var(--cs-space-sm)">
                     <el-input
                       v-model="item.key"
                       :placeholder="$t('settings.model.headerKey')"
@@ -323,7 +323,7 @@
         :close-on-press-escape="false"
         style="--el-dialog-margin-top: 5vh; min-height: 600px">
         <div class="form-container">
-          <el-form :model="batchUpdateForm" label-width="auto" style="padding-top: 10px">
+          <el-form :model="batchUpdateForm" label-width="auto" style="padding-top: var(--cs-space-sm)">
             <el-form-item :label="$t('settings.proxyGroup.selectGroups')">
               <el-select
                 v-model="batchUpdateForm.selectedIds"
@@ -463,7 +463,7 @@
                       v-for="(item, index) in batchUpdateForm.promptReplace"
                       :key="index"
                       class="header-row"
-                      style="display: flex; gap: 10px; margin-bottom: 10px">
+                      style="display: flex; gap: var(--cs-space-sm); margin-bottom: var(--cs-space-sm)">
                       <el-input
                         v-model="item.key"
                         :placeholder="$t('settings.model.headerKey')"
@@ -1015,7 +1015,7 @@ const handleToggleToolCompatMode = async group => {
     .active-tag {
       font-size: 10px;
       height: 18px;
-      padding: 0 6px;
+      padding: 0 var(--cs-space-sm);
       line-height: 16px;
     }
   }
@@ -1116,7 +1116,7 @@ const handleToggleToolCompatMode = async group => {
 
     code {
       background: var(--cs-bg-color);
-      padding: 6px 10px;
+      padding: var(--cs-space-sm);
       border-radius: 4px;
       color: var(--cs-text-color);
       word-break: break-all;

@@ -429,15 +429,15 @@
       }
 
       .sidebar-empty {
-        padding: 8px 15px;
+        padding: var(--cs-space-sm) var(--cs-space);
         color: var(--cs-text-color-secondary);
         font-size: var(--cs-font-size-xs);
       }
 
       .item {
-        padding: 10px 15px;
+        padding: var(--cs-space-sm) var(--cs-space);
         cursor: pointer;
-        border-radius: 6px;
+        border-radius: var(--cs-border-radius);
         margin-bottom: 2px;
         white-space: nowrap;
         overflow: hidden;

@@ -2157,7 +2157,7 @@ defineExpose({
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: var(--cs-space-sm);
 }
 
 .workflow-attachment-item {
@@ -2165,16 +2165,16 @@ defineExpose({
   align-items: center;
   gap: 8px;
   max-width: 220px;
-  padding: 6px 10px;
+  padding: var(--cs-space-sm);
   border: 1px solid var(--cs-border-color);
-  border-radius: 10px;
+  border-radius: var(--cs-border-radius-md);
   background: var(--cs-bg-elevated, var(--cs-bg-color));
 }
 
 .workflow-attachment-preview {
   width: 36px;
   height: 36px;
-  border-radius: 6px;
+  border-radius: var(--cs-border-radius);
   object-fit: cover;
   flex-shrink: 0;
 }
@@ -2289,8 +2289,8 @@ defineExpose({
 .shell-policy-add-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: var(--cs-space-sm);
+  margin-bottom: var(--cs-space-sm);
 
   :deep(.el-input) {
     flex: 1;
@@ -2303,7 +2303,7 @@ defineExpose({
   flex-shrink: 0;
 
   :deep(.el-radio-button__inner) {
-    padding: 5px 7px;
+    padding: var(--cs-space-xs) var(--cs-space-sm);
     font-size: var(--cs-font-size-xs);
   }
 }
@@ -2323,7 +2323,7 @@ defineExpose({
 }
 
 .section-toolbar {
-  margin-bottom: 10px;
+  margin-bottom: var(--cs-space-sm);
 }
 
 .section-empty-text {
@@ -2335,13 +2335,13 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--cs-space-sm);
 }
 
 .section-footer-hint {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--cs-space-sm);
 }
 
 .section-footer-action {
@@ -2351,7 +2351,7 @@ defineExpose({
   width: 22px;
   height: 22px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--cs-border-radius);
   background: transparent;
   color: var(--cs-text-color-secondary);
   cursor: pointer;

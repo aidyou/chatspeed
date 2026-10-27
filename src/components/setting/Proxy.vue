@@ -324,7 +324,7 @@
           :model="currentProxyConfig"
           label-width="auto"
           ref="proxyFormRef"
-          style="padding-top: 10px">
+          style="padding-top: var(--cs-space-sm)">
           <el-form-item :label="$t('settings.proxy.form.group')" prop="group">
             <el-select v-model="currentProxyConfig.group">
               <el-option :label="$t('settings.proxy.defaultGroup')" value="default" />
@@ -350,7 +350,7 @@
 
           <el-divider>{{ $t('settings.proxy.form.targetModelsTitle') }}</el-divider>
 
-          <div style="display: flex; flex-direction: row; gap: 10px">
+          <div style="display: flex; flex-direction: row; gap: var(--cs-space-sm)">
             <el-input
               v-model="searchQuery"
               :placeholder="$t('settings.proxy.form.searchModelsPlaceholder')"
@@ -452,7 +452,7 @@
         :model="currentKeyItem"
         label-width="auto"
         ref="proxyKeyFormRef"
-        style="padding-top: 10px">
+        style="padding-top: var(--cs-space-sm)">
         <el-form-item
           :label="$t('settings.proxy.proxyKey.form.name')"
           prop="name"
@@ -1604,7 +1604,7 @@ const genTableData = () => {
 
   // Read-only field look keeps the address copyable without looking like an external link
   .copy-url {
-    padding: 2px 6px;
+    padding: var(--cs-space-xxs) var(--cs-space-sm);
     font-family: var(--cs-font-family-mono);
     font-size: var(--cs-font-size-sm);
     color: var(--cs-code-text-color);

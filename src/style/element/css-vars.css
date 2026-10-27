@@ -8,20 +8,32 @@
     --cs-titlebar-zindex: 9999;
     --cs-upper-layer-zindex: 10000;
 
+    /* Layout spacing follows a 4px grid; 2px is reserved for micro spacing. */
     --cs-space-xxs: 2px;
-    --cs-space-xs: 5px;
-    --cs-space-sm: 10px;
-    --cs-space: 15px;
+    --cs-space-xs: 4px;
+    --cs-space-sm: 8px;
+    --cs-space: 16px;
     --cs-space-md: 20px;
-    --cs-space-lg: 30px;
+    --cs-space-lg: 32px;
+    --cs-space-xl: 40px;
 
-    --cs-border-radius-sm: 3px;
-    --cs-border-radius: 5px;
-    --cs-border-radius-md: 10px;
-    --cs-border-radius-lg: 15px;
+    /* Compatibility aliases keep existing consumers on the same spacing scale. */
+    --cs-space-2xs: var(--cs-space-xxs);
+    --cs-space-xss: var(--cs-space-xxs);
+
+    --cs-border-radius-sm: 4px;
+    --cs-border-radius: 8px;
+    --cs-border-radius-md: 12px;
+    --cs-border-radius-lg: 16px;
     --cs-border-radius-xl: 20px;
-    --cs-border-radius-xxl: 30px;
+    --cs-border-radius-xxl: 32px;
     --cs-border-radius-round: 50%;
+    /* A saturated length preserves capsule ends on non-square badges. */
+    --cs-border-radius-pill: 9999px;
+
+    /* Legacy names reuse the canonical radii instead of introducing new steps. */
+    --cs-border-radius-xs: var(--cs-border-radius-sm);
+    --cs-border-radius-base: var(--cs-border-radius);
 
     --cs-font-size-xxs: 8px;
     --cs-font-size-xs: 10px;

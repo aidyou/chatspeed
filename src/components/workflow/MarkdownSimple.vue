@@ -106,7 +106,7 @@ onMounted(async () => {
   code {
     font-family: var(--cs-font-family-mono, monospace);
     font-size: 0.9em;
-    padding: 2px 6px;
+    padding: var(--cs-space-xxs) var(--cs-space-sm);
     border-radius: 4px;
     color: var(--cs-code-text-color);
   }
@@ -134,7 +134,7 @@ onMounted(async () => {
 
     th,
     td {
-      padding: 10px 14px;
+      padding: var(--cs-space-sm) var(--cs-space);
       text-align: left;
     }
 
@@ -170,7 +170,7 @@ onMounted(async () => {
     padding-left: 28px;
 
     li {
-      margin: 6px 0;
+      margin: var(--cs-space-sm) 0;
       line-height: 1.6;
     }
   }

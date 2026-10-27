@@ -1518,6 +1518,7 @@ onMounted(async () => {
 
   &::-webkit-scrollbar-thumb {
     background: var(--cs-border-color);
+    // Half the 4px scrollbar width keeps the thumb ends round.
     border-radius: 2px;
   }
 }
@@ -1534,6 +1535,7 @@ onMounted(async () => {
 
   &::-webkit-scrollbar-thumb {
     background: var(--cs-border-color);
+    // Half the 4px scrollbar width keeps the thumb ends round.
     border-radius: 2px;
   }
 }
@@ -1771,7 +1773,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--cs-space-sm);
-  padding: var(--cs-space-sm) var(--cs-space-sm) 15px;
+  padding: var(--cs-space-sm) var(--cs-space-sm) var(--cs-space);
 }
 
 .trend-filters {

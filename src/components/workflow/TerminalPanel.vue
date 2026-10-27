@@ -558,7 +558,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
+  padding: 0 var(--cs-space-sm);
   height: 38px;
   white-space: nowrap;
   border-right: 1px solid var(--cs-border-color);
@@ -579,7 +579,7 @@ onBeforeUnmount(() => {
 .workflow-terminal__control-group {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--cs-space-xs);
 }
 
 .workflow-terminal__control-divider {
@@ -591,8 +591,8 @@ onBeforeUnmount(() => {
 .workflow-terminal__controls button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px;
+  gap: var(--cs-space-xs);
+  padding: var(--cs-space-xs);
 }
 
 .workflow-terminal__shell {

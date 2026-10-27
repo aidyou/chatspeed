@@ -66,7 +66,7 @@ const getStatusIcon = (status) => {
   border-left: 2px solid var(--el-color-primary-light-7);
   background-color: var(--el-color-primary-light-9);
   border-radius: 4px;
-  margin: 10px 0;
+  margin: var(--cs-space-sm) 0;
 
   .header-info {
     cursor: pointer;
@@ -118,13 +118,13 @@ const getStatusIcon = (status) => {
 
 .full-list {
   list-style: none;
-  padding: 10px 0 5px 12px;
+  padding: var(--cs-space-sm) 0 var(--cs-space-xs) 12px;
   margin: 0;
   border-top: 1px solid var(--el-color-primary-light-8);
   margin-top: 8px;
 
   li {
-    margin-bottom: 6px;
+    margin-bottom: var(--cs-space-sm);
     font-size: var(--cs-font-size-xs);
     display: flex;
     align-items: center;

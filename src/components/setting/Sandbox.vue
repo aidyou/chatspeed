@@ -782,7 +782,7 @@ schemeStore.fetchSchemes()
     display: flex;
     align-items: center;
     gap: var(--cs-space);
-    margin-bottom: 5px;
+    margin-bottom: var(--cs-space-xs);
   }
 
   .rule-tabs {

@@ -715,7 +715,7 @@
       </div>
 
       <div class="item" style="align-items: flex-start">
-        <div class="label" style="padding-top: 5px">
+        <div class="label" style="padding-top: var(--cs-space-xs)">
           <div class="label-text">
             {{ $t('settings.general.sensitiveFiltering.blocklist') }}
             <small class="tooltip">{{
@@ -733,7 +733,7 @@
       </div>
 
       <div class="item" style="align-items: flex-start">
-        <div class="label" style="padding-top: 5px">
+        <div class="label" style="padding-top: var(--cs-space-xs)">
           <div class="label-text">
             {{ $t('settings.general.sensitiveFiltering.allowlist') }}
             <small class="tooltip">{{

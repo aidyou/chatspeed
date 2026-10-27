@@ -43,7 +43,7 @@
     right: -5px;
     width: 18px;
     height: 18px;
-    border-radius: 999px;
+    border-radius: var(--cs-border-radius-pill);
     background: var(--cs-success-color);
     color: var(--cs-color-white);
     font-size: var(--cs-font-size-xs);
@@ -69,7 +69,7 @@
     color: var(--cs-text-color-primary);
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--cs-space-sm);
   }
 
   .approval-menu-summary {
