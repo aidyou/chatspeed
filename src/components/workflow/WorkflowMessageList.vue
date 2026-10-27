@@ -3001,6 +3001,20 @@ watch(
   { flush: 'pre', immediate: true }
 )
 
+// Approval membership can expand an existing tool card without changing the
+// message projection. Reconcile once per approval transition, not per token.
+watch(
+  () => props.pendingApprovalIds.map(id => String(id)).join('|'),
+  () => {
+    scrollController.beforeContentChange()
+    nextTick(() => {
+      syncMessageContentResizeObserver()
+      scrollController.requestContentChange()
+    })
+  },
+  { flush: 'pre' }
+)
+
 watch(
   streamingLayoutState,
   () => {

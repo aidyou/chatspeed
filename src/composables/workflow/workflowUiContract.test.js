@@ -17,6 +17,68 @@ import { deriveInlinePendingApprovals } from '../../stores/workflowApprovalRecov
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { runInNewContext } from 'node:vm'
+import { ref, nextTick, watch } from 'vue'
+import { useWorkflowMessageScroll } from './useWorkflowMessageScroll.js'
+
+test('approval expansion follows the bottom without observer re-registration or stealing history scroll', async () => {
+  const source = await readFile(new URL('../../components/workflow/WorkflowMessageList.vue', import.meta.url), 'utf8')
+  const start = source.indexOf('// Approval membership can expand')
+  const end = source.indexOf('watch(\n  streamingLayoutState', start)
+  for (const reading of [false, true]) {
+    const container = { scrollTop: 600, scrollHeight: 1000, clientHeight: 400,
+      querySelectorAll: () => [], getBoundingClientRect: () => ({ top: 0 }) }
+    const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+    if (reading) {
+      controller.onWheel({ deltaY: -100 })
+      container.scrollTop = 200
+      controller.onScroll()
+    }
+    const ids = ref([])
+    let stop
+    runInNewContext(source.slice(start, end), {
+      props: { get pendingApprovalIds() { return ids.value } },
+      watch: (...args) => { stop = watch(...args) },
+      nextTick,
+      scrollController: controller,
+      syncMessageContentResizeObserver: () => {}
+    })
+    ids.value = ['approval-1']
+    await nextTick()
+    // Vue patches the expanded card after the pre-flush snapshot.
+    container.scrollHeight = 1400
+    await new Promise(resolve => setTimeout(resolve, 30))
+    assert.equal(controller.mode.value, reading ? 'reading' : 'following')
+    assert.equal(container.scrollTop, reading ? 600 : 1000)
+    stop()
+    controller.dispose()
+  }
+})
+
+test('message resize observation refreshes layout notifications after content changes', async () => {
+  const source = await readFile(new URL('../../components/workflow/WorkflowMessageList.vue', import.meta.url), 'utf8')
+  const start = source.indexOf('function syncMessageContentResizeObserver()')
+  const end = source.indexOf('\nonMounted(', start)
+  const first = {}
+  const second = {}
+  const container = { children: [first] }
+  const calls = []
+  const sync = runInNewContext(`${source.slice(start, end)}; syncMessageContentResizeObserver`, {
+    messagesRef: { value: container },
+    messageContentResizeObserver: {
+      observe: child => calls.push(['observe', child]),
+      disconnect: () => calls.push(['disconnect'])
+    }
+  })
+  sync()
+  sync()
+  assert.deepEqual(calls, [
+    ['disconnect'], ['observe', first], ['disconnect'], ['observe', first]
+  ], 'existing cards must receive fresh initial size notifications after layout changes')
+  calls.length = 0
+  container.children = [second]
+  sync()
+  assert.deepEqual(calls, [['disconnect'], ['observe', second]])
+})
 
 const sessionId = 'session-approval-contract'
 const toolCallId = 'tool_571ae521'

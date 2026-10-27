@@ -323,6 +323,15 @@ impl SessionInputRegistry {
     }
 }
 
+/// Provider text is presentation-only and is batched before either output route.
+const TEXT_BATCH_WINDOW: std::time::Duration = std::time::Duration::from_millis(100);
+const TEXT_BATCH_BYTES: usize = 500;
+
+struct PendingWorkflowText {
+    payload: GatewayPayload,
+    timer: tokio::task::JoinHandle<()>,
+}
+
 /// The unique workflow runtime hub: the only production [`Gateway`].
 pub struct WorkflowRuntimeHub {
     /// Output transport: the batching Tauri gateway on desktop, a no-window
@@ -332,6 +341,8 @@ pub struct WorkflowRuntimeHub {
     input_registry: SessionInputRegistry,
     /// Live SSE event source.
     broker: Arc<SessionEventBroker>,
+    /// Serializes text flushes with control events before assigning SSE cursors.
+    pending_text: Arc<Mutex<HashMap<String, PendingWorkflowText>>>,
 }
 
 impl WorkflowRuntimeHub {
@@ -345,6 +356,7 @@ impl WorkflowRuntimeHub {
             transport,
             input_registry: SessionInputRegistry::new(),
             broker: Arc::new(SessionEventBroker::new(server_instance_id)),
+            pending_text: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -376,6 +388,18 @@ impl WorkflowRuntimeHub {
     }
 
     pub async fn unregister_session_with_source(&self, session_id: &str, source: &str) {
+        let mut pending = self.pending_text.lock().await;
+        if let Some(entry) = pending.remove(session_id) {
+            entry.timer.abort();
+            if let Err(error) = self.transport.send(session_id, entry.payload.clone()).await {
+                log::warn!(
+                    "[Workflow][session={}][phase=text_batch] Cleanup flush failed: {}",
+                    session_id,
+                    error
+                );
+            }
+            self.broker.publish(session_id, entry.payload).await;
+        }
         let input_removed = self.input_registry.unregister(session_id).await;
         let event_removed = self.transport.remove_event_channel(session_id).await;
         let stream_removed = self.broker.unregister(session_id).await;
@@ -405,11 +429,87 @@ impl Gateway for WorkflowRuntimeHub {
         session_id: &str,
         payload: GatewayPayload,
     ) -> Result<(), WorkflowEngineError> {
-        // Keep the transport's own delivery/batching first, then publish the
-        // versioned envelope to the live SSE source. Both consumers observe
-        // the same payload from a single send call.
-        self.transport.send(session_id, payload.clone()).await?;
-        self.broker.publish(session_id, payload).await;
+        let mut pending = self.pending_text.lock().await;
+        let text_kind = match &payload {
+            GatewayPayload::Chunk { .. } => Some(false),
+            GatewayPayload::ReasoningChunk { .. } => Some(true),
+            _ => None,
+        };
+        let same_kind = pending.get(session_id).is_some_and(|entry| {
+            matches!(
+                (&entry.payload, text_kind),
+                (GatewayPayload::Chunk { .. }, Some(false))
+                    | (GatewayPayload::ReasoningChunk { .. }, Some(true))
+            )
+        });
+        if !same_kind {
+            if let Some(entry) = pending.remove(session_id) {
+                entry.timer.abort();
+                self.transport
+                    .send(session_id, entry.payload.clone())
+                    .await?;
+                self.broker.publish(session_id, entry.payload).await;
+            }
+        }
+        if text_kind.is_none() {
+            self.transport.send(session_id, payload.clone()).await?;
+            self.broker.publish(session_id, payload).await;
+            return Ok(());
+        }
+
+        if let Some(entry) = pending.get_mut(session_id) {
+            match (&mut entry.payload, payload) {
+                (GatewayPayload::Chunk { content }, GatewayPayload::Chunk { content: next })
+                | (
+                    GatewayPayload::ReasoningChunk { content },
+                    GatewayPayload::ReasoningChunk { content: next },
+                ) => content.push_str(&next),
+                _ => {}
+            }
+        } else {
+            let batches = Arc::downgrade(&self.pending_text);
+            let transport = self.transport.clone();
+            let broker = self.broker.clone();
+            let id = session_id.to_string();
+            let timer = tokio::spawn(async move {
+                tokio::time::sleep(TEXT_BATCH_WINDOW).await;
+                let Some(batches) = batches.upgrade() else {
+                    return;
+                };
+                let mut batches = batches.lock().await;
+                if let Some(entry) = batches.remove(&id) {
+                    if let Err(error) = transport.send(&id, entry.payload.clone()).await {
+                        log::warn!(
+                            "[Workflow][session={}][phase=text_batch] Transport flush failed: {}",
+                            id,
+                            error
+                        );
+                    }
+                    broker.publish(&id, entry.payload).await;
+                }
+            });
+            pending.insert(
+                session_id.to_string(),
+                PendingWorkflowText { payload, timer },
+            );
+        }
+        let flush = pending
+            .get(session_id)
+            .is_some_and(|entry| match &entry.payload {
+                GatewayPayload::Chunk { content } | GatewayPayload::ReasoningChunk { content } => {
+                    content.len() >= TEXT_BATCH_BYTES
+                }
+                _ => false,
+            });
+        if flush {
+            if let Some(entry) = pending.remove(session_id) {
+                entry.timer.abort();
+                self.transport
+                    .send(session_id, entry.payload.clone())
+                    .await?;
+                self.broker.publish(session_id, entry.payload).await;
+            }
+        }
         Ok(())
     }
 
@@ -684,6 +784,83 @@ mod tests {
         let envelope = subscription.rx.recv().await.unwrap();
         assert_eq!(envelope.cursor(), "instance-headless:0");
         assert!(matches!(&envelope.payload, GatewayPayload::Chunk { content } if content == "one"));
+    }
+
+    #[tokio::test]
+    async fn text_batches_flush_before_control_events_and_replay_identically() {
+        let hub = WorkflowRuntimeHub::with_transport(Arc::new(NoWindowTransport), "batch".into());
+        let mut subscription = hub.broker().subscribe("s1", None).await.unwrap();
+        hub.send("s1", chunk("hello ")).await.unwrap();
+        hub.send("s1", chunk("world")).await.unwrap();
+        assert!(subscription.rx.try_recv().is_err());
+        hub.send(
+            "s1",
+            GatewayPayload::ReasoningChunk {
+                content: "thinking".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let first = subscription.rx.try_recv().unwrap();
+        assert!(
+            matches!(&first.payload, GatewayPayload::Chunk { content } if content == "hello world")
+        );
+        hub.send(
+            "s1",
+            GatewayPayload::Error {
+                message: "stop".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            subscription.rx.try_recv().unwrap().payload,
+            GatewayPayload::ReasoningChunk { .. }
+        ));
+        assert!(matches!(
+            subscription.rx.try_recv().unwrap().payload,
+            GatewayPayload::Error { .. }
+        ));
+        let replay = hub
+            .broker()
+            .subscribe("s1", Some(&first.cursor()))
+            .await
+            .unwrap();
+        assert_eq!(replay.replay.len(), 2);
+        assert!(hub.pending_text.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn text_batches_flush_on_size_and_timer_without_another_event() {
+        let hub = WorkflowRuntimeHub::with_transport(Arc::new(NoWindowTransport), "batch".into());
+        let mut first = hub.broker().subscribe("s1", None).await.unwrap();
+        let mut second = hub.broker().subscribe("s2", None).await.unwrap();
+        hub.send("s1", chunk(&"界".repeat(167))).await.unwrap();
+        assert!(first.rx.try_recv().is_ok());
+        hub.send("s2", chunk("last fragment")).await.unwrap();
+        assert!(second.rx.try_recv().is_err());
+        let flushed = tokio::time::timeout(std::time::Duration::from_secs(2), second.rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(flushed.payload, GatewayPayload::Chunk { content } if content == "last fragment")
+        );
+        assert!(first.rx.try_recv().is_err());
+        assert!(hub.pending_text.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unregister_flushes_text_and_cancels_pending_timer() {
+        let hub = WorkflowRuntimeHub::with_transport(Arc::new(NoWindowTransport), "batch".into());
+        let mut subscription = hub.broker().subscribe("s1", None).await.unwrap();
+        hub.send("s1", chunk("tail")).await.unwrap();
+        hub.unregister_session_with_source("s1", "test").await;
+        assert!(
+            matches!(subscription.rx.recv().await.unwrap().payload, GatewayPayload::Chunk { content } if content == "tail")
+        );
+        assert!(subscription.rx.recv().await.is_err());
+        assert!(hub.pending_text.lock().await.is_empty());
     }
 
     /// Input routing is shared with the desktop hub: the no-window transport

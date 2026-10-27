@@ -250,6 +250,20 @@ export function useWorkflowMessageScroll({ containerRef, onWindowAnchorChange = 
   const requestContentChange = () => {
     if (disposed) return
     if (!pendingSnapshot) captureSnapshot()
+
+    const container = getContainer()
+    if (container && mode.value === 'following' && pendingSnapshot?.mode === 'following') {
+      const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+      // Evicting the window head can clamp scrollTop before our frame runs.
+      // Remember that browser-owned move even if an approval expands the tail
+      // again before its queued scroll event arrives.
+      if (
+        pendingSnapshot.scrollTop > maxScrollTop + 1 &&
+        Math.abs(container.scrollTop - maxScrollTop) <= 1
+      ) {
+        internalScrollTarget = container.scrollTop
+      }
+    }
     requestReconcile()
   }
 

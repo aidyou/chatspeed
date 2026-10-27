@@ -23,6 +23,44 @@ const createContainer = ({ scrollTop = 0, scrollHeight = 1000, clientHeight = 40
   return container
 }
 
+test('window head eviction must not turn browser scroll clamping into history reading', async () => {
+  const container = createContainer({ scrollTop: 9600, scrollHeight: 10000 })
+  const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+
+  controller.beforeContentChange()
+  // The 301st message evicts a tall message at the head of the 300-row window.
+  container.scrollHeight = 8000
+  container.scrollTop = 7600
+  controller.requestContentChange()
+  // Layout grows again before the queued scroll event is delivered.
+  container.scrollHeight = 8500
+  controller.onScroll()
+  assert.equal(controller.mode.value, 'following')
+
+  // The approval card grows after the browser's clamped scroll event.
+  controller.onContentResize()
+  await waitForReconcile()
+  assert.equal(container.scrollTop, 8100)
+  assert.equal(controller.mode.value, 'following')
+  controller.dispose()
+})
+
+test('a real upward wheel cancels following after window head clamping', async () => {
+  const container = createContainer({ scrollTop: 9600, scrollHeight: 10000 })
+  const controller = useWorkflowMessageScroll({ containerRef: ref(container) })
+  controller.beforeContentChange()
+  container.scrollHeight = 8000
+  container.scrollTop = 7600
+  controller.requestContentChange()
+  controller.onWheel({ deltaY: -100 })
+  container.scrollTop = 7500
+  controller.onScroll()
+  await waitForReconcile()
+  assert.equal(controller.mode.value, 'reading')
+  assert.equal(container.scrollTop, 7500)
+  controller.dispose()
+})
+
 test('keeps following mode at the bottom after content changes', async () => {
   const container = createContainer({ scrollTop: 600 })
   const containerRef = ref(container)
