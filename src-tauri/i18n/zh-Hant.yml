@@ -353,7 +353,11 @@ workflow:
     verification_failed: 測試失敗|測試全部失敗|全部測試失敗|驗證失敗|測試未通過|驗證未通過
     verification_not_run: 測試尚未執行|測試未執行|未執行測試|未測試|尚未測試|未驗證|沒有驗證
     verification_passed: 測試通過|測試全部通過|全部測試通過|驗證通過|測試成功|驗證成功|已驗證
+  compression_context_budget_exceeded: '壓縮必要上下文超出輸入預算（需要：%{fixed_tokens}，預算：%{input_budget}），請使用上下文視窗更大的壓縮模型。'
+  compression_empty_evidence: 歷史壓縮回傳了空內容，未推進壓縮邊界。
   compression_in_progress: 上下文壓縮中，請稍後...
+  compression_no_progress: 歷史壓縮未能縮小輸入，未推進壓縮邊界。
+  compression_round_limit: 歷史壓縮超過分批歸併輪次限制，未推進壓縮邊界。
   dependency_not_found: 節點 '%{node_id}' 相依的節點 '%{id}' 不存在
   duplicate_node_id: '重複的節點 ID: %{id}'
   edge_reference_missing: 邊參考不存在：%{from} -> %{to}

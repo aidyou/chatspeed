@@ -360,7 +360,11 @@ workflow:
     verification_failed: tests failed|test failed|all tests failed|verification failed|verification did not pass
     verification_not_run: tests were not run|tests not run|test was not run|not tested|verification was not run|not verified|unverified
     verification_passed: tests passed|test passed|all tests pass|verification passed|verification succeeded|verified successfully
+  compression_context_budget_exceeded: 'Required compression context exceeds the input budget (required: %{fixed_tokens}, budget: %{input_budget}). Use a compression model with a larger context window.'
+  compression_empty_evidence: History compression returned empty evidence; the compression boundary was not advanced.
   compression_in_progress: Compressing context...
+  compression_no_progress: History compression did not reduce the input; the compression boundary was not advanced.
+  compression_round_limit: History compression exceeded the reduction round limit; the compression boundary was not advanced.
   dependency_not_found: Node '%{node_id}' depends on node '%{id}' which does not exist
   duplicate_node_id: 'Duplicate node ID: %{id}'
   edge_reference_missing: 'Edge reference does not exist: %{from} -> %{to}'

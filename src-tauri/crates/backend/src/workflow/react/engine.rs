@@ -1113,6 +1113,22 @@ impl WorkflowExecutor {
             self.select_compressor_model(provider_id, &model_name);
         self.compressor.provider_id = compressor_provider_id;
         self.compressor.model = compressor_model;
+        self.compressor.context_window_tokens = utility_model
+            .filter(|model| {
+                model.id == self.compressor.provider_id && model.model == self.compressor.model
+            })
+            .or(selected_model)
+            .and_then(|model| {
+                let resolved = if model.context_size.is_some_and(|capacity| capacity > 0) {
+                    None
+                } else {
+                    self.resolve_actual_model_config(model.id, &model.model)
+                };
+                Self::model_context_capacity(model, resolved.as_ref())
+            })
+            .unwrap_or_else(|| {
+                Self::effective_context_limit(&self.agent_config, &self.policy.phase).min(128_000)
+            });
         self.sync_runtime_limits();
 
         log::debug!(
@@ -10873,6 +10889,7 @@ mod recovery_tests {
         executor.sync_runtime_models_from_agent_config();
         assert_eq!(executor.compressor.provider_id, 0);
         assert_eq!(executor.compressor.model, "team@alpha");
+        assert_eq!(executor.compressor.context_window_tokens, 200_000);
         let empty_window: Vec<WorkflowMessage> = Vec::new();
         let tracked = executor
             .track_goal_at_compression_boundary(&empty_window)
@@ -10971,6 +10988,18 @@ mod recovery_tests {
         );
         // Decision models are now read from the global config table, not AgentModels.
         executor.sync_runtime_models_from_agent_config();
+        assert_eq!(executor.compressor.context_window_tokens, 128_000);
+        executor
+            .agent_config
+            .models
+            .as_mut()
+            .and_then(|models| models.utility.as_mut())
+            .expect("utility model")
+            .context_size = Some(1_000_000);
+        executor.sync_runtime_models_from_agent_config();
+        assert_eq!(executor.compressor.provider_id, 22);
+        assert_eq!(executor.compressor.model, "utility-model");
+        assert_eq!(executor.compressor.context_window_tokens, 1_000_000);
     }
 
     #[tokio::test]
