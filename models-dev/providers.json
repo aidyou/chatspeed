@@ -5,7 +5,7 @@
       "documentationUrl": "https://doc.302.ai",
       "id": "302ai",
       "logo": "https://models.dev/logos/302ai.svg",
-      "modelCount": 125,
+      "modelCount": 126,
       "name": "302.AI",
       "protocol": "openai",
       "responses": false
@@ -216,7 +216,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 200,
+      "modelCount": 203,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -503,7 +503,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 107,
+      "modelCount": 108,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 371,
+      "modelCount": 368,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -1051,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 208,
+      "modelCount": 203,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 432,
+      "modelCount": 419,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1290,6 +1290,16 @@
       "responses": false
     },
     {
+      "api": "https://api.modular.com/v1",
+      "documentationUrl": "https://docs.modular.com/models",
+      "id": "modular",
+      "logo": "https://models.dev/logos/modular.svg",
+      "modelCount": 4,
+      "name": "Modular",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://api.moonshot.ai/v1",
       "description": "Moonshot AI's Kimi line is tuned for long-context agents, multimodal coding, and high-throughput developer workflows.",
       "documentationUrl": "https://platform.moonshot.ai/docs/api/chat",
@@ -1355,7 +1365,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 648,
+      "modelCount": 652,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -2134,7 +2144,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 129,
+      "modelCount": 130,
       "name": "Venice AI",
       "responses": false
     },
@@ -2162,7 +2172,7 @@
       "documentationUrl": "https://docs.vivgrid.com/models",
       "id": "vivgrid",
       "logo": "https://models.dev/logos/vivgrid.svg",
-      "modelCount": 37,
+      "modelCount": 38,
       "name": "Vivgrid",
       "protocol": "openai",
       "responses": false
@@ -2371,9 +2381,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "dfe370d0a651c808fd8fdb253fcf03c7bf482cc31c5c56e2e07769e3cb806563",
-    "generatedAt": "2026-10-27T09:02:20Z",
+    "catalogSha256": "ceac74e8356d6c698b5260ad8286a741deabfef3628f91e5d8ccf4ab436803e0",
+    "generatedAt": "2026-10-28T09:41:51Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "018efeee8549161fa2dbed51850c21b18a43eb54"
+    "revision": "e166acb43306c731081f117c9b96dec3daf75ed7"
   }
 }
