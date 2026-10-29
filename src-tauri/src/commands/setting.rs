@@ -53,7 +53,8 @@ pub async fn set_config(
     key: &str,
     value: Value,
 ) -> Result<(), String> {
-    let should_refresh_tray = crate::shortcut::is_shortcut_key(key);
+    let should_refresh_tray =
+        key == CFG_INTERFACE_LANGUAGE || crate::shortcut::is_shortcut_key(key);
     crate::runtime_data::set_config(supervisor.inner().as_ref(), key.to_string(), value.clone())
         .await?;
 

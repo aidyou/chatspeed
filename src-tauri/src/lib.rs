@@ -972,7 +972,6 @@ pub async fn run() -> crate::error::Result<()> {
                                     if let Err(error) = crate::shortcut::register_desktop_shortcut(&app_handle) {
                                         log::error!("Failed to register desktop shortcuts: {:?}", error);
                                     }
-                                    let _ = crate::tray::create_tray(&app_handle, None);
                                     apply_runtime_startup_config(&app_handle, supervisor.clone(), &snapshot)
                                         .await;
                                     restore_initial_windows(&app_handle, &snapshot);
@@ -987,6 +986,8 @@ pub async fn run() -> crate::error::Result<()> {
                                     crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
                                         .set_enabled(snapshot.get_bool(CFG_WORKFLOW_PREVENT_IDLE_SLEEP, false));
                                 }
+                                // Native menu labels must be rebuilt after applying the interface locale.
+                                let _ = crate::tray::create_tray(&app_handle, None);
                                 initialized_generation = generation;
                                 if supervisor.mark_ready(generation).await {
                                     if let Err(error) = app_handle.emit(
