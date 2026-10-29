@@ -3244,17 +3244,36 @@ defineExpose({
 }
 
 .workflow-error-alert-slot {
-  min-height: var(--cs-size-xl);
+  --workflow-alert-line-height: 24px;
+  --workflow-alert-single-line-height: calc(
+    var(--workflow-alert-line-height) + 2 * var(--cs-space-sm) + 2px
+  );
+  min-height: var(--workflow-alert-single-line-height);
   margin-top: var(--cs-space-sm);
+  margin-right: var(--cs-space);
 }
 
 .workflow-error-alert {
-  min-height: var(--cs-size-xl);
+  box-sizing: border-box;
+  min-height: var(--workflow-alert-single-line-height);
+  padding: var(--cs-space-sm) var(--cs-space);
   border: 1px solid var(--el-color-danger-light-5);
   border-radius: var(--cs-border-radius-pill);
 
+  :deep(.el-alert__icon) {
+    font-size: var(--cs-font-size-md);
+    width: var(--cs-font-size-md);
+  }
+
   :deep(.el-alert__content) {
     width: 100%;
+    min-width: 0;
+    padding: 0;
+  }
+
+  :deep(.el-alert__title) {
+    font-size: var(--cs-font-size);
+    line-height: var(--workflow-alert-line-height);
   }
 }
 
