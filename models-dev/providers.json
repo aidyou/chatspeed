@@ -452,7 +452,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 73,
+      "modelCount": 74,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 368,
+      "modelCount": 389,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -632,7 +632,7 @@
       "documentationUrl": "https://docs.empiriolabs.ai",
       "id": "empiriolabs",
       "logo": "https://models.dev/logos/empiriolabs.svg",
-      "modelCount": 62,
+      "modelCount": 63,
       "name": "EmpirioLabs AI",
       "protocol": "openai",
       "responses": false
@@ -743,7 +743,7 @@
       "documentationUrl": "https://ai.google.dev/gemini-api/docs/models",
       "id": "google",
       "logo": "https://models.dev/logos/google.svg",
-      "modelCount": 38,
+      "modelCount": 36,
       "name": "Google",
       "protocol": "gemini",
       "responses": false
@@ -971,7 +971,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 397,
+      "modelCount": 384,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1051,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 203,
+      "modelCount": 196,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 419,
+      "modelCount": 410,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1151,7 +1151,7 @@
       "documentationUrl": "https://melious.ai/docs/reference/models",
       "id": "melious",
       "logo": "https://models.dev/logos/melious.svg",
-      "modelCount": 13,
+      "modelCount": 8,
       "name": "Melious",
       "protocol": "openai",
       "responses": false
@@ -1223,7 +1223,7 @@
       "documentationUrl": "https://docs.mistral.ai/getting-started/models/",
       "id": "mistral",
       "logo": "https://models.dev/logos/mistral.svg",
-      "modelCount": 34,
+      "modelCount": 35,
       "name": "Mistral",
       "protocol": "openai",
       "responses": false
@@ -1365,7 +1365,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 652,
+      "modelCount": 641,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1466,7 +1466,7 @@
       "documentationUrl": "https://ofox.ai/docs",
       "id": "ofox",
       "logo": "https://models.dev/logos/ofox.svg",
-      "modelCount": 148,
+      "modelCount": 150,
       "name": "Ofox",
       "protocol": "openai",
       "responses": false
@@ -1499,7 +1499,7 @@
       "documentationUrl": "https://platform.openai.com/docs/models",
       "id": "openai",
       "logo": "https://models.dev/logos/openai.svg",
-      "modelCount": 52,
+      "modelCount": 51,
       "name": "OpenAI",
       "protocol": "openai",
       "responses": false
@@ -1540,7 +1540,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 390,
+      "modelCount": 382,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2144,7 +2144,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 130,
+      "modelCount": 129,
       "name": "Venice AI",
       "responses": false
     },
@@ -2381,9 +2381,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "ceac74e8356d6c698b5260ad8286a741deabfef3628f91e5d8ccf4ab436803e0",
-    "generatedAt": "2026-10-28T09:41:51Z",
+    "catalogSha256": "aaf8ad86d877990d8b730a5a17a37f55a274ef5bfd9632071b0621eb429c0945",
+    "generatedAt": "2026-10-29T10:00:06Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "e166acb43306c731081f117c9b96dec3daf75ed7"
+    "revision": "d8a6e8a8082a6cd73c5a4b805143fce1ba0a3254"
   }
 }
