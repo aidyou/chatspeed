@@ -1213,26 +1213,28 @@
         </div>
       </div>
 
-      <el-alert
-        v-if="tailAlert"
-        :type="tailAlert.category"
-        :closable="false"
-        show-icon
-        role="alert"
-        :class="['workflow-error-alert', `workflow-error-alert--${tailAlert.category}`]">
-        <template #title>
-          <template v-if="tailAlert.message">{{ getErrorAlertTitle(tailAlert.message) }}</template>
-          <template v-else-if="tailAlert.retryInfo">
-            {{ formatWorkflowRetryMessage(tailAlert.retryInfo, $t) }}
+      <div class="workflow-error-alert-slot">
+        <el-alert
+          v-if="tailAlert"
+          :type="tailAlert.category"
+          :closable="false"
+          show-icon
+          role="alert"
+          :class="['workflow-error-alert', `workflow-error-alert--${tailAlert.category}`]">
+          <template #title>
+            <template v-if="tailAlert.message">{{ getErrorAlertTitle(tailAlert.message) }}</template>
+            <template v-else-if="tailAlert.retryInfo">
+              {{ formatWorkflowRetryMessage(tailAlert.retryInfo, $t) }}
+            </template>
+            <template v-else>
+              {{ tailAlert.category === 'warning' ? $t('common.warning') : $t('common.error') }}
+            </template>
           </template>
-          <template v-else>
-            {{ tailAlert.category === 'warning' ? $t('common.warning') : $t('common.error') }}
-          </template>
-        </template>
-        <div v-if="getTailAlertBody()" class="workflow-error-alert__body">
-          <MarkdownSimple v-link :content="getTailAlertBody()" />
-        </div>
-      </el-alert>
+          <div v-if="getTailAlertBody()" class="workflow-error-alert__body">
+            <MarkdownSimple v-link :content="getTailAlertBody()" />
+          </div>
+        </el-alert>
+      </div>
     </template>
   </div>
 </template>
@@ -3241,10 +3243,15 @@ defineExpose({
   border-top: 1px solid var(--cs-border-color);
 }
 
-.workflow-error-alert {
+.workflow-error-alert-slot {
+  min-height: var(--cs-size-xl);
   margin-top: var(--cs-space-sm);
+}
+
+.workflow-error-alert {
+  min-height: var(--cs-size-xl);
   border: 1px solid var(--el-color-danger-light-5);
-  border-radius: var(--cs-border-radius-md);
+  border-radius: var(--cs-border-radius-pill);
 
   :deep(.el-alert__content) {
     width: 100%;
