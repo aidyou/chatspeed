@@ -322,6 +322,14 @@ pub fn show_and_focus_window(app: &AppHandle, label: &str) {
     if let Some(window) = ensure_window(app, label, false) {
         log::debug!("Attempting to show and focus window: {}", label);
 
+        // Restore the Dock icon before showing a workflow hidden through its close button.
+        #[cfg(target_os = "macos")]
+        if label == "workflow" {
+            if let Err(error) = app.set_dock_visibility(true) {
+                warn!("Failed to restore Dock icon when opening workflow: {}", error);
+            }
+        }
+
         let is_visible = window.is_visible().unwrap_or(false);
         let is_minimized = window.is_minimized().unwrap_or(false);
 

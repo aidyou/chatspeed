@@ -601,6 +601,13 @@ pub async fn run() -> crate::error::Result<()> {
                                 warn!("Failed to hide window '{}': {}", window.label(), e);
                             } else {
                                 log::info!("[DesktopLifecycle] window hidden after close request; label={}", window.label());
+                                // Dock visibility is app-wide on macOS; the tray remains available.
+                                #[cfg(target_os = "macos")]
+                                if window.label() == "workflow" {
+                                    if let Err(error) = window.app_handle().set_dock_visibility(false) {
+                                        warn!("Failed to hide Dock icon after closing workflow: {}", error);
+                                    }
+                                }
                             }
                         } else {
                             #[cfg(debug_assertions)]
