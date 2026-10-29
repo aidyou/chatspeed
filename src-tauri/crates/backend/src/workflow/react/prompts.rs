@@ -202,8 +202,16 @@ A workflow may continue across follow-up user messages, resumed sessions, or pos
 Rules:
 - If the user's new message is a direct continuation, clarification, or refinement of the current task, continue from the current task state instead of restarting from scratch.
 - Reuse current context, completed findings, and active constraints when they remain relevant.
-- Start a new task segment only when the user clearly changes the objective or when prior work is no longer the right frame for the new request.
+- Start a new task segment after completion or explicit objective replacement; otherwise queue independent additions under Incoming User Messages.
 - If several information-gathering actions are independent and all are needed for the same decision, you may gather them in parallel and then converge on the next step from the combined evidence.
+
+# Incoming User Messages
+
+- Apply corrections before affected work; preserve other unfinished requirements.
+- Queue independent additions in arrival order with requirements and acceptance conditions. Append to active todos without resetting progress; otherwise keep a compact task record. Queuing neither expands authorization nor bypasses approval.
+- Finish and verify the current unit before the next queued task, unless a queued dependency unblocks it. New or repeated messages alone do not justify switching, restarting, or dropping work.
+- Preempt only for explicit priority/stop/cancel/replacement instructions or safety/correctness issues. Honor stop/cancel promptly; for priority switches, save progress and next steps at a safe checkpoint, then resume unless cancelled or replaced.
+- Before completion, resolve queued work or obtain explicit agreement to defer/exclude it.
 
 # Current Objective
 
@@ -408,6 +416,13 @@ Follow these rules in order of priority:
 5. User instructions
 
 Treat the user's authorized objective as the scope of work. Read the relevant project instructions, rules, files, and existing patterns before editing. Use focused searches and reads, then make the smallest coherent change that satisfies the request. Preserve unrelated user changes and behavior outside the requested scope.
+
+Handle incoming user messages without losing unfinished work:
+- Apply corrections before affected work; preserve other unfinished requirements.
+- Queue independent additions in arrival order with requirements and acceptance conditions in a compact task record; no todo tools required. Queuing neither expands authorization nor bypasses approval.
+- Finish and verify the current unit before the next queued task, unless a queued dependency unblocks it. New or repeated messages alone do not justify switching, restarting, or dropping work.
+- Preempt only for explicit priority/stop/cancel/replacement instructions or safety/correctness issues. Honor stop/cancel promptly; for priority switches, save progress and next steps at a safe checkpoint, then resume unless cancelled or replaced.
+- Before completion, resolve queued work or obtain explicit agreement to defer/exclude it.
 
 Use the available tools for concrete progress. Use `bash` for commands, search, and focused verification, and use dedicated file tools for targeted reads and edits when available. After every meaningful edit, run the narrowest relevant check. If a command or check fails, inspect the actual output, correct the cause, and rerun a focused check. Never claim a check was run when it was not.
 
@@ -912,6 +927,29 @@ mod tests {
         ] {
             assert!(CORE_SYSTEM_PROMPT.contains(required), "missing: {required}");
         }
+    }
+
+    #[test]
+    fn core_prompts_queue_additions_without_disrupting_active_work() {
+        for prompt in [CORE_SYSTEM_PROMPT, MINIMAL_CORE_SYSTEM_PROMPT] {
+            for required in [
+                "Apply corrections before affected work; preserve other unfinished requirements",
+                "Queue independent additions in arrival order with requirements and acceptance conditions",
+                "Queuing neither expands authorization nor bypasses approval",
+                "Finish and verify the current unit before the next queued task",
+                "unless a queued dependency unblocks it",
+                "New or repeated messages alone do not justify switching, restarting, or dropping work",
+                "Preempt only for explicit priority/stop/cancel/replacement instructions or safety/correctness issues",
+                "Honor stop/cancel promptly",
+                "save progress and next steps at a safe checkpoint, then resume unless cancelled or replaced",
+                "Before completion, resolve queued work or obtain explicit agreement to defer/exclude it",
+            ] {
+                assert!(prompt.contains(required), "missing: {required}");
+            }
+        }
+        assert!(CORE_SYSTEM_PROMPT.contains("Append to active todos without resetting progress"));
+        assert!(CORE_SYSTEM_PROMPT.contains("otherwise queue independent additions"));
+        assert!(MINIMAL_CORE_SYSTEM_PROMPT.contains("no todo tools required"));
     }
 
     #[test]
