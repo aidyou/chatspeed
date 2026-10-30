@@ -85,7 +85,7 @@
       "documentationUrl": "https://docs.aiand.com/",
       "id": "aiand",
       "logo": "https://models.dev/logos/aiand.svg",
-      "modelCount": 10,
+      "modelCount": 12,
       "name": "ai&",
       "protocol": "openai",
       "responses": false
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 389,
+      "modelCount": 390,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -971,7 +971,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 384,
+      "modelCount": 383,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1051,7 +1051,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 196,
+      "modelCount": 199,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 410,
+      "modelCount": 418,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1161,7 +1161,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 202,
+      "modelCount": 203,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1223,7 +1223,7 @@
       "documentationUrl": "https://docs.mistral.ai/getting-started/models/",
       "id": "mistral",
       "logo": "https://models.dev/logos/mistral.svg",
-      "modelCount": 35,
+      "modelCount": 36,
       "name": "Mistral",
       "protocol": "openai",
       "responses": false
@@ -1375,7 +1375,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 57,
+      "modelCount": 60,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1540,7 +1540,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 382,
+      "modelCount": 381,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2144,7 +2144,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 129,
+      "modelCount": 128,
       "name": "Venice AI",
       "responses": false
     },
@@ -2381,9 +2381,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "aaf8ad86d877990d8b730a5a17a37f55a274ef5bfd9632071b0621eb429c0945",
-    "generatedAt": "2026-10-29T10:00:06Z",
+    "catalogSha256": "b31bc4def33d546a682d9585d7e26938f3019995d17bcfc7d51ac85d7977c952",
+    "generatedAt": "2026-10-30T10:03:35Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "d8a6e8a8082a6cd73c5a4b805143fce1ba0a3254"
+    "revision": "cd3cefe49d853fa63a7850d8c3856dde8982dbd8"
   }
 }
