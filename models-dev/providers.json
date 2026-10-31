@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.digitalocean.com/products/gradient-ai-platform/details/models/",
       "id": "digitalocean",
       "logo": "https://models.dev/logos/digitalocean.svg",
-      "modelCount": 83,
+      "modelCount": 84,
       "name": "DigitalOcean",
       "protocol": "openai",
       "responses": false
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 390,
+      "modelCount": 388,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -806,6 +806,16 @@
       "responses": false
     },
     {
+      "api": "https://api.withhopper.com/v1",
+      "documentationUrl": "https://withhopper.com/agents/deepseek-v4.1-flash-1017",
+      "id": "hopper",
+      "logo": "https://models.dev/logos/hopper.svg",
+      "modelCount": 2,
+      "name": "Hopper",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://api.hpc-ai.com/inference/v1",
       "documentationUrl": "https://www.hpc-ai.com/doc/docs/quickstart/",
       "id": "hpc-ai",
@@ -971,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 383,
+      "modelCount": 384,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1071,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 418,
+      "modelCount": 420,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -2152,7 +2162,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 418,
+      "modelCount": 417,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2225,6 +2235,16 @@
       "logo": "https://models.dev/logos/wallaby.svg",
       "modelCount": 1,
       "name": "Wallaby",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://inference.runanywhere.ai/v1",
+      "documentationUrl": "https://docs.runanywhere.ai/wally-cloud/api",
+      "id": "wally",
+      "logo": "https://models.dev/logos/wally.svg",
+      "modelCount": 8,
+      "name": "Wally",
       "protocol": "openai",
       "responses": false
     },
@@ -2381,9 +2401,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "b31bc4def33d546a682d9585d7e26938f3019995d17bcfc7d51ac85d7977c952",
-    "generatedAt": "2026-10-30T10:03:35Z",
+    "catalogSha256": "061f13879d75d271c1c89756ca66955cb55c55919a82ea96dbf57d368056a646",
+    "generatedAt": "2026-10-31T09:40:58Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "cd3cefe49d853fa63a7850d8c3856dde8982dbd8"
+    "revision": "f8235fca13a0cab45514f91bb1ddb0d7e9c85629"
   }
 }
