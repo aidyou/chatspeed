@@ -111,6 +111,8 @@ impl RuntimeOwner {
                 source,
             }
         })?);
+        #[cfg(not(test))]
+        crate::resource_control::install(&main_store);
         log::info!(
             "[RuntimeStartup][owner] stage=main_store completed; elapsed={:?}, total={:?}",
             stage_started.elapsed(),

@@ -131,6 +131,8 @@ pub mod terminal;
 /// handle. See [`owned_process`].
 pub mod owned_process;
 
+pub mod resource_control;
+
 /// The single canonical runtime owner assembly.
 pub mod owner;
 

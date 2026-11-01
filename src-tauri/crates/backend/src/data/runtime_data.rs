@@ -1458,6 +1458,17 @@ fn set_config_core(
     body: Value,
 ) -> Result<Value, ApplicationError> {
     let SetConfigBody { key, value } = parse_body(body)?;
+    if key == crate::resource_control::CONFIG_KEY && !value.is_null() {
+        let limits: crate::resource_control::ResourceLimits = serde_json::from_value(value.clone())
+            .map_err(|_| {
+                ApplicationError::invalid_input(
+                    crate::resource_control::ResourceViolation::InvalidConfig.message(),
+                )
+            })?;
+        limits
+            .validate()
+            .map_err(|reason| ApplicationError::invalid_input(reason.message()))?;
+    }
     // The interface language is normalized by the runtime, so the desktop
     // wrapper can re-derive the same value for its local locale side effect.
     let value = if key == CFG_INTERFACE_LANGUAGE {
@@ -1475,6 +1486,9 @@ fn set_config_core(
         svc.main_store
             .set_config(&key, &value)
             .map_err(store_error)?;
+    }
+    if key == crate::resource_control::CONFIG_KEY {
+        crate::resource_control::reset();
     }
     Ok(Value::Null)
 }

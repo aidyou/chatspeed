@@ -1866,6 +1866,7 @@ struct StageProcessGuard {
     /// The detached watcher that tears the tree down on cancellation. Aborted on
     /// normal completion so it never outlives the stage.
     watcher: Option<tokio::task::JoinHandle<()>>,
+    resources: Option<crate::resource_control::TaskGuard>,
 }
 
 impl StageProcessGuard {
@@ -1893,6 +1894,26 @@ impl StageProcessGuard {
             active: true,
             ticket,
             watcher,
+            resources: None,
+        }
+    }
+
+    fn protect_resources(&mut self, child: &Child) -> Result<(), ToolError> {
+        if let Some(pid) = child.id() {
+            let target = self.target;
+            self.resources = crate::resource_control::register(pid, move || target.terminate())
+                .map_err(|reason| ToolError::Fatal(reason.message()))?;
+        }
+        Ok(())
+    }
+
+    fn failure(&self) -> Option<ToolError> {
+        if let Some(reason) = self.resources.as_ref().and_then(|guard| guard.failure()) {
+            Some(ToolError::Fatal(reason.message()))
+        } else if self.was_cancelled() {
+            Some(runtime_cancelled_owned_process_error())
+        } else {
+            None
         }
     }
 
@@ -1963,6 +1984,8 @@ async fn run_host_output_with_timeout(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     configure_process_group(&mut command);
+    crate::resource_control::check_admission()
+        .map_err(|reason| ToolError::Fatal(reason.message()))?;
     let child = command.spawn().map_err(|error| {
         ToolError::ExecutionFailed(
             crate::error_diagnostics::FailureMessage::leaf(format!("Spawn failed: {error}"))
@@ -1971,13 +1994,15 @@ async fn run_host_output_with_timeout(
     })?;
     let mut process_guard = StageProcessGuard::new_owned(&child, cancel);
 
+    process_guard.protect_resources(&child)?;
+
     match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
         Ok(Ok(output)) => {
             // A cancellation that raced the child's natural exit is a failure,
             // never a clean result.
-            if process_guard.was_cancelled() {
+            if let Some(error) = process_guard.failure() {
                 process_guard.kill_group();
-                return Err(runtime_cancelled_owned_process_error());
+                return Err(error);
             }
             process_guard.disarm();
             Ok(output)
@@ -2081,10 +2106,10 @@ async fn run_sandbox_output_with_timeout(
     match timeout(Duration::from_millis(timeout_ms), child.wait_with_output()).await {
         Ok(result) => match result {
             Ok(output) => {
-                if process_guard.was_cancelled() {
+                if let Some(error) = process_guard.failure() {
                     process_guard.kill_group();
                     cleanup_guard.cleanup_now().await;
-                    return Err(runtime_cancelled_owned_process_error());
+                    return Err(error);
                 }
                 process_guard.disarm();
                 cleanup_guard.cleanup_after_success().await;
@@ -3123,10 +3148,10 @@ impl ShellExecute {
                             },
                         )
                         .await;
-                    if process_guard.was_cancelled() {
+                    if let Some(error) = process_guard.failure() {
                         process_guard.kill_group();
                         sandbox_cleanup_guard.cleanup_now().await;
-                        return Err(runtime_cancelled_owned_process_error());
+                        return Err(error);
                     }
                     sandbox_cleanup_guard.cleanup_after_success().await;
                     process_guard.disarm();
@@ -3202,10 +3227,10 @@ impl ShellExecute {
                             output: if last_stream_name.is_some() { format!("\nExit code: {}", exit_code) } else { format!("Exit code: {}", exit_code) },
                             timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
                         }).await;
-                        if process_guard.was_cancelled() {
+                        if let Some(error) = process_guard.failure() {
                             process_guard.kill_group();
                             sandbox_cleanup_guard.cleanup_now().await;
-                            return Err(runtime_cancelled_owned_process_error());
+                            return Err(error);
                         }
                         sandbox_cleanup_guard.cleanup_after_success().await;
                         process_guard.disarm();
@@ -3288,6 +3313,8 @@ impl ShellExecute {
         // `parse_safe_compound_command` remains available for policy/output analysis,
         // but AC-9 requires backend execution to preserve original shell semantics.
 
+        crate::resource_control::check_admission()
+            .map_err(|reason| ToolError::Fatal(reason.message()))?;
         let mut command = host_process_command(command_str)?;
         command
             .stdout(Stdio::piped())
@@ -3305,6 +3332,7 @@ impl ShellExecute {
             )
         })?;
         let mut process_guard = StageProcessGuard::new_owned(&child, self.owned_processes.as_ref());
+        process_guard.protect_resources(&child)?;
 
         let stdout = child.stdout.take().ok_or(ToolError::ExecutionFailed(
             "Failed to capture stdout".into(),
@@ -3386,9 +3414,9 @@ impl ShellExecute {
                                 },
                             )
                             .await;
-                        if process_guard.was_cancelled() {
+                        if let Some(error) = process_guard.failure() {
                             process_guard.kill_group();
-                            return Err(runtime_cancelled_owned_process_error());
+                            return Err(error);
                         }
                         process_guard.disarm();
                         return Ok(build_shell_tool_result_with_metadata(
@@ -3569,9 +3597,9 @@ impl ShellExecute {
                                     },
                                 )
                                 .await;
-                            if process_guard.was_cancelled() {
+                            if let Some(error) = process_guard.failure() {
                                 process_guard.kill_group();
-                                return Err(runtime_cancelled_owned_process_error());
+                                return Err(error);
                             }
                             process_guard.disarm();
                             return Ok(build_shell_tool_result_with_metadata(
@@ -4598,6 +4626,58 @@ mod tests {
         assert!(raw.contains(nested.to_string_lossy().as_ref()));
         assert!(raw.contains("command: git status --short"));
         std::fs::remove_file(physical_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resource_host_shell_budget_kills_children_and_blocks_retries() {
+        if std::env::var_os("CHATSPEED_RESOURCE_TEST_CHILD").is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "tools::shell::tests::resource_host_shell_budget_kills_children_and_blocks_retries"])
+                .env("CHATSPEED_RESOURCE_TEST_CHILD", "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let store =
+            Arc::new(crate::db::MainStore::new(directory.path().join("resources.db")).unwrap());
+        let limits = crate::resource_control::ResourceLimits {
+            task_max_processes: 1,
+            ..Default::default()
+        };
+        store
+            .set_config(
+                crate::resource_control::CONFIG_KEY,
+                &serde_json::to_value(limits).unwrap(),
+            )
+            .unwrap();
+        crate::resource_control::install(&store);
+        crate::resource_control::reset();
+        let mut sentinel = Command::new("sleep")
+            .arg("20")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 20 & wait"]);
+        let result = run_host_output_with_timeout(command, 5_000, None).await;
+        assert!(
+            matches!(result, Err(ToolError::Fatal(message)) if message == crate::resource_control::ResourceViolation::ProcessCount.message())
+        );
+        assert!(sentinel.try_wait().unwrap().is_none());
+        let mut retry = Command::new("sh");
+        let marker = directory.path().join("retry-started");
+        retry.args(["-c", &format!("touch '{}' ; sleep 20", marker.display())]);
+        let result = run_host_output_with_timeout(retry, 5_000, None).await;
+        assert!(
+            matches!(result, Err(ToolError::Fatal(message)) if message == crate::resource_control::ResourceViolation::CircuitOpen.message())
+        );
+        assert!(!marker.exists());
+        sentinel.kill().await.unwrap();
+        sentinel.wait().await.unwrap();
+        crate::resource_control::reset();
     }
 
     #[cfg(unix)]

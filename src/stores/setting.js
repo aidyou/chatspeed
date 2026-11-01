@@ -9,10 +9,12 @@ import { sendSyncState } from '@/libs/sync'
 import { isEmpty, snakeToCamel, camelToSnake } from '@/libs/util'
 import { mapBrowserLangToStandard } from '@/i18n/langUtils'
 import { normalizeInterfaceLocale } from '@/i18n/supportedLocales'
+import { DEFAULT_AGENT_RESOURCE_LIMITS } from '@/libs/agentResourceLimits'
 
 const windowLabel = getCurrentWebviewWindow().label
 
 const defaultSettings = {
+  agentResourceLimits: { ...DEFAULT_AGENT_RESOURCE_LIMITS },
   httpServer: 'http://127.0.0.1:21912',
   interfaceLanguage: mapBrowserLangToStandard(navigator.language),
   primaryLanguage: mapBrowserLangToStandard(navigator.language),

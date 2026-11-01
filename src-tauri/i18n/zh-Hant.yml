@@ -242,6 +242,14 @@ proxy:
     not_found_by_name: 未能透過分組名稱 '%{name}' 找到代理分組
 runtime:
   owned_process_cancelled: 執行階段正在停止，已終止一個仍在執行的託管工具處理程序
+  resource_limit: 'AI 執行資源保護（%{reason}）。預算超限後禁止啟動新的主機 Bash 任務，請調整並儲存資源設定後再重試。'
+  resource_reason_circuit_open: 資源保護已熔斷
+  resource_reason_concurrent_tasks: 已達到並行任務上限，請等待既有任務結束
+  resource_reason_invalid_config: 資源設定無效
+  resource_reason_monitoring_unavailable: 無法監測處理程序資源
+  resource_reason_process_count: 超過單任務處理程序數上限
+  resource_reason_task_memory: 超過單任務記憶體預算
+  resource_reason_total_memory: 超過總記憶體預算
   work_refused_while_stopping: 執行階段處於 %{phase}，拒絕新的 %{kind} 工作
 sensitive:
   filter:

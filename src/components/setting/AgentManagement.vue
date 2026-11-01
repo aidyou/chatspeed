@@ -9,6 +9,9 @@
     <el-tab-pane :label="$t('settings.sandbox.decisionTitle')" name="decision">
       <decision />
     </el-tab-pane>
+    <el-tab-pane :label="$t('settings.agent.resourceTab')" name="resources">
+      <agent-resources />
+    </el-tab-pane>
   </el-tabs>
 </template>
 
@@ -17,6 +20,7 @@ import { ref } from 'vue'
 import Agent from './Agent.vue'
 import Sandbox from './Sandbox.vue'
 import Decision from './Decision.vue'
+import AgentResources from './AgentResources.vue'
 
 const activeTab = ref('agents')
 </script>

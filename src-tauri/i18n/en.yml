@@ -248,6 +248,14 @@ proxy:
     not_found_by_name: Failed to find proxy group by group name '%{name}'
 runtime:
   owned_process_cancelled: The runtime was stopping and terminated an in-flight owned tool process
+  resource_limit: 'AI execution resource protection (%{reason}). New host Bash tasks are blocked after a budget violation. Adjust and save the resource settings before retrying.'
+  resource_reason_circuit_open: Protection is tripped
+  resource_reason_concurrent_tasks: Concurrent task limit reached; wait for an existing task to finish
+  resource_reason_invalid_config: Invalid resource configuration
+  resource_reason_monitoring_unavailable: Process resource monitoring is unavailable
+  resource_reason_process_count: Per-task process limit exceeded
+  resource_reason_task_memory: Per-task memory budget exceeded
+  resource_reason_total_memory: Total memory budget exceeded
   work_refused_while_stopping: 'The runtime is %{phase} and refuses new %{kind} work'
 sensitive:
   filter:

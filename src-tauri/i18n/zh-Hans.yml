@@ -242,6 +242,14 @@ proxy:
     not_found_by_name: 未能通过分组名称 '%{name}' 找到代理分组
 runtime:
   owned_process_cancelled: 运行时正在停止，已终止一个仍在执行的托管工具进程
+  resource_limit: 'AI 执行资源保护（%{reason}）。预算超限后禁止启动新的主机 Bash 任务，请调整并保存资源设置后再重试。'
+  resource_reason_circuit_open: 资源保护已熔断
+  resource_reason_concurrent_tasks: 已达到并发任务上限，请等待已有任务结束
+  resource_reason_invalid_config: 资源配置无效
+  resource_reason_monitoring_unavailable: 无法监测进程资源
+  resource_reason_process_count: 超过单任务进程数上限
+  resource_reason_task_memory: 超过单任务内存预算
+  resource_reason_total_memory: 超过总内存预算
   work_refused_while_stopping: 运行时处于 %{phase}，拒绝新的 %{kind} 工作
 sensitive:
   filter:
