@@ -981,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 384,
+      "modelCount": 380,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1071,7 +1071,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 420,
+      "modelCount": 423,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1375,7 +1375,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 641,
+      "modelCount": 643,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1498,7 +1498,7 @@
       "documentationUrl": "https://docs.ollama.com/cloud",
       "id": "ollama-cloud",
       "logo": "https://models.dev/logos/ollama-cloud.svg",
-      "modelCount": 23,
+      "modelCount": 25,
       "name": "Ollama Cloud",
       "protocol": "openai",
       "responses": false
@@ -1550,7 +1550,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 381,
+      "modelCount": 377,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1860,7 +1860,7 @@
       "documentationUrl": "https://cloud.siliconflow.com/models",
       "id": "siliconflow-cn",
       "logo": "https://models.dev/logos/siliconflow-cn.svg",
-      "modelCount": 40,
+      "modelCount": 45,
       "name": "SiliconFlow (China)",
       "protocol": "openai",
       "responses": false
@@ -2401,9 +2401,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "061f13879d75d271c1c89756ca66955cb55c55919a82ea96dbf57d368056a646",
-    "generatedAt": "2026-10-31T09:40:58Z",
+    "catalogSha256": "8d81f4afdca195f5f94de0c1738bc77cbe4439c5f00593e9455836cc0d43342e",
+    "generatedAt": "2026-11-01T10:29:40Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "f8235fca13a0cab45514f91bb1ddb0d7e9c85629"
+    "revision": "3e92f9aa0a1398610792ce4f3029e2fe72972e78"
   }
 }
