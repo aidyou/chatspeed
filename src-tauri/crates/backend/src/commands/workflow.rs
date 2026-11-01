@@ -73,6 +73,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 #[cfg(not(feature = "desktop"))]
+use std::collections::{HashMap, HashSet};
+#[cfg(not(feature = "desktop"))]
 use std::fs;
 #[cfg(not(feature = "desktop"))]
 use std::io::{BufRead, BufReader};
@@ -2019,18 +2021,17 @@ fn durable_child_terminal_state(
 }
 
 #[cfg(not(feature = "desktop"))]
-fn child_was_detached_by_latest_manual_clear(
+fn children_detached_by_latest_manual_clear(
     store: &MainStore,
     parent_session_id: &str,
-    child_id: &str,
-) -> Result<bool, crate::db::StoreError> {
+) -> Result<HashSet<String>, crate::db::StoreError> {
     let snapshot = store.get_workflow_snapshot(parent_session_id)?;
     let marker_index = snapshot
         .messages
         .iter()
         .rposition(ContextManager::is_manual_clear_context_message);
     let Some(marker_index) = marker_index else {
-        return Ok(false);
+        return Ok(HashSet::new());
     };
     let marker = &snapshot.messages[marker_index];
     let previous_context = marker
@@ -2039,41 +2040,41 @@ fn child_was_detached_by_latest_manual_clear(
         .and_then(|metadata| metadata.get("previous_execution_context"))
         .cloned()
         .and_then(|value| serde_json::from_value::<ExecutionContext>(value).ok());
-    let tracked_by_previous_context = previous_context.is_some_and(|context| {
-        context
-            .sub_agent_sessions
-            .iter()
-            .any(|sub_agent_id| sub_agent_id == child_id)
-            || context.waiting_on_sub_agent_id.as_deref() == Some(child_id)
-            || context
+    let mut detached_children: HashSet<String> = snapshot.messages[..marker_index]
+        .iter()
+        .filter_map(|message| {
+            message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("sub_agent_id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect();
+    if let Some(context) = previous_context {
+        detached_children.extend(context.sub_agent_sessions);
+        detached_children.extend(context.waiting_on_sub_agent_id);
+        detached_children.extend(
+            context
                 .pending_sub_agent_completions
-                .iter()
-                .any(|completion| completion.sub_agent_id == child_id)
-    });
-    let observed_before_clear = snapshot.messages[..marker_index].iter().any(|message| {
-        message
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("sub_agent_id"))
-            .and_then(Value::as_str)
-            == Some(child_id)
-    });
-    if !tracked_by_previous_context && !observed_before_clear {
-        return Ok(false);
+                .into_iter()
+                .map(|completion| completion.sub_agent_id),
+        );
     }
-
-    let current_context = store.get_execution_context(parent_session_id)?;
-    Ok(current_context.is_none_or(|context| {
-        !context
-            .sub_agent_sessions
-            .iter()
-            .any(|sub_agent_id| sub_agent_id == child_id)
-            && context.waiting_on_sub_agent_id.as_deref() != Some(child_id)
-            && !context
-                .pending_sub_agent_completions
-                .iter()
-                .any(|completion| completion.sub_agent_id == child_id)
-    }))
+    if !detached_children.is_empty() {
+        if let Some(context) = store.get_execution_context(parent_session_id)? {
+            for child_id in context.sub_agent_sessions {
+                detached_children.remove(&child_id);
+            }
+            if let Some(child_id) = context.waiting_on_sub_agent_id {
+                detached_children.remove(&child_id);
+            }
+            for completion in context.pending_sub_agent_completions {
+                detached_children.remove(&completion.sub_agent_id);
+            }
+        }
+    }
+    Ok(detached_children)
 }
 
 /// Recovers the UI-only failure projection from the child's durable terminal
@@ -2348,6 +2349,7 @@ fn reconcile_child_workflows(
     child_workflows: Vec<Workflow>,
 ) -> Result<(), crate::db::StoreError> {
     let mut decisions = Vec::new();
+    let mut detached_children_by_parent = HashMap::new();
 
     for child in child_workflows {
         let Some(child_id) = child.id.clone() else {
@@ -2359,7 +2361,14 @@ fn reconcile_child_workflows(
 
         let detached_by_manual_clear = match child.parent_session_id.as_deref() {
             Some(parent_session_id) => {
-                child_was_detached_by_latest_manual_clear(store, parent_session_id, &child_id)?
+                let detached_children =
+                    match detached_children_by_parent.entry(parent_session_id.to_string()) {
+                        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(entry) => entry.insert(
+                            children_detached_by_latest_manual_clear(store, parent_session_id)?,
+                        ),
+                    };
+                detached_children.contains(&child_id)
             }
             None => false,
         };
@@ -8852,6 +8861,204 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_child_workflows_for_parent_reads_long_history_once() {
+        let store = create_test_store();
+        let session_id = "long-history-parent";
+        let child_count = 106;
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Long history", "agent-test", None, None)
+            .expect("failed to create parent workflow");
+
+        let mut previous_context = ExecutionContext::new(session_id.to_string());
+        for index in 0..child_count {
+            let child_id = format!("long-history-child-{index}");
+            store
+                .create_workflow(
+                    &child_id,
+                    "Child task",
+                    "agent-test",
+                    None,
+                    Some(session_id),
+                )
+                .expect("failed to create child workflow");
+            let mut context = ExecutionContext::new(child_id.clone());
+            context.state = RuntimeState::Completed;
+            store
+                .upsert_execution_context(&context)
+                .expect("failed to persist completed child");
+            previous_context.sub_agent_sessions.push(child_id);
+        }
+        let marker_metadata = json!({ "previous_execution_context": previous_context }).to_string();
+        store
+            .db_runtime()
+            .expect("database runtime should exist")
+            .write_blocking(move |conn| {
+                let transaction = conn.transaction()?;
+                transaction.execute(
+                    "WITH RECURSIVE history(sequence) AS (
+                        SELECT 1 UNION ALL SELECT sequence + 1 FROM history WHERE sequence < 2661
+                     )
+                     INSERT INTO workflow_messages (session_id, role, message)
+                     SELECT ?1, 'assistant', ?2 FROM history",
+                    params![session_id, "x".repeat(4096)],
+                )?;
+                transaction.execute(
+                    "INSERT INTO workflow_messages
+                     (session_id, role, message, message_kind, message_subtype, metadata)
+                     VALUES (?1, 'system', '', 'summary', 'manual_clear_context', ?2)",
+                    params![session_id, marker_metadata],
+                )?;
+                transaction.commit()?;
+                Ok(())
+            })
+            .expect("failed to seed long history");
+        let mut current_context = ExecutionContext::new(session_id.to_string());
+        current_context.state = RuntimeState::Completed;
+        current_context.pending_sub_agent_completions.push(
+            serde_json::from_value(json!({
+                "sub_agent_id": "retained-child",
+                "parent_session_id": session_id,
+                "status": "completed",
+                "completed_at_ms": 0,
+                "consumed": true
+            }))
+            .expect("failed to build retained completion"),
+        );
+        store
+            .upsert_execution_context(&current_context)
+            .expect("failed to persist current parent context");
+
+        let runtime = store.db_runtime().expect("database runtime should exist");
+        let before = runtime.metrics();
+        let started = std::time::Instant::now();
+        reconcile_child_workflows_for_parent(&store, session_id)
+            .expect("long parent history should reconcile");
+        let elapsed = started.elapsed();
+        let after = runtime.metrics();
+        let jobs = after.read_jobs_completed + after.write_jobs_completed
+            - before.read_jobs_completed
+            - before.write_jobs_completed;
+        assert!(
+            jobs < child_count * 3,
+            "parent history must not be reloaded per child: {jobs} jobs"
+        );
+        eprintln!("long history reconciliation: 2662 messages, {child_count} children, {jobs} database jobs, {elapsed:?}");
+
+        let children = store
+            .list_child_workflows_for_parent(session_id)
+            .expect("failed to reload children");
+        assert_eq!(children.len(), child_count as usize);
+        assert!(children.iter().all(|child| child.status == "completed"));
+        let parent = store
+            .get_execution_context(session_id)
+            .expect("failed to reload parent")
+            .expect("parent context should remain available");
+        assert_eq!(parent.state, RuntimeState::Completed);
+        assert_eq!(
+            parent.pending_sub_agent_completions,
+            current_context.pending_sub_agent_completions
+        );
+    }
+
+    #[test]
+    fn latest_manual_clear_detachment_preserves_current_children() {
+        let store = create_test_store();
+        let session_id = "manual-clear-current-children";
+        seed_agent(&store, "agent-test");
+        store
+            .create_workflow(session_id, "Parent task", "agent-test", None, None)
+            .expect("failed to create parent");
+        assert!(children_detached_by_latest_manual_clear(&store, session_id)
+            .expect("missing clear marker should be supported")
+            .is_empty());
+
+        let completion = |child_id: &str| {
+            serde_json::from_value::<SubAgentCompletion>(json!({
+                "sub_agent_id": child_id,
+                "parent_session_id": session_id,
+                "status": "completed",
+                "completed_at_ms": 0
+            }))
+            .expect("failed to build completion")
+        };
+        let mut previous = ExecutionContext::new(session_id.to_string());
+        previous.sub_agent_sessions = [
+            "previous-only",
+            "current-session",
+            "current-wait",
+            "current-completion",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        previous.waiting_on_sub_agent_id = Some("previous-wait".to_string());
+        previous
+            .pending_sub_agent_completions
+            .push(completion("previous-completion"));
+        let marker_metadata = json!({
+            "type": "summary",
+            "subtype": "manual_clear_context",
+            "previous_execution_context": previous
+        })
+        .to_string();
+        store
+            .db_runtime()
+            .expect("database runtime should exist")
+            .write_blocking(move |conn| {
+                conn.execute(
+                    "INSERT INTO workflow_messages (session_id, role, message, metadata)
+                     VALUES (?1, 'tool', '', ?2), (?1, 'system', '', ?3), (?1, 'tool', '', ?4)",
+                    params![
+                        session_id,
+                        json!({"sub_agent_id": "observed-only"}).to_string(),
+                        marker_metadata,
+                        json!({"sub_agent_id": "new-child"}).to_string()
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("failed to seed legacy clear marker");
+        let expected = HashSet::from([
+            "previous-only".to_string(),
+            "previous-wait".to_string(),
+            "previous-completion".to_string(),
+            "current-session".to_string(),
+            "current-wait".to_string(),
+            "current-completion".to_string(),
+            "observed-only".to_string(),
+        ]);
+        assert_eq!(
+            children_detached_by_latest_manual_clear(&store, session_id)
+                .expect("missing current context should detach old children"),
+            expected
+        );
+
+        let mut current = ExecutionContext::new(session_id.to_string());
+        current
+            .sub_agent_sessions
+            .push("current-session".to_string());
+        current.waiting_on_sub_agent_id = Some("current-wait".to_string());
+        current
+            .pending_sub_agent_completions
+            .push(completion("current-completion"));
+        store
+            .upsert_execution_context(&current)
+            .expect("failed to persist current context");
+        let detached = children_detached_by_latest_manual_clear(&store, session_id)
+            .expect("current child ownership check should succeed");
+        assert_eq!(
+            detached,
+            HashSet::from([
+                "previous-only".to_string(),
+                "previous-wait".to_string(),
+                "previous-completion".to_string(),
+                "observed-only".to_string()
+            ])
+        );
+    }
+
+    #[test]
     fn latest_manual_clear_detaches_previous_child_from_recovery() {
         let store = create_test_store();
         let session_id = "manual-clear-detached-child";
@@ -8913,13 +9120,13 @@ mod tests {
             .upsert_execution_context(&current_context)
             .expect("failed to persist current context");
 
+        assert!(children_detached_by_latest_manual_clear(&store, session_id)
+            .expect("manual clear ownership check should succeed")
+            .contains("old-child"));
         assert!(
-            child_was_detached_by_latest_manual_clear(&store, session_id, "old-child")
-                .expect("manual clear ownership check should succeed")
-        );
-        assert!(
-            !child_was_detached_by_latest_manual_clear(&store, session_id, "new-child")
+            !children_detached_by_latest_manual_clear(&store, session_id)
                 .expect("new child ownership check should succeed")
+                .contains("new-child")
         );
 
         store
