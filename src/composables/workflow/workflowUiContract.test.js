@@ -1298,7 +1298,10 @@ test('message history loading renders an Element Plus skeleton from the store lo
     readFile('src/styles/workflow/messages.scss', 'utf8')
   ])
 
-  assert.match(messageList, /v-if="props\.isLoading" class="message-skeleton"/)
+  assert.match(messageList, /v-if="showLoadingSkeleton" class="messages message-loading-overlay"/)
+  assert.match(messageList, /<template v-if="renderMessages">/)
+  assert.match(messageList, /visibility: showLoadingSkeleton \? 'hidden' : undefined/)
+  assert.match(messageList, /isLoading: \(\) => props\.isLoading/)
   assert.match(messageList, /<el-skeleton animated>/)
   assert.match(workflowSessionPane, /:is-loading="isLoadingMessages \|\| \(agentRole === 'primary' && isInitializing\)"/)
   assert.match(

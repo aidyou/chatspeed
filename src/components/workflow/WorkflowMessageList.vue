@@ -1,40 +1,13 @@
 <template>
+<div class="messages-container" :aria-busy="showLoadingSkeleton">
   <div
     class="messages"
     ref="messagesRef"
+    :style="{ visibility: showLoadingSkeleton ? 'hidden' : undefined }"
     :data-workflow-id="props.currentWorkflowId || null"
     @scroll.passive="scrollController.onScroll"
     @wheel.passive="scrollController.onWheel">
-    <div v-if="props.isLoading" class="message-skeleton" aria-busy="true">
-      <el-skeleton animated>
-        <template #template>
-          <div class="message-skeleton__message message-skeleton__message--assistant">
-            <el-skeleton-item
-              variant="text"
-              class="message-skeleton__line message-skeleton__line--wide" />
-            <el-skeleton-item variant="text" class="message-skeleton__line" />
-            <el-skeleton-item
-              variant="text"
-              class="message-skeleton__line message-skeleton__line--short" />
-          </div>
-          <div class="message-skeleton__message message-skeleton__message--user">
-            <el-skeleton-item
-              variant="text"
-              class="message-skeleton__line message-skeleton__line--medium" />
-          </div>
-          <div class="message-skeleton__message message-skeleton__message--assistant">
-            <el-skeleton-item
-              variant="text"
-              class="message-skeleton__line message-skeleton__line--medium" />
-            <el-skeleton-item
-              variant="text"
-              class="message-skeleton__line message-skeleton__line--short" />
-          </div>
-        </template>
-      </el-skeleton>
-    </div>
-
-    <template v-else>
+    <template v-if="renderMessages">
       <a
         v-if="hasHiddenEarlierMessages"
         class="history-window-indicator"
@@ -1237,11 +1210,43 @@
       </div>
     </template>
   </div>
+  <div v-if="showLoadingSkeleton" class="messages message-loading-overlay">
+    <div class="message-skeleton">
+      <el-skeleton animated>
+        <template #template>
+          <div class="message-skeleton__message message-skeleton__message--assistant">
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--wide" />
+            <el-skeleton-item variant="text" class="message-skeleton__line" />
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--short" />
+          </div>
+          <div class="message-skeleton__message message-skeleton__message--user">
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--medium" />
+          </div>
+          <div class="message-skeleton__message message-skeleton__message--assistant">
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--medium" />
+            <el-skeleton-item
+              variant="text"
+              class="message-skeleton__line message-skeleton__line--short" />
+          </div>
+        </template>
+      </el-skeleton>
+    </div>
+  </div>
+</div>
 </template>
 
 <script setup>
 import { computed, ref, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useWorkflowMessageScroll } from '@/composables/workflow/useWorkflowMessageScroll'
+import { useWorkflowMessageLoading } from '@/composables/workflow/useWorkflowMessageLoading'
 import { useI18n } from 'vue-i18n'
 import { writeClipboard } from '@/libs/clipboard'
 import { formatUserError } from '@/libs/error'
@@ -1433,6 +1438,17 @@ const scrollController = useWorkflowMessageScroll({
   containerRef: messagesRef,
   onWindowAnchorChange: anchorId => emit('message-window-anchor-change', anchorId)
 })
+
+const messageLoading = useWorkflowMessageLoading({
+  isLoading: () => props.isLoading,
+  sessionId: () => props.currentWorkflowId,
+  onContentMounted: () => {
+    scheduleMeasureUserMessageOverflow()
+    syncMessageContentResizeObserver()
+    scrollController.requestContentChange()
+  }
+})
+const { showLoadingSkeleton, renderMessages } = messageLoading
 
 const canRemoveQueuedMessage = item => item?.removable !== false
 
@@ -3082,6 +3098,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   componentUnmounted = true
+  messageLoading.dispose()
   userMessageMeasureScheduled = false
   if (userMessageResizeObserver) {
     userMessageResizeObserver.disconnect()
@@ -3109,6 +3126,20 @@ defineExpose({
 </script>
 
 <style scoped lang="scss">
+.messages-container {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.message-loading-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--cs-bg-color);
+}
+
 .ai-output-content {
   position: relative;
   padding-bottom: calc(var(--cs-size-xl) + var(--cs-space-xs));
