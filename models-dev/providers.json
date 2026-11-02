@@ -1375,7 +1375,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 643,
+      "modelCount": 635,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -2401,9 +2401,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "8d81f4afdca195f5f94de0c1738bc77cbe4439c5f00593e9455836cc0d43342e",
-    "generatedAt": "2026-11-01T10:29:40Z",
+    "catalogSha256": "0fa16f91fdd042acdaf828b9ffc1d59d5396afc9e9cc932873bfd533b38aad44",
+    "generatedAt": "2026-11-02T11:12:30Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "3e92f9aa0a1398610792ce4f3029e2fe72972e78"
+    "revision": "b855d4fe12d39aeaa9cfa2f2a5e7037b8b841836"
   }
 }
