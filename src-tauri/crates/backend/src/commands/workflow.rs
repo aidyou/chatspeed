@@ -5000,9 +5000,9 @@ fn is_terminal_workflow_status(status: &str) -> bool {
 
 /// Stops every workflow this instance is actively running.
 ///
-/// The coordinated shutdown cancels the live roots here (and, through
-/// [`workflow_stop_core`], their owned children) instead of only closing the
-/// admission gate. It enumerates the live [`WorkflowManager`] registry directly:
+/// The coordinated shutdown stops every live executor instead of only closing
+/// the admission gate. Unanswered user-input waits are suspended durably rather
+/// than cancelled. It enumerates the live [`WorkflowManager`] registry directly:
 /// the manager is the authority on what this process is running right now, so a
 /// live session whose durable row is missing or already terminal is still
 /// stopped, and a durable live row with no manager session is not this
@@ -5019,7 +5019,7 @@ pub(crate) async fn workflow_stop_all_owned_core(
 
     let mut stopped = 0;
     for session_id in target_ids {
-        match workflow_stop_core(svc, session_id.clone()).await {
+        match workflow_stop_for_shutdown_core(svc, session_id.clone(), true).await {
             Ok(()) => stopped += 1,
             Err(error) => log::warn!(
                 "[Workflow][session={}][phase=stop_all] stop failed: {error}",
@@ -5058,6 +5058,15 @@ pub(crate) async fn workflow_stop_core(
     svc: &WorkflowApplicationService,
     session_id: String,
 ) -> Result<(), ApplicationError> {
+    workflow_stop_for_shutdown_core(svc, session_id, false).await
+}
+
+#[cfg(not(feature = "desktop"))]
+async fn workflow_stop_for_shutdown_core(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    runtime_shutdown: bool,
+) -> Result<(), ApplicationError> {
     let state = &svc.main_store;
     let chat_state = &svc.chat_state;
     let gateway = &svc.gateway;
@@ -5084,21 +5093,29 @@ pub(crate) async fn workflow_stop_core(
     }
 
     interrupt_openai_session(chat_state, &session_id).await;
-    cleanup_owned_background_resources(&session_id, chat_state).await;
+    // Shutdown enumerates the complete live registry itself. Recursive cleanup
+    // uses user-stop signals and would cancel a child's unanswered interaction.
+    if !runtime_shutdown {
+        cleanup_owned_background_resources(&session_id, chat_state).await;
+    }
 
     // Keep stop as a runtime signal only.
     // Terminal persistence and session cleanup should happen on the executor's
     // normal shutdown path after it processes the stop signal.
     let gateway_arc = gateway.clone();
     let workflow_manager = workflow_manager.clone();
+    // Keep one stop protocol, but let the executor distinguish process teardown
+    // from an explicit user cancellation at the point it consumes the signal.
+    let stop_signal = serde_json::json!({
+        "type": "stop",
+        "runtime_shutdown": runtime_shutdown,
+    })
+    .to_string();
     let delivery = gateway_arc
-        .inject_input(&session_id, "{\"type\": \"stop\"}".to_string())
+        .inject_input(&session_id, stop_signal.clone())
         .await
         .or_else(|error| {
-            WorkflowManager::try_send_signal_to_session(
-                &session_id,
-                "{\"type\": \"stop\"}".to_string(),
-            )
+            WorkflowManager::try_send_signal_to_session(&session_id, stop_signal)
             .map(|_| {
                 log::warn!(
                     "[Workflow][session={}][phase=stop] Gateway input failed; stop delivered through the manager channel: {}",
@@ -5109,20 +5126,19 @@ pub(crate) async fn workflow_stop_core(
         });
     match delivery {
         Ok(_) => {
-            let _ =
-                workflow_manager.update_session_status(&session_id, ManagedSessionStatus::Stopping);
-            let _ = gateway_arc
-                .send(
-                    &session_id,
-                    crate::workflow::react::types::GatewayPayload::State {
-                        state: WorkflowState::Stopping,
-                        wait_reason: None,
-                    },
-                )
-                .await;
-            {
-                let store = &**state;
-                store
+            if !runtime_shutdown {
+                let _ = workflow_manager
+                    .update_session_status(&session_id, ManagedSessionStatus::Stopping);
+                let _ = gateway_arc
+                    .send(
+                        &session_id,
+                        crate::workflow::react::types::GatewayPayload::State {
+                            state: WorkflowState::Stopping,
+                            wait_reason: None,
+                        },
+                    )
+                    .await;
+                state
                     .update_workflow_status(&session_id, &WorkflowState::Stopping.to_string())
                     .map_err(|e| e.to_string())?;
             }
@@ -5147,6 +5163,11 @@ pub(crate) async fn workflow_stop_core(
             Ok(())
         }
         Err(e) if workflow_manager.has_session(&session_id) => {
+            if runtime_shutdown {
+                // Failed teardown must remain observable without overwriting a
+                // recoverable wait with a synthetic user cancellation.
+                return Err(ApplicationError::gateway(e.to_string()));
+            }
             if let Some(executor) = workflow_manager.get_executor(&session_id) {
                 let Ok(mut guard) = executor.try_lock() else {
                     log::error!(

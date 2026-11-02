@@ -3733,6 +3733,20 @@ impl WorkflowExecutor {
                     }
 
                     if signal_type_enum == Some(SignalType::Stop) {
+                        if self.state == WorkflowState::AwaitingUser
+                            && signal_json["runtime_shutdown"].as_bool() == Some(true)
+                        {
+                            // Teardown releases the live executor, not the unanswered
+                            // interaction. Cold recovery must retain its canonical id.
+                            self.save_snapshot().await?;
+                            log::info!(
+                                "[Workflow][session={}][phase=wait][event=shutdown_suspend] Preserved user-input wait for restart, tool_call_id={:?}",
+                                self.session_id,
+                                self.awaiting_user_tool_call_id
+                            );
+                            self.signal_rx = Some(signal_rx);
+                            return Ok(());
+                        }
                         log::info!(
                         "[Workflow][session={}][phase=wait][event=stop] Stop signal received in waiting state",
                         self.session_id
@@ -9641,7 +9655,7 @@ mod recovery_tests {
     use crate::db::MainStore;
     use crate::libs::window_channels::WindowChannels;
     use crate::tools::TOOL_READ_FILE;
-    use crate::workflow::react::replay::{RecoveryError, RecoveryResult};
+    use crate::workflow::react::replay::{restore_execution_context, RecoveryError, RecoveryResult};
     use tempfile::tempdir;
     use tokio::sync::{mpsc, Mutex};
 
@@ -12616,6 +12630,104 @@ mod recovery_tests {
         assert_eq!(context.state, RuntimeState::Running);
         assert_eq!(context.wait_reason, None);
         assert_eq!(context.awaiting_user_tool_call_id, None);
+    }
+
+    #[tokio::test]
+    async fn ask_user_shutdown_preserves_wait_but_explicit_stop_cancels() {
+        for runtime_shutdown in [true, false] {
+            let (_temp_dir, store) = create_test_store();
+            let session_id = "ask-user-shutdown";
+            let agent = test_agent("ask-user-shutdown-agent");
+            store.add_agent(&agent).expect("add agent");
+            store
+                .create_workflow(session_id, "test", &agent.id, None, None)
+                .expect("create workflow");
+            let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let gateway: Arc<dyn Gateway> = Arc::new(RecordingGateway {
+                payloads: payloads.clone(),
+            });
+            let chat_state = ChatState::new(Arc::new(WindowChannels::new()), None, store.clone());
+            let mut executor = WorkflowExecutor::new(
+                session_id.to_string(),
+                store.clone(),
+                chat_state,
+                gateway,
+                Arc::new(UnusedSubAgentFactory),
+                agent,
+                vec![workspace_root()],
+                std::env::temp_dir(),
+                None,
+                None,
+                Arc::new(crate::libs::tsid::TsidGenerator::new(16).expect("create tsid")),
+                Arc::new(ToolManager::new()),
+                false,
+                ExecutionPolicy::standard(),
+            );
+            executor.dispatcher = None;
+            executor.state = WorkflowState::Executing;
+            executor.awaiting_user_tool_call_id = Some("ask-before-restart".to_string());
+            executor
+                .update_state(WorkflowState::AwaitingUser)
+                .await
+                .expect("enter user-input wait");
+
+            let (signal_tx, signal_rx) = mpsc::channel(1);
+            executor.attach_signal_rx(signal_rx);
+            signal_tx
+                .send(
+                    serde_json::json!({
+                        "type": "stop",
+                        "runtime_shutdown": runtime_shutdown,
+                    })
+                    .to_string(),
+                )
+                .await
+                .expect("send stop");
+            tokio::time::timeout(Duration::from_secs(2), executor.run_loop())
+                .await
+                .expect("shutdown must release the executor")
+                .expect("stop loop");
+
+            let context = match restore_execution_context(store.clone(), session_id) {
+                RecoveryResult::SnapshotHit { context } => context,
+                other => panic!("expected durable snapshot recovery, got {other:?}"),
+            };
+            let status = store
+                .get_workflow_snapshot(session_id)
+                .expect("read status")
+                .workflow
+                .status;
+            let events = store.list_workflow_events(session_id).expect("read events");
+            if runtime_shutdown {
+                assert_eq!(executor.state, WorkflowState::AwaitingUser);
+                assert_eq!(status, WorkflowState::AwaitingUser.to_string());
+                assert_eq!(context.state, RuntimeState::Waiting);
+                assert_eq!(context.wait_reason, Some(WaitReason::UserInput));
+                assert_eq!(
+                    context.awaiting_user_tool_call_id.as_deref(),
+                    Some("ask-before-restart")
+                );
+                assert!(!events
+                    .iter()
+                    .any(|event| event.event_type == "workflow_cancelled"));
+                let replayed =
+                    crate::workflow::react::replay::replay_events_to_execution_context(
+                        session_id, &events,
+                    )
+                    .expect("replay waiting state");
+                assert_eq!(replayed.wait_reason, context.wait_reason);
+                assert_eq!(
+                    replayed.awaiting_user_tool_call_id,
+                    context.awaiting_user_tool_call_id
+                );
+            } else {
+                assert_eq!(status, WorkflowState::Cancelled.to_string());
+                assert_eq!(context.state, RuntimeState::Cancelled);
+                assert_eq!(context.wait_reason, None);
+                assert_eq!(context.awaiting_user_tool_call_id, None);
+                assert!(events.iter().any(|event| event.event_type == "workflow_cancelled"));
+            }
+        }
     }
 
     #[tokio::test]
