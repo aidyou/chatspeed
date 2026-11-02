@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { readFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { createServer as createHttpServer, request as createHttpRequest } from 'node:http'
 import test from 'node:test'
-import { executeTauri, needsRuntimeBuild, runBuild } from './tauri.mjs'
+import { buildDevBinaries, executeTauri, needsRuntimeBuild, runBuild } from './tauri.mjs'
 import { startVite } from './tauri-vite.mjs'
 
 const root = new URL('../', import.meta.url)
@@ -48,6 +50,75 @@ test('only a real dev command prebuilds; help, version and other commands remain
     assert.equal(needsRuntimeBuild(args), false)
   }
   assert.equal(needsRuntimeBuild(['dev', '--', '--help']), true)
+})
+
+test('dev prebuild prepares both real sidecars after clean and refreshes them on restart', async t => {
+  const cwd = await mkdtemp(join(tmpdir(), 'chatspeed-dev-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  for (const targetArg of [[], ['--target', 'x86_64-pc-windows-msvc'], ['--target=x86_64-pc-windows-msvc']]) {
+    const target = targetArg.length ? 'x86_64-pc-windows-msvc' : 'aarch64-apple-darwin'
+    const extension = targetArg.length ? '.exe' : ''
+    const targetDir = join(cwd, 'custom-target')
+    const debugDir = targetArg.length ? join(targetDir, target, 'debug') : join(targetDir, 'debug')
+    let revision = 0
+    const inspect = async (command, args, options) => {
+      assert.equal(options.cwd, cwd)
+      if (command === 'rustc') {
+        assert.deepEqual(args, ['-vV'])
+        return { stdout: 'rustc 1.90.0\nhost: aarch64-apple-darwin\n' }
+      }
+      assert.equal(command, 'cargo')
+      assert.deepEqual(args, [
+        'metadata', '--no-deps', '--format-version', '1', '--manifest-path', 'src-tauri/Cargo.toml'
+      ])
+      return { stdout: JSON.stringify({ target_directory: targetDir }) }
+    }
+    const build = async (command, args, options) => {
+      assert.equal(command, 'cargo')
+      assert.equal(options.cwd, cwd)
+      assert.deepEqual(args, [
+        'build', '--manifest-path', 'src-tauri/Cargo.toml',
+        '-p', 'chatspeed-cli', '-p', 'chatspeed-runtime',
+        '--bin', 'cscli', '--bin', 'chatspeed-runtime',
+        ...(targetArg.length ? ['--target', target] : [])
+      ])
+      revision++
+      await mkdir(debugDir, { recursive: true })
+      for (const name of ['cscli', 'chatspeed-runtime']) {
+        const binary = join(debugDir, `${name}${extension}`)
+        await writeFile(binary, `${name} revision ${revision}`)
+        await chmod(binary, 0o755)
+      }
+      return 0
+    }
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      // Arguments after -- belong to Cargo/the app, not Tauri's target selection.
+      assert.equal(await buildDevBinaries(['dev', ...targetArg, '--', '--target=ignored'], {
+        cwd, build, inspect
+      }), 0)
+      for (const name of ['cscli', 'chatspeed-runtime']) {
+        const binary = join(cwd, 'src-tauri', 'target', 'release', `${name}-${target}${extension}`)
+        assert.equal(await readFile(binary, 'utf8'), `${name} revision ${attempt}`)
+        if (process.platform !== 'win32') assert.equal((await stat(binary)).mode & 0o111, 0o111)
+      }
+    }
+  }
+})
+
+test('dev prebuild failure never publishes sidecars or starts Tauri', async t => {
+  const cwd = await mkdtemp(join(tmpdir(), 'chatspeed-dev-failed-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  const inspect = async command => {
+    assert.equal(command, 'rustc', 'failed builds must not proceed to metadata/copy')
+    return { stdout: 'host: aarch64-apple-darwin\n' }
+  }
+  for (const code of [1, 130, 143]) {
+    assert.equal(await executeTauri(['dev'], {
+      buildRuntime: args => buildDevBinaries(args, { cwd, inspect, build: async () => code }),
+      runCli: () => assert.fail('CLI must not start')
+    }), code)
+    await assert.rejects(stat(join(cwd, 'src-tauri', 'target', 'release')), { code: 'ENOENT' })
+  }
 })
 
 test('CLI starts only after the prebuild finishes and receives unchanged arguments', async () => {

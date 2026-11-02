@@ -47,16 +47,22 @@ RUN sed -i \
         coreutils \
         curl \
         diffutils \
+        fd-find \
         file \
         findutils \
         gawk \
         git \
         jq \
         less \
+        openssh-client \
         patch \
         php-cli \
+        procps \
         python3 \
         python3-pip \
+        python3-venv \
+        ripgrep \
+        rsync \
         sed \
         sqlite3 \
         tar \
@@ -68,6 +74,7 @@ RUN sed -i \
     && if getent group node >/dev/null 2>&1; then groupdel node; fi \
     && adduser --uid 1000 --shell /bin/bash sandbox \
     && ln -s /usr/bin/python3 /usr/local/bin/python \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && install -d -o sandbox -g sandbox /workspace /home/sandbox/.cache
 
 # Debian's package manager supplies Python and PHP; use domestic mirrors for
