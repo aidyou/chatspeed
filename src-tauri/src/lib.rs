@@ -266,13 +266,9 @@ pub async fn run() -> crate::error::Result<()> {
     // Only enable single instance plugin in release builds
     // This allows development and production versions to run simultaneously
     #[cfg(not(debug_assertions))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
-        log::info!(
-            "Another instance was started with args: {:?} and cwd: {}. Focusing existing window.",
-            argv,
-            cwd
-        );
-        window::show_and_focus_window(app, "main");
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {
+        // Duplicate launches, including login restoration, must not create or reveal windows.
+        log::debug!("Ignoring duplicate application launch; keeping existing windows unchanged.");
     }));
 
     builder
