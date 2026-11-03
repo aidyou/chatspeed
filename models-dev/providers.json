@@ -503,7 +503,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 108,
+      "modelCount": 106,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 380,
+      "modelCount": 381,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1375,7 +1375,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 635,
+      "modelCount": 639,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1519,7 +1519,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 130,
+      "modelCount": 131,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
@@ -1550,7 +1550,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 377,
+      "modelCount": 376,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2154,7 +2154,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 128,
+      "modelCount": 127,
       "name": "Venice AI",
       "responses": false
     },
@@ -2162,7 +2162,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 417,
+      "modelCount": 416,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2272,7 +2272,7 @@
       "documentationUrl": "https://docs.x.ai/docs/models",
       "id": "xai",
       "logo": "https://models.dev/logos/xai.svg",
-      "modelCount": 13,
+      "modelCount": 12,
       "name": "xAI",
       "protocol": "openai",
       "responses": false
@@ -2401,9 +2401,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "0fa16f91fdd042acdaf828b9ffc1d59d5396afc9e9cc932873bfd533b38aad44",
-    "generatedAt": "2026-11-02T11:12:30Z",
+    "catalogSha256": "68652053794cd17fee942b9f4b470988a480e9e92c37b4d4ac723706eab6ec8e",
+    "generatedAt": "2026-11-03T10:54:58Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "b855d4fe12d39aeaa9cfa2f2a5e7037b8b841836"
+    "revision": "02099830ad8ea73fca503a3d4cdf02ce5e8d016e"
   }
 }
