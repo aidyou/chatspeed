@@ -178,6 +178,14 @@ mod tests {
     }
 
     #[test]
+    fn fatal_error_preserves_resource_reason() {
+        let reason = crate::resource_control::ResourceViolation::CircuitOpen.message();
+        let error = ToolError::Fatal(reason.clone());
+        assert!(error.to_string().contains(&reason));
+        assert!(error.user_error().message.contains(&reason));
+    }
+
+    #[test]
     fn test_error_display() {
         // Test that Display trait works (via #[derive(Error)])
         let error = ToolError::ExecutionFailed("test".into());

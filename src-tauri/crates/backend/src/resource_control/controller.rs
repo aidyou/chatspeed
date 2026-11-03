@@ -73,16 +73,13 @@ pub fn check_admission() -> Result<(), ResourceViolation> {
     }
     {
         let state = controller.state.lock();
-        if state.blocked || state.tasks.len() < limits.max_concurrent_tasks as usize {
+        if !state.blocked && state.tasks.len() < limits.max_concurrent_tasks as usize {
             return admit(&state, &limits);
         }
     }
     let samples = platform::snapshot().map_err(|_| ResourceViolation::MonitoringUnavailable)?;
     let mut state = controller.state.lock();
-    state
-        .tasks
-        .retain(|_, task| !task.detached || !task_members(task, &samples).is_empty());
-    admit(&state, &limits)
+    refresh_admission(&mut state, &limits, &samples)
 }
 
 pub fn register(
@@ -134,10 +131,7 @@ pub fn register(
     }
     let failure = Arc::new(Mutex::new(None));
     let mut state = controller.state.lock();
-    state
-        .tasks
-        .retain(|_, task| !task.detached || !task_members(task, &samples).is_empty());
-    admit(&state, &limits)?;
+    refresh_admission(&mut state, &limits, &samples)?;
     state.tasks.insert(
         pid,
         Task {
@@ -153,6 +147,25 @@ pub fn register(
         pid,
         failure,
     }))
+}
+
+fn refresh_admission(
+    state: &mut State,
+    limits: &ResourceLimits,
+    samples: &[ProcessSample],
+) -> Result<(), ResourceViolation> {
+    let mut has_live_members = false;
+    state.tasks.retain(|_, task| {
+        let members = task_members(task, samples);
+        has_live_members |= !members.is_empty();
+        !task.detached || !members.is_empty()
+    });
+    // Only a fresh successful snapshot can prove that the previous workload has drained.
+    if state.blocked && !has_live_members {
+        state.blocked = false;
+        log::info!("AI execution resource protection recovered after tracked processes exited");
+    }
+    admit(state, limits)
 }
 
 fn admit(state: &State, limits: &ResourceLimits) -> Result<(), ResourceViolation> {
@@ -201,6 +214,15 @@ impl Controller {
     ) -> Vec<Termination> {
         let mut state = self.state.lock();
         let mut terminations = Vec::new();
+        let diagnostic_limits = limits
+            .as_ref()
+            .ok()
+            .and_then(|limits| limits.as_ref())
+            .cloned();
+        let monitoring_failure = samples
+            .as_ref()
+            .err()
+            .map(|error| crate::error_diagnostics::FailureMessage::from_error(error));
         match (limits, samples) {
             (Ok(limits), Ok(samples)) => {
                 let mut usages = Vec::new();
@@ -221,6 +243,7 @@ impl Controller {
                     usages.push((*pid, memory, members));
                     true
                 });
+                let mut total_memory_bytes = 0;
                 if let Some(limits) = limits.as_ref().filter(|limits| limits.enabled) {
                     let mut unique = HashSet::new();
                     let mut total = usages
@@ -229,6 +252,7 @@ impl Controller {
                         .filter(|process| unique.insert(process.pid))
                         .map(|process| process.memory_bytes)
                         .sum::<u64>();
+                    total_memory_bytes = total;
                     usages.sort_by_key(|(_, memory, _)| std::cmp::Reverse(*memory));
                     for (pid, memory, _) in &usages {
                         if total <= u64::from(limits.total_memory_mb) * 1024 * 1024 {
@@ -242,9 +266,25 @@ impl Controller {
                         }
                     }
                 }
-                for (pid, _, members) in usages {
+                for (pid, memory, members) in usages {
                     if let Some(task) = state.tasks.get(&pid) {
-                        if task.failure.lock().is_some() {
+                        if !members.is_empty() && task.failure.lock().is_some() {
+                            if !state.blocked {
+                                use crate::error_diagnostics::{
+                                    log_error_diagnostic, ErrorProjection, FailureMessage,
+                                };
+                                let reason = *task.failure.lock();
+                                let mut diagnostic = FailureMessage::leaf(format!("Resource protection: {reason:?}"))
+                                    .context("resource_control", "evaluate", Some(format!(
+                                        "pid={pid} task_memory_bytes={memory} total_memory_bytes={total_memory_bytes} process_count={} limits={diagnostic_limits:?}",
+                                        members.len()
+                                    )))
+                                    .diagnostic();
+                                diagnostic.module = "resource_control".into();
+                                diagnostic.operation = "trip".into();
+                                diagnostic.code = reason.map(|reason| format!("{reason:?}"));
+                                log_error_diagnostic(&diagnostic);
+                            }
                             let root = members
                                 .iter()
                                 .any(|process| {
@@ -258,6 +298,20 @@ impl Controller {
                 }
             }
             _ => {
+                if !state.blocked && !state.tasks.is_empty() {
+                    use crate::error_diagnostics::{
+                        log_error_diagnostic, ErrorProjection, FailureMessage,
+                    };
+                    let mut diagnostic = monitoring_failure
+                        .unwrap_or_else(|| {
+                            FailureMessage::leaf("Resource configuration unavailable")
+                        })
+                        .diagnostic();
+                    diagnostic.module = "resource_control".into();
+                    diagnostic.operation = "monitor".into();
+                    diagnostic.code = Some("MonitoringUnavailable".into());
+                    log_error_diagnostic(&diagnostic);
+                }
                 for task in state.tasks.values() {
                     task.failure
                         .lock()
@@ -271,7 +325,7 @@ impl Controller {
         }
         if !terminations.is_empty() {
             if !state.blocked {
-                log::warn!("AI execution resource protection tripped; refusing new shell tasks until settings are saved");
+                log::warn!("AI execution resource protection tripped; refusing new shell tasks until tracked processes exit and monitoring recovers");
             }
             state.blocked = true;
         }
@@ -478,6 +532,52 @@ mod tests {
             &[sample(100, 1, 100, 99), sample(101, 100, 100, 100)],
         );
         assert!(members.is_empty());
+    }
+
+    #[test]
+    fn resource_circuit_recovers_only_after_tracked_processes_exit() {
+        let mut state = State::default();
+        let mut failed = task();
+        failed.detached = true;
+        *failed.failure.lock() = Some(ResourceViolation::TaskMemory);
+        state.tasks.insert(100, failed);
+        state.blocked = true;
+        let limits = ResourceLimits::default();
+        assert_eq!(
+            refresh_admission(&mut state, &limits, &[sample(100, 1, 100, 1)]),
+            Err(ResourceViolation::CircuitOpen)
+        );
+        assert_eq!(
+            refresh_admission(&mut state, &limits, &[sample(101, 100, 100, 2)]),
+            Err(ResourceViolation::CircuitOpen)
+        );
+        assert_eq!(
+            refresh_admission(&mut state, &limits, &[sample(101, 1, 100, 2)]),
+            Err(ResourceViolation::CircuitOpen)
+        );
+        assert_eq!(refresh_admission(&mut state, &limits, &[]), Ok(()));
+        assert!(!state.blocked);
+        assert!(state.tasks.is_empty());
+    }
+
+    #[test]
+    fn resource_exited_failed_task_does_not_retrip_after_recovery() {
+        let controller = Controller::default();
+        let failed = task();
+        *failed.failure.lock() = Some(ResourceViolation::TaskMemory);
+        {
+            let mut state = controller.state.lock();
+            state.tasks.insert(100, failed);
+            state.blocked = true;
+            assert_eq!(
+                refresh_admission(&mut state, &ResourceLimits::default(), &[]),
+                Ok(())
+            );
+        }
+        assert!(controller
+            .evaluate(Ok(Some(ResourceLimits::default())), Ok(vec![]))
+            .is_empty());
+        assert!(!controller.state.lock().blocked);
     }
 
     #[test]

@@ -248,7 +248,7 @@ proxy:
     not_found_by_name: Failed to find proxy group by group name '%{name}'
 runtime:
   owned_process_cancelled: The runtime was stopping and terminated an in-flight owned tool process
-  resource_limit: 'AI execution resource protection (%{reason}). New host Bash tasks are blocked after a budget violation. Adjust and save the resource settings before retrying.'
+  resource_limit: 'AI execution resource protection (%{reason}). Retry after tracked tasks exit and monitoring recovers. If the issue persists, check and save the resource settings.'
   resource_reason_circuit_open: Protection is tripped
   resource_reason_concurrent_tasks: Concurrent task limit reached; wait for an existing task to finish
   resource_reason_invalid_config: Invalid resource configuration
@@ -300,7 +300,7 @@ tools:
     auth_error: Authentication error
     config: Configuration error
     execution_failed: 'Tool execution failed: %{details}'
-    fatal: Fatal error
+    fatal: 'Fatal error: %{details}'
     function_already_exists: 'Function already exists: %{name}'
     function_not_found: Function not found
     initialization: Initialization error

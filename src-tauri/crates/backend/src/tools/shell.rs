@@ -4667,14 +4667,28 @@ mod tests {
             matches!(result, Err(ToolError::Fatal(message)) if message == crate::resource_control::ResourceViolation::ProcessCount.message())
         );
         assert!(sentinel.try_wait().unwrap().is_none());
-        let mut retry = Command::new("sh");
         let marker = directory.path().join("retry-started");
-        retry.args(["-c", &format!("touch '{}' ; sleep 20", marker.display())]);
-        let result = run_host_output_with_timeout(retry, 5_000, None).await;
-        assert!(
-            matches!(result, Err(ToolError::Fatal(message)) if message == crate::resource_control::ResourceViolation::CircuitOpen.message())
-        );
-        assert!(!marker.exists());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut retry = Command::new("sh");
+            retry.args(["-c", &format!("touch '{}'", marker.display())]);
+            match run_host_output_with_timeout(retry, 5_000, None).await {
+                Ok(output) => {
+                    assert!(output.status.success());
+                    break;
+                }
+                Err(ToolError::Fatal(message))
+                    if message == crate::resource_control::ResourceViolation::CircuitOpen.message()
+                        && Instant::now() < deadline =>
+                {
+                    assert!(!marker.exists());
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                result => panic!("Expected recovery after tracked children exited: {result:?}"),
+            }
+        }
+        assert!(marker.exists());
+        assert!(sentinel.try_wait().unwrap().is_none());
         sentinel.kill().await.unwrap();
         sentinel.wait().await.unwrap();
         crate::resource_control::reset();

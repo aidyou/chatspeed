@@ -242,7 +242,7 @@ proxy:
     not_found_by_name: 未能通过分组名称 '%{name}' 找到代理分组
 runtime:
   owned_process_cancelled: 运行时正在停止，已终止一个仍在执行的托管工具进程
-  resource_limit: 'AI 执行资源保护（%{reason}）。预算超限后禁止启动新的主机 Bash 任务，请调整并保存资源设置后再重试。'
+  resource_limit: 'AI 执行资源保护（%{reason}）。请等待受保护任务退出且监控恢复后重试；若仍失败，请检查并保存资源设置。'
   resource_reason_circuit_open: 资源保护已熔断
   resource_reason_concurrent_tasks: 已达到并发任务上限，请等待已有任务结束
   resource_reason_invalid_config: 资源配置无效
@@ -294,7 +294,7 @@ tools:
     auth_error: 认证错误
     config: 配置错误
     execution_failed: 工具执行失败：%{details}
-    fatal: 致命错误
+    fatal: 致命错误：%{details}
     function_already_exists: '函数已存在: %{name}'
     function_not_found: 函数未找到
     initialization: 初始化错误
