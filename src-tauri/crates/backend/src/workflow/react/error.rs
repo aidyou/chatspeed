@@ -29,6 +29,11 @@ pub struct WorkflowTerminalError {
 
 /// Classifies upstream failures into stable, UI-safe snake_case categories.
 pub fn classify_ai_error(error: &AiError) -> &'static str {
+    // Context-window failures carry no standard status code, so they are recognized by
+    // their provider-specific wording before the generic status-code mapping runs.
+    if is_context_window_error(error) {
+        return "context_window";
+    }
     match error {
         AiError::ApiRequestFailed { status_code, .. }
         | AiError::RawApiRequestFailed { status_code, .. } => match status_code {
@@ -42,6 +47,35 @@ pub fn classify_ai_error(error: &AiError) -> &'static str {
         AiError::StreamProcessingFailed { .. } => "network",
         _ => "unknown",
     }
+}
+
+/// Detects provider-side context-window failures.
+///
+/// There is no universal status code for this condition across providers: it surfaces as
+/// HTTP 400 or 413 with wording specific to each API, so detection matches known markers
+/// in the error details. Such a failure is permanent for the given prompt, so callers
+/// must not retry it.
+pub fn is_context_window_error(error: &AiError) -> bool {
+    let details = match error {
+        AiError::RawApiRequestFailed { details, .. } => details.as_str(),
+        AiError::ApiRequestFailed { details, .. } => details.as_str(),
+        _ => return false,
+    }
+    .to_lowercase();
+    [
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "maximum context length",
+        "exceeds the context window",
+        "exceed the context window",
+        "input tokens exceed",
+        "input token count exceeds",
+        "prompt is too long",
+        "range of input length should be",
+        "输入 token 数超出",
+    ]
+    .iter()
+    .any(|marker| details.contains(marker))
 }
 
 /// Produces a bounded summary without upstream bodies, headers, or credentials.

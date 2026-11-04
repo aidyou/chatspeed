@@ -41,6 +41,11 @@ impl RetryConfig {
         }
     }
 
+    pub fn with_request_headers(mut self, headers: &reqwest::header::HeaderMap) -> Self {
+        self.max_retries = pinned_max_retries(headers, self.max_retries);
+        self
+    }
+
     /// Calculate backoff duration for the nth retry attempt
     fn calculate_backoff(&self, attempt: u32) -> Duration {
         let backoff_ms = (self.initial_backoff_ms as f64
@@ -55,16 +60,11 @@ impl RetryConfig {
 /// Layered callers such as the workflow engine run their own bounded backoff and send this
 /// header so the proxy does not stack a second retry loop on top of theirs. When the header
 /// is absent or unparseable the configured `fallback` budget stays in force.
-fn pinned_max_retries(request_builder: &RequestBuilder, fallback: u32) -> u32 {
-    request_builder
-        .try_clone()
-        .and_then(|request| {
-            request
-                .headers()
-                .get("x-cs-retry-max-count")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.trim().parse::<u32>().ok())
-        })
+fn pinned_max_retries(headers: &reqwest::header::HeaderMap, fallback: u32) -> u32 {
+    headers
+        .get("x-cs-retry-max-count")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u32>().ok())
         .unwrap_or(fallback)
 }
 
@@ -73,21 +73,6 @@ pub async fn send_with_retry(
     request_builder: RequestBuilder,
     retry_config: &RetryConfig,
 ) -> ProxyResult<Response> {
-    // A caller that runs its own bounded backoff (the workflow engine) pins the proxy-level
-    // retry budget with the x-cs-retry-max-count header so the two loops never stack.
-    let max_retries = pinned_max_retries(&request_builder, retry_config.max_retries);
-    if max_retries != retry_config.max_retries {
-        log::debug!(
-            "Retry budget pinned by x-cs-retry-max-count header: {} (configured: {})",
-            max_retries,
-            retry_config.max_retries
-        );
-    }
-    let retry_config = RetryConfig {
-        max_retries,
-        ..retry_config.clone()
-    };
-
     if retry_config.max_retries == 0 {
         // No retry, send request directly
         return request_builder.send().await.map_err(|error| {
@@ -236,16 +221,20 @@ mod tests {
 
         let pinned = client
             .get("http://127.0.0.1:0/test")
-            .header("x-cs-retry-max-count", "0");
-        assert_eq!(pinned_max_retries(&pinned, fallback), 0);
+            .header("x-cs-retry-max-count", "0")
+            .build()
+            .expect("valid request");
+        assert_eq!(RetryConfig::from_settings(fallback).with_request_headers(pinned.headers()).max_retries, 0);
 
-        let absent = client.get("http://127.0.0.1:0/test");
-        assert_eq!(pinned_max_retries(&absent, fallback), fallback);
+        let absent = client.get("http://127.0.0.1:0/test").build().expect("valid request");
+        assert_eq!(pinned_max_retries(absent.headers(), fallback), fallback);
 
         let unparseable = client
             .get("http://127.0.0.1:0/test")
-            .header("x-cs-retry-max-count", "soon");
-        assert_eq!(pinned_max_retries(&unparseable, fallback), fallback);
+            .header("x-cs-retry-max-count", "soon")
+            .build()
+            .expect("valid request");
+        assert_eq!(pinned_max_retries(unparseable.headers(), fallback), fallback);
     }
 
     #[test]

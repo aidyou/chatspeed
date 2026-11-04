@@ -6,7 +6,7 @@ use crate::db::WorkflowMessage;
 use crate::tools::TOOL_ASK_USER;
 use crate::tools::TOOL_COMPLETE_WORKFLOW;
 use crate::workflow::react::context::ContextManager;
-use crate::workflow::react::error::WorkflowEngineError;
+use crate::workflow::react::error::{is_context_window_error, WorkflowEngineError};
 use crate::workflow::react::intelligence::IntelligenceManager;
 use crate::workflow::react::prompts::{
     BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT,
@@ -345,7 +345,7 @@ impl ContextCompressor {
                         max_attempts, validation_error
                     )));
                 }
-                Err(err) if Self::is_context_window_error(&err) && context_reductions < 6 => {
+                Err(err) if is_context_window_error(&err) && context_reductions < 6 => {
                     let Some(smaller_budget) =
                         Self::smaller_input_budget(input_budget, request_tokens)
                     else {
@@ -573,7 +573,7 @@ impl ContextCompressor {
                         ));
                     }
                     Err(error)
-                        if Self::is_context_window_error(&error) && context_reductions < 6 =>
+                        if is_context_window_error(&error) && context_reductions < 6 =>
                     {
                         let Some(smaller_budget) = Self::smaller_input_budget(
                             request_budget,
@@ -636,29 +636,6 @@ impl ContextCompressor {
                 }
             }
         }
-    }
-
-    fn is_context_window_error(error: &AiError) -> bool {
-        let details = match error {
-            AiError::RawApiRequestFailed { details, .. } => details.as_str(),
-            AiError::ApiRequestFailed { details, .. } => details.as_str(),
-            _ => return false,
-        }
-        .to_lowercase();
-        [
-            "context_length_exceeded",
-            "context_window_exceeded",
-            "maximum context length",
-            "exceeds the context window",
-            "exceed the context window",
-            "input tokens exceed",
-            "input token count exceeds",
-            "prompt is too long",
-            "range of input length should be",
-            "输入 token 数超出",
-        ]
-        .iter()
-        .any(|marker| details.contains(marker))
     }
 
     fn incremental_compression_input_messages<'a>(
@@ -830,7 +807,7 @@ impl ContextCompressor {
     }
 
     fn should_retry_compression_error(error: &AiError) -> bool {
-        if Self::is_context_window_error(error) {
+        if is_context_window_error(error) {
             return false;
         }
         match error {
@@ -2419,6 +2396,7 @@ mod tests {
         db::WorkflowMessage,
         workflow::react::{
             constants::TASK_FINISHED,
+            error::is_context_window_error,
             prompts::{BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT},
             types::{TaskGoalLedger, TaskGoalSourcePreview},
         },
@@ -2696,7 +2674,7 @@ mod tests {
                 provider: "proxy".to_string(),
                 details: details.to_string(),
             };
-            assert!(ContextCompressor::is_context_window_error(&error));
+            assert!(is_context_window_error(&error));
             assert!(!ContextCompressor::should_retry_compression_error(&error));
         }
         let error = crate::ai::error::AiError::ApiRequestFailed {
@@ -2704,7 +2682,7 @@ mod tests {
             provider: "proxy".to_string(),
             details: "Input tokens exceed the model context limit.".into(),
         };
-        assert!(ContextCompressor::is_context_window_error(&error));
+        assert!(is_context_window_error(&error));
         let transient = crate::ai::error::AiError::RawApiRequestFailed {
             status_code: 502,
             provider: "proxy".to_string(),

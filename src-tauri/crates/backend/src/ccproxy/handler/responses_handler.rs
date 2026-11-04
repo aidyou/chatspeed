@@ -335,7 +335,7 @@ async fn direct_forward_responses(
 
     let max_retries =
         main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
-    let retry_config = RetryConfig::from_settings(max_retries);
+    let retry_config = RetryConfig::from_settings(max_retries).with_request_headers(&client_headers);
 
     let target_response = match send_with_retry(onward_request_builder, &retry_config).await {
         Ok(response) => response,

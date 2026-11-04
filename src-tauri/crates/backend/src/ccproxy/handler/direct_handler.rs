@@ -156,7 +156,7 @@ pub async fn handle_direct_forward(
     // Get retry configuration from settings
     let max_retries =
         main_store_arc.get_config(CFG_CCPROXY_RETRY_ON_429, CFG_CCPROXY_RETRY_ON_429_DEFAULT);
-    let retry_config = RetryConfig::from_settings(max_retries);
+    let retry_config = RetryConfig::from_settings(max_retries).with_request_headers(&client_headers);
 
     let log_direct_backend_error = |message: &str| {
         if log_proxy_to_file {

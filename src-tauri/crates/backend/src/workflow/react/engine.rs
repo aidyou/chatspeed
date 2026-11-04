@@ -942,6 +942,14 @@ impl WorkflowExecutor {
     fn sync_runtime_limits(&mut self) {
         self.context.max_tokens =
             Self::effective_context_limit(&self.agent_config, &self.policy.phase);
+        // The provider counts requested output tokens against the same context window, so
+        // the pressure check must reserve them or it will green-light requests that cannot fit.
+        self.context.output_reserve_tokens =
+            Self::phase_runtime_model(&self.agent_config, &self.policy.phase)
+                .and_then(|model| model.max_tokens)
+                .filter(|value| *value > 0)
+                .map(|value| value as usize)
+                .unwrap_or(0);
     }
 
     fn apply_runtime_preferences_from_config(&mut self, config: &crate::db::agent::AgentConfig) {
@@ -5048,6 +5056,19 @@ impl WorkflowExecutor {
                     .get_tool_calling_spec(None, None)
                     .await
                     .unwrap_or_default();
+                self.llm_processor.refresh_request_overhead(
+                    &mut self.context,
+                    &self.policy,
+                    &available_tools,
+                    self.next_llm_runtime_reminder.as_deref(),
+                );
+                let needs_compression = self.context.needs_pressure_compression();
+                self.maybe_run_blocking_compression_after_message(
+                    "assistant",
+                    Some(&StepType::Observe),
+                    needs_compression,
+                )
+                .await?;
                 let runtime_reminder = self.next_llm_runtime_reminder.take();
 
                 let (full_response, tool_calls_json, response_reasoning, usage) = self

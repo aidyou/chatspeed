@@ -268,6 +268,15 @@ test('workflow terminal model errors use structured localized alert titles', asy
     /const localizedErrorTitles = \{[\s\S]*?llm_authentication: 'workflow\.errorTypes\.llmAuthentication',[\s\S]*?llm_billing: 'workflow\.errorTypes\.llmBilling',[\s\S]*?llm_retry_exhausted: 'workflow\.errorTypes\.llmRetryExhausted'[\s\S]*?\}/
   )
   assert.match(messageList, /const rawType = String\(message\?\.metadata\?\.error_type \|\| message\?\.errorType \|\| ''\)/)
+  const errorTitleStart = messageList.indexOf('const getErrorAlertTitle = message =>')
+  const errorTitleEnd = messageList.indexOf('const getErrorAlertContent = message =>', errorTitleStart)
+  const errorTitleSource = messageList.slice(errorTitleStart, errorTitleEnd)
+  // The attempt counter is folded into the retry-exhausted title instead of being
+  // repeated as a separate line below the provider message.
+  assert.match(
+    errorTitleSource,
+    /llm_retry_exhausted[\s\S]*?metadata\?\.retry_attempt[\s\S]*?workflow\.errorTypes\.llmRetryExhaustedWithAttempts/
+  )
   const errorContentStart = messageList.indexOf('const getErrorAlertContent = message =>')
   const errorContentEnd = messageList.indexOf(
     'const getExplorationBatchSummary = message =>',
@@ -276,8 +285,9 @@ test('workflow terminal model errors use structured localized alert titles', asy
   const errorContentSource = messageList.slice(errorContentStart, errorContentEnd)
   assert.match(
     errorContentSource,
-    /(?:resolveWorkflowErrorDisplay\(message, message\?\.message\)|normalizeWorkflowErrorAlertContent\(message\?\.message\))[\s\S]*?metadata\.retry_exhausted !== true[\s\S]*?workflow\.errorTypes\.retryAttemptsExhausted/
+    /(?:resolveWorkflowErrorDisplay\(message, message\?\.message\)|normalizeWorkflowErrorAlertContent\(message\?\.message\))/
   )
+  assert.doesNotMatch(errorContentSource, /retryAttemptsExhausted|retry_exhausted/)
   assert.doesNotMatch(errorContentSource, /props\.getParsedMessage\(message\)/)
   assert.doesNotMatch(messageList, /quota|payment required|insufficient balance/i)
 
@@ -285,11 +295,13 @@ test('workflow terminal model errors use structured localized alert titles', asy
     assert.equal(typeof locale.workflow.errorTypes.llmAuthentication, 'string')
     assert.equal(typeof locale.workflow.errorTypes.llmBilling, 'string')
     assert.equal(typeof locale.workflow.errorTypes.llmRetryExhausted, 'string')
-    assert.equal(typeof locale.workflow.errorTypes.retryAttemptsExhausted, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.llmRetryExhaustedWithAttempts, 'string')
+    assert.equal(typeof locale.workflow.errorTypes.contextWindow, 'string')
     assert.ok(locale.workflow.errorTypes.llmAuthentication.length > 0)
     assert.ok(locale.workflow.errorTypes.llmBilling.length > 0)
     assert.ok(locale.workflow.errorTypes.llmRetryExhausted.length > 0)
-    assert.ok(locale.workflow.errorTypes.retryAttemptsExhausted.length > 0)
+    assert.ok(locale.workflow.errorTypes.llmRetryExhaustedWithAttempts.length > 0)
+    assert.ok(locale.workflow.errorTypes.contextWindow.length > 0)
   }
 })
 

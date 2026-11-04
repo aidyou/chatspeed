@@ -6,7 +6,9 @@ use crate::ai::traits::chat::{
 use crate::db::{Agent, ThinkingConfig, WorkflowMessage};
 use crate::workflow::react::agents_md::AgentsMdScanner;
 use crate::workflow::react::context::ContextManager;
-use crate::workflow::react::error::{classify_ai_error, retry_error_summary, WorkflowEngineError};
+use crate::workflow::react::error::{
+    classify_ai_error, is_context_window_error, retry_error_summary, WorkflowEngineError,
+};
 use crate::workflow::react::gateway::Gateway;
 use crate::workflow::react::policy::{ExecutionPhase, ExecutionPolicy};
 use crate::workflow::react::runtime_observation::{
@@ -78,6 +80,12 @@ impl LlmProcessor {
     }
 
     fn should_retry_ai_error(error: &AiError) -> bool {
+        // A context-window failure is permanent for the prompt that produced it: no backoff
+        // duration or extra attempt can make the same prompt fit, so it must not consume the
+        // retry budget.
+        if is_context_window_error(error) {
+            return false;
+        }
         match error {
             AiError::ApiRequestFailed { status_code, .. }
             | AiError::RawApiRequestFailed { status_code, .. } => {
@@ -360,6 +368,54 @@ impl LlmProcessor {
             .unwrap_or_else(|| "null".to_string())
     }
 
+    /// Estimates the tokens the conversation projection omits: the consolidated system
+    /// prompt and the tool schemas, both of which the provider counts against the same
+    /// context window as the conversation.
+    fn estimate_request_overhead(
+        final_history: &[serde_json::Value],
+        tools: &[MCPToolDeclaration],
+    ) -> f64 {
+        let system_prompt_tokens = final_history
+            .first()
+            .filter(|message| message["role"] == "system")
+            .and_then(|message| message["content"].as_str())
+            .map(|content| {
+                crate::ccproxy::utils::token_estimator::estimate_tokens(content)
+            })
+            .unwrap_or(0.0);
+        let tool_schema_tokens = tools
+            .iter()
+            .map(|tool| {
+                serde_json::to_string(tool)
+                    .map(|encoded| {
+                        crate::ccproxy::utils::token_estimator::estimate_tokens(&encoded)
+                    })
+                    .unwrap_or(0.0)
+            })
+            .sum::<f64>();
+        system_prompt_tokens + tool_schema_tokens
+    }
+
+    pub(crate) fn refresh_request_overhead(
+        &self,
+        context: &mut ContextManager,
+        policy: &ExecutionPolicy,
+        tools: &[MCPToolDeclaration],
+        runtime_reminder: Option<&str>,
+    ) {
+        let history = self.normalize_history(context.get_messages_for_llm());
+        let final_history = self.inject_prompts(history, policy);
+        let mut reminder_history = Vec::new();
+        Self::append_runtime_reminder(&mut reminder_history, runtime_reminder.map(str::to_string));
+        let reminder_tokens = reminder_history
+            .first()
+            .and_then(|message| message["content"].as_str())
+            .map(crate::ccproxy::utils::token_estimator::estimate_tokens)
+            .unwrap_or(0.0);
+        context.request_overhead_tokens =
+            Self::estimate_request_overhead(&final_history, tools) + reminder_tokens;
+    }
+
     async fn drain_stop_signal_for_retry_boundary(
         session_id: &str,
         signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
@@ -603,6 +659,7 @@ impl LlmProcessor {
         require_tool_call: bool,
         runtime_reminder: Option<String>,
     ) -> Result<(String, String, String, Option<serde_json::Value>), WorkflowEngineError> {
+        self.refresh_request_overhead(context, policy, &tools, runtime_reminder.as_deref());
         let raw_history = context.get_messages_for_llm();
 
         // 1. Context Normalization & Prompt Injection
@@ -645,15 +702,19 @@ impl LlmProcessor {
 
             // Search through configured workflow model roles to find the active model.
             if let Some(ref models) = self.agent_config.models {
-                for model_config in [
-                    models.plan.as_ref(),
-                    models.act.as_ref(),
-                    models.utility.as_ref(),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if model_config.model == self.active_model_name {
+                let selected_model = match policy.phase {
+                    super::policy::ExecutionPhase::Planning => {
+                        models.plan.as_ref().or(models.act.as_ref())
+                    }
+                    super::policy::ExecutionPhase::Implementation
+                    | super::policy::ExecutionPhase::Standard => {
+                        models.act.as_ref().or(models.plan.as_ref())
+                    }
+                };
+                if let Some(model_config) = selected_model {
+                    if model_config.model == self.active_model_name
+                        && model_config.id == self.active_provider_id
+                    {
                         // Temperature: any value < 0 is treated as "Off/Unset"
                         if let Some(temp) = model_config.temperature {
                             if temp >= 0.0 {
@@ -668,7 +729,6 @@ impl LlmProcessor {
                         }
                         thinking = model_config.thinking.clone();
                         function_call = model_config.function_call;
-                        break;
                     }
                 }
             }
@@ -1937,6 +1997,50 @@ mod tests {
     }
 
     #[test]
+    fn context_window_errors_are_not_retried() {
+        let error = crate::ai::error::AiError::RawApiRequestFailed {
+            status_code: 400,
+            provider: "provider".to_string(),
+            details: "This model's maximum context length is 524288 tokens. However, you requested 128000 output tokens and your prompt contains at least 396289 input tokens, for a total of at least 524289 tokens.".to_string(),
+        };
+        assert!(
+            !LlmProcessor::should_retry_ai_error(&error),
+            "context-length failures must terminate instead of burning the retry budget"
+        );
+    }
+
+    #[test]
+    fn request_overhead_counts_system_prompt_and_tool_schemas() {
+        let history = vec![
+            serde_json::json!({"role": "system", "content": "system prompt"}),
+            serde_json::json!({"role": "user", "content": "hello"}),
+        ];
+        let tools = vec![crate::ai::traits::chat::MCPToolDeclaration {
+            name: "search".into(),
+            description: "Search the web".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            output_schema: None,
+            disabled: false,
+            scope: Some(crate::tools::ToolScope::Workflow),
+        }];
+        let expected =
+            crate::ccproxy::utils::token_estimator::estimate_tokens("system prompt")
+                + crate::ccproxy::utils::token_estimator::estimate_tokens(
+                    &serde_json::to_string(&tools[0]).unwrap(),
+                );
+        assert_eq!(LlmProcessor::estimate_request_overhead(&history, &tools), expected);
+
+        // Without a system message or tools there is nothing to account for.
+        assert_eq!(
+            LlmProcessor::estimate_request_overhead(
+                &[serde_json::json!({"role": "user", "content": "hello"})],
+                &[],
+            ),
+            0.0
+        );
+    }
+
+    #[test]
     fn authentication_and_billing_errors_are_not_retried() {
         for status_code in [401, 402, 403, 404] {
             let error = crate::ai::error::AiError::RawApiRequestFailed {
@@ -2232,6 +2336,27 @@ mod tests {
             cached_agent_agents: None,
             cached_project_agents: None,
         }
+    }
+
+    #[test]
+    fn request_overhead_refresh_counts_reminders_without_persisting_them() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let store = Arc::new(crate::db::MainStore::new(&dir.path().join("overhead.db")).expect("store"));
+        let mut context = super::ContextManager::new(
+            "overhead".to_string(), store, 8192,
+            Arc::new(crate::libs::tsid::TsidGenerator::new(1).expect("tsid")),
+        );
+        let processor = test_llm_processor();
+        let policy = ExecutionPolicy::standard();
+        processor.refresh_request_overhead(&mut context, &policy, &[], None);
+        let baseline = context.request_overhead_tokens;
+        assert!(baseline > 0.0);
+        processor.refresh_request_overhead(&mut context, &policy, &[], Some("Check the current state"));
+        assert!(context.request_overhead_tokens > baseline);
+        assert!(context.messages.is_empty());
+        assert!(context.ai_context_messages.is_empty());
+        processor.refresh_request_overhead(&mut context, &policy, &[], None);
+        assert_eq!(context.request_overhead_tokens, baseline);
     }
 
     #[test]

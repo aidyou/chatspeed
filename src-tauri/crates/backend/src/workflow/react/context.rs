@@ -24,6 +24,14 @@ pub struct ContextManager {
     pub session_id: String,
     pub main_store: Arc<MainStore>,
     pub max_tokens: usize,
+    /// Max output tokens the main LLM request reserves against `max_tokens`. Providers
+    /// count requested output against the same window, so the pressure check must budget
+    /// for it before the conversation estimate.
+    pub output_reserve_tokens: usize,
+    /// Estimated tokens of the consolidated system prompt plus tool schemas from the most
+    /// recent main request. The conversation projection omits both, so without this the
+    /// pressure check and the status panel understate what the provider actually receives.
+    pub request_overhead_tokens: f64,
     pub messages: Vec<WorkflowMessage>,
     pub ai_context_messages: Vec<WorkflowAiContextMessage>,
     pub current_segment_id: i32,
@@ -620,11 +628,19 @@ impl ContextManager {
     }
 
     pub fn current_token_estimate(&self) -> usize {
-        self.ai_context_messages
+        (self
+            .ai_context_messages
             .iter()
             .map(Self::estimate_context_message_tokens)
             .sum::<f64>()
+            + self.request_overhead_tokens)
             .round() as usize
+    }
+
+    pub fn needs_pressure_compression(&self) -> bool {
+        let input_budget = self.max_tokens.saturating_sub(self.output_reserve_tokens);
+        self.current_token_estimate() as f64
+            > input_budget as f64 * CONTEXT_PRESSURE_COMPRESSION_THRESHOLD
     }
 
     fn pressure_fixed_anchor_message_ids(messages: &[WorkflowMessage]) -> HashSet<i64> {
@@ -671,8 +687,9 @@ impl ContextManager {
         let fixed_anchor_tokens = self.pressure_fixed_anchor_tokens(&fixed_anchor_ids);
         let todo_anchor_tokens = self.pressure_todo_anchor_tokens();
         let expected_handoff_tokens = self.pressure_handoff_reserve_tokens();
-        let target_tail_tokens =
-            self.max_tokens as f64 * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD);
+        let target_tail_tokens = self.max_tokens.saturating_sub(self.output_reserve_tokens) as f64
+            * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD)
+            - self.request_overhead_tokens;
         (target_tail_tokens - fixed_anchor_tokens - todo_anchor_tokens - expected_handoff_tokens)
             .max(0.0)
     }
@@ -1101,6 +1118,8 @@ impl ContextManager {
             session_id,
             main_store,
             max_tokens,
+            output_reserve_tokens: 0,
+            request_overhead_tokens: 0.0,
             messages: Vec::new(),
             ai_context_messages: Vec::new(),
             current_segment_id: 1,
@@ -1944,17 +1963,12 @@ impl ContextManager {
             .await?;
 
         // Check if compression is needed.
-        // This estimate is based on projected runtime context only and does not fully include
-        // the later injected system prompt layers, so keep a conservative safety margin.
-        // Estimate from the currently retained context only.
+        // The estimate carries the conversation plus the system-prompt/tool overhead of the
+        // last request, and the budget subtracts the output tokens the provider reserves
+        // against the same window, so the check reflects what the provider actually enforces.
         // Do not sum per-request usage.total_tokens across messages because those values
         // already include the full prompt history for each request and would double-count.
-        let total_tokens = self.current_token_estimate() as f64;
-
-        Ok((
-            persisted,
-            total_tokens > (self.max_tokens as f64 * CONTEXT_PRESSURE_COMPRESSION_THRESHOLD),
-        ))
+        Ok((persisted, self.needs_pressure_compression()))
     }
 
     pub async fn update_message_metadata(
@@ -2282,6 +2296,64 @@ mod tests {
         let actual = ContextManager::estimate_context_message_tokens(&message);
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn current_token_estimate_includes_request_overhead() {
+        let (_dir, store) = setup_store();
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context = ContextManager::new(
+            "overhead-estimate".to_string(),
+            store,
+            8_192,
+            tsid_generator,
+        );
+        context.request_overhead_tokens = 1234.0;
+
+        // An empty conversation must still report the overhead the next request will pay.
+        assert_eq!(context.current_token_estimate(), 1234);
+    }
+
+    #[tokio::test]
+    async fn pressure_check_subtracts_output_reservation_and_counts_overhead() {
+        // 5000 overhead tokens sit above the 4500-token threshold implied by a 4000-token
+        // output reservation ((10000 - 4000) * 0.75) but below the 7500-token threshold the
+        // unreserved window allows, so the two cases isolate both accounting changes.
+        async fn pressure_signal(output_reserve_tokens: usize) -> bool {
+            let (_dir, store) = setup_store();
+            let session_id = "pressure-accounting";
+            insert_workflow(&store, session_id);
+            let tsid_generator =
+                Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+            let mut context =
+                ContextManager::new(session_id.to_string(), store, 10_000, tsid_generator);
+            context.output_reserve_tokens = output_reserve_tokens;
+            context.request_overhead_tokens = 5000.0;
+            let (_, needs_compression) = context
+                .add_message(
+                    "user".to_string(),
+                    "hello".to_string(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    false,
+                    None,
+                    None,
+                )
+                .await
+                .expect("failed to add message");
+            needs_compression
+        }
+
+        assert!(
+            !pressure_signal(0).await,
+            "without an output reservation the overhead still fits the 75% window"
+        );
+        assert!(
+            pressure_signal(4000).await,
+            "the output reservation must lower the pressure threshold below the overhead"
+        );
     }
 
     #[test]

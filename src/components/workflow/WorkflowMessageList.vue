@@ -2156,7 +2156,17 @@ const getErrorAlertTitle = message => {
   const localizedErrorTitles = {
     llm_authentication: 'workflow.errorTypes.llmAuthentication',
     llm_billing: 'workflow.errorTypes.llmBilling',
-    llm_retry_exhausted: 'workflow.errorTypes.llmRetryExhausted'
+    llm_retry_exhausted: 'workflow.errorTypes.llmRetryExhausted',
+    context_window: 'workflow.errorTypes.contextWindow'
+  }
+  // Fold the attempt counter into the retry-exhausted title instead of repeating a
+  // separate "retry attempts exhausted" line below the provider message.
+  if (rawType === 'llm_retry_exhausted') {
+    const attempt = Number(message?.metadata?.retry_attempt)
+    const maxAttempts = Number(message?.metadata?.retry_max_attempts)
+    if (Number.isFinite(attempt) && Number.isFinite(maxAttempts)) {
+      return t('workflow.errorTypes.llmRetryExhaustedWithAttempts', { attempt, maxAttempts })
+    }
   }
   if (localizedErrorTitles[rawType]) {
     return t(localizedErrorTitles[rawType])
@@ -2169,22 +2179,9 @@ const getErrorAlertTitle = message => {
 }
 
 const getErrorAlertContent = message => {
-  const content =
-    typeof resolveWorkflowErrorDisplay === 'function'
-      ? resolveWorkflowErrorDisplay(message, message?.message).display
-      : normalizeWorkflowErrorAlertContent(message?.message)
-  const metadata = message?.metadata || {}
-  if (metadata.retry_exhausted !== true) return content
-
-  const attempt = Number(metadata.retry_attempt)
-  const maxAttempts = Number(metadata.retry_max_attempts)
-  if (!Number.isFinite(attempt) || !Number.isFinite(maxAttempts)) return content
-
-  const retrySummary = t('workflow.errorTypes.retryAttemptsExhausted', {
-    attempt,
-    maxAttempts
-  })
-  return [content, retrySummary].filter(Boolean).join('\n\n')
+  return typeof resolveWorkflowErrorDisplay === 'function'
+    ? resolveWorkflowErrorDisplay(message, message?.message).display
+    : normalizeWorkflowErrorAlertContent(message?.message)
 }
 
 const getTailAlertBody = () => {
@@ -3310,6 +3307,10 @@ defineExpose({
 
 .workflow-error-alert--warning {
   border-color: var(--el-color-warning-light-5);
+}
+
+.workflow-error-alert--error {
+  border-radius: var(--cs-border-radius);
 }
 
 .workflow-error-alert__body {
