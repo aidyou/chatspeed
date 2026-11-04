@@ -50,11 +50,44 @@ impl RetryConfig {
     }
 }
 
+/// Reads the per-request retry budget pinned by the `x-cs-retry-max-count` header.
+///
+/// Layered callers such as the workflow engine run their own bounded backoff and send this
+/// header so the proxy does not stack a second retry loop on top of theirs. When the header
+/// is absent or unparseable the configured `fallback` budget stays in force.
+fn pinned_max_retries(request_builder: &RequestBuilder, fallback: u32) -> u32 {
+    request_builder
+        .try_clone()
+        .and_then(|request| {
+            request
+                .headers()
+                .get("x-cs-retry-max-count")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<u32>().ok())
+        })
+        .unwrap_or(fallback)
+}
+
 /// Send request with exponential backoff retry support for 429 status code
 pub async fn send_with_retry(
     request_builder: RequestBuilder,
     retry_config: &RetryConfig,
 ) -> ProxyResult<Response> {
+    // A caller that runs its own bounded backoff (the workflow engine) pins the proxy-level
+    // retry budget with the x-cs-retry-max-count header so the two loops never stack.
+    let max_retries = pinned_max_retries(&request_builder, retry_config.max_retries);
+    if max_retries != retry_config.max_retries {
+        log::debug!(
+            "Retry budget pinned by x-cs-retry-max-count header: {} (configured: {})",
+            max_retries,
+            retry_config.max_retries
+        );
+    }
+    let retry_config = RetryConfig {
+        max_retries,
+        ..retry_config.clone()
+    };
+
     if retry_config.max_retries == 0 {
         // No retry, send request directly
         return request_builder.send().await.map_err(|error| {
@@ -194,6 +227,25 @@ mod tests {
 
         // Should be capped at 5000ms
         assert_eq!(config.calculate_backoff(10), Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn test_retry_max_count_header_pins_retry_budget() {
+        let client = reqwest::Client::new();
+        let fallback = 3;
+
+        let pinned = client
+            .get("http://127.0.0.1:0/test")
+            .header("x-cs-retry-max-count", "0");
+        assert_eq!(pinned_max_retries(&pinned, fallback), 0);
+
+        let absent = client.get("http://127.0.0.1:0/test");
+        assert_eq!(pinned_max_retries(&absent, fallback), fallback);
+
+        let unparseable = client
+            .get("http://127.0.0.1:0/test")
+            .header("x-cs-retry-max-count", "soon");
+        assert_eq!(pinned_max_retries(&unparseable, fallback), fallback);
     }
 
     #[test]

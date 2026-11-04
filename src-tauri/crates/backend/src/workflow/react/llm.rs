@@ -20,6 +20,7 @@ use crate::workflow::react::signals::{
 use crate::workflow::react::skills::SkillManifest;
 use crate::workflow::react::types::GatewayPayload;
 
+use rand::Rng;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -87,6 +88,51 @@ impl LlmProcessor {
             }
             // Stream errors and network timeouts remain eligible for bounded retries.
             _ => true,
+        }
+    }
+
+    /// First-try wait (seconds) when the provider is rate limiting. Quota windows are
+    /// usually tens of seconds, so the floor must be high enough to let one reset instead
+    /// of burning attempts inside an already-exhausted window.
+    const RATE_LIMIT_BACKOFF_BASE_SECS: u32 = 5;
+
+    /// First-try wait (seconds) for other transient failures. These often clear within a
+    /// second or two, so a low floor keeps a momentary blip from stalling the workflow.
+    const TRANSIENT_BACKOFF_BASE_SECS: u32 = 1;
+
+    /// Upper bound (seconds) on any single retry wait so the session never blocks for minutes.
+    const RETRY_BACKOFF_CAP_SECS: u32 = 60;
+
+    /// Pre-jitter wait for the `retry_count`-th retry (1-based) on the given backoff tier.
+    /// Both tiers double per attempt and cap at `RETRY_BACKOFF_CAP_SECS`.
+    fn retry_backoff_secs(retry_count: u32, rate_limited: bool) -> u32 {
+        let base = if rate_limited {
+            Self::RATE_LIMIT_BACKOFF_BASE_SECS
+        } else {
+            Self::TRANSIENT_BACKOFF_BASE_SECS
+        };
+        base.saturating_mul(2u32.saturating_pow(retry_count.saturating_sub(1)))
+            .min(Self::RETRY_BACKOFF_CAP_SECS)
+    }
+
+    /// Applies up to ±30% jitter so concurrent workflow sessions do not synchronize their
+    /// retries into a thundering herd against the same provider.
+    fn jittered_backoff_secs(retry_count: u32, rate_limited: bool) -> u32 {
+        let base = Self::retry_backoff_secs(retry_count, rate_limited);
+        let mut bytes = [0u8; 8];
+        rand::rng().fill_bytes(&mut bytes);
+        // Map [0, 1000) onto the multiplier range [0.7, 1.3).
+        let factor = 0.7 + (u64::from_le_bytes(bytes) % 1000) as f64 / 1000.0 * 0.6;
+        ((base as f64) * factor).round() as u32
+    }
+
+    /// Only HTTP 429 selects the rate-limit backoff tier; every other retryable failure
+    /// shares the transient tier.
+    fn is_rate_limited(error: &AiError) -> bool {
+        match error {
+            AiError::ApiRequestFailed { status_code, .. }
+            | AiError::RawApiRequestFailed { status_code, .. } => *status_code == 429,
+            _ => false,
         }
     }
 
@@ -541,7 +587,10 @@ impl LlmProcessor {
     }
 
     /// Prepares and calls the LLM with the current context.
-    /// Implements exponential backoff for 429 errors and drafting instructions for non-reasoning models.
+    /// Implements tiered exponential backoff for transient LLM failures: HTTP 429 starts at
+    /// a higher floor to outlast quota windows, other transient failures start low, and both
+    /// cap so one retry never blocks the session for minutes. Also drafts instructions for
+    /// non-reasoning models.
     pub async fn call(
         &self,
         context: &mut ContextManager,
@@ -750,7 +799,7 @@ impl LlmProcessor {
                         );
                         retry_count += 1;
                         if Self::should_schedule_retry(retry_count, max_retries) {
-                            let wait_secs = 2u32.pow(retry_count - 1);
+                            let wait_secs = Self::jittered_backoff_secs(retry_count, false);
 
                             log::info!(
 		                                "WorkflowExecutor {}: Empty LLM response encountered. Retrying in {}s (attempt {}/{})",
@@ -833,7 +882,8 @@ impl LlmProcessor {
                             });
                         }
 
-                        let wait_secs = 2u32.pow(retry_count - 1);
+                        let wait_secs =
+                            Self::jittered_backoff_secs(retry_count, Self::is_rate_limited(&e));
 
                         log::info!("WorkflowExecutor {}: LLM error encountered. Retrying in {}s (attempt {}/{}) - Error: {}",
                             self.session_id, wait_secs, retry_count, max_retries, e);
@@ -1836,6 +1886,54 @@ mod tests {
     fn tenth_llm_failure_is_terminal_without_another_backoff() {
         assert!(LlmProcessor::should_schedule_retry(9, 10));
         assert!(!LlmProcessor::should_schedule_retry(10, 10));
+    }
+
+    #[test]
+    fn transient_backoff_grows_exponentially_from_one_second() {
+        let delays: Vec<u32> = (1..=9)
+            .map(|attempt| LlmProcessor::retry_backoff_secs(attempt, false))
+            .collect();
+        assert_eq!(delays, vec![1, 2, 4, 8, 16, 32, 60, 60, 60]);
+    }
+
+    #[test]
+    fn rate_limit_backoff_starts_higher_and_caps_sooner() {
+        let delays: Vec<u32> = (1..=9)
+            .map(|attempt| LlmProcessor::retry_backoff_secs(attempt, true))
+            .collect();
+        assert_eq!(delays, vec![5, 10, 20, 40, 60, 60, 60, 60, 60]);
+    }
+
+    #[test]
+    fn jittered_backoff_stays_within_thirty_percent_of_base() {
+        for attempt in 1..=9u32 {
+            for rate_limited in [false, true] {
+                let base = LlmProcessor::retry_backoff_secs(attempt, rate_limited);
+                let jittered = LlmProcessor::jittered_backoff_secs(attempt, rate_limited);
+                let lower = ((base as f64) * 0.7).floor() as u32;
+                let upper = ((base as f64) * 1.3).ceil() as u32;
+                assert!(
+                    (lower..=upper).contains(&jittered),
+                    "attempt={attempt} rate_limited={rate_limited} base={base} jittered={jittered}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_http_429_selects_the_rate_limit_backoff_tier() {
+        for status_code in [400, 408, 429, 500, 503] {
+            let error = crate::ai::error::AiError::RawApiRequestFailed {
+                status_code,
+                provider: "provider".to_string(),
+                details: "upstream error".to_string(),
+            };
+            assert_eq!(
+                LlmProcessor::is_rate_limited(&error),
+                status_code == 429,
+                "HTTP {status_code} must select rate-limit tier only when it is 429"
+            );
+        }
     }
 
     #[test]
