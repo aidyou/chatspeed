@@ -103,7 +103,7 @@
       "documentationUrl": "https://docs.aimlapi.com",
       "id": "aimlapi",
       "logo": "https://models.dev/logos/aimlapi.svg",
-      "modelCount": 172,
+      "modelCount": 169,
       "name": "AI/ML API",
       "protocol": "openai",
       "responses": false
@@ -769,7 +769,7 @@
       "documentationUrl": "https://docs.greenpt.ai",
       "id": "greenpt",
       "logo": "https://models.dev/logos/greenpt.svg",
-      "modelCount": 40,
+      "modelCount": 41,
       "name": "GreenPT",
       "protocol": "openai",
       "responses": false
@@ -841,7 +841,7 @@
       "documentationUrl": "https://hyper.charm.land",
       "id": "hyper",
       "logo": "https://models.dev/logos/hyper.svg",
-      "modelCount": 23,
+      "modelCount": 24,
       "name": "Charm Hyper",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 381,
+      "modelCount": 376,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1519,7 +1519,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 131,
+      "modelCount": 132,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
@@ -2162,7 +2162,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 416,
+      "modelCount": 417,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2401,9 +2401,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "68652053794cd17fee942b9f4b470988a480e9e92c37b4d4ac723706eab6ec8e",
-    "generatedAt": "2026-11-03T10:54:58Z",
+    "catalogSha256": "86b8e32f59b7b0aafba2e9a668a076895bab86ee54379a504e4830c6cce0bccc",
+    "generatedAt": "2026-11-04T10:58:14Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "02099830ad8ea73fca503a3d4cdf02ce5e8d016e"
+    "revision": "2778f561d55904d98d6c5d54a663caf8e615ee28"
   }
 }
