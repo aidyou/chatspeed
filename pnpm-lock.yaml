@@ -10,12 +10,14 @@ overrides:
   braces: 3.0.3
   dompurify: 3.4.17
   immutable: 5.1.9
+  katex: 0.18.2
   linkify-it: 5.0.2
   esbuild: 0.28.1
   lodash: 4.18.1
   lodash-es: 4.18.1
   markdown-it: 14.3.3
   micromatch: 4.0.8
+  minimatch: 11.0.1
   nanoid: 3.3.18
   picomatch@2: 2.3.2
   picomatch@4: 4.0.4
@@ -158,8 +160,8 @@ importers:
         specifier: ^11.11.1
         version: 11.11.1
       katex:
-        specifier: ^0.16.25
-        version: 0.16.47
+        specifier: 0.18.2
+        version: 0.18.2
       mammoth:
         specifier: ^1.12.0
         version: 1.12.0
@@ -584,6 +586,9 @@ packages:
   '@intlify/shared@11.4.14':
     resolution: {integrity: sha512-f8zSlPs4+Yd9za3CPQfW9OHxAJBOeRQzB/hhOhkbGA7hlqWk0W0bUtSV/LmyrGNwdl8JriBnFtJqZyF140bjGg==}
     engines: {node: '>= 22'}
+
+  '@isaacs/nonrecursive-glob-match@1.0.3':
+    resolution: {integrity: sha512-SI7kyKHq4XXDRozw+r9GlRZkia1ZkFrpLW98r2IC2Bpr8YkFGE3fvjzmxCG0x78A++69HmDNrDvSMYBZmHGpKA==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -2117,8 +2122,8 @@ packages:
   jszip@3.10.1:
     resolution: {integrity: sha512-xXDvecyTpGLrqFrvkrUSoxxfJI5AH7U8zxxtVclpsUtMCq4JQ290LY8AW5c7Ggnr/Y/oK+bQMbqK2qmtk3pN4g==}
 
-  katex@0.16.47:
-    resolution: {integrity: sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg==}
+  katex@0.18.2:
+    resolution: {integrity: sha512-3snve4y0SXTMequLim1FMiPvLGElySam0blN5xQZBqEY3lOJz1TnuaaiugnBZBqHzlSAGmFTYL7MCQkORuLKCA==}
     hasBin: true
 
   khroma@2.1.0:
@@ -2275,12 +2280,9 @@ packages:
   mermaid@11.16.1:
     resolution: {integrity: sha512-TQsq6u22fAn3rek5VOubrhKPo1g5hwC3FXUN9hiyupTckcYiGuuKGkNQrKYwGJkXUxZdojwRG46gsSCFZMDp4g==}
 
-  minimatch@3.1.5:
-    resolution: {integrity: sha512-VgjWUsnnT6n+NUk6eZq77zeFdpW2LWDzP6zFGrCbHXiYNul5Dzqk2HHQ5uFH2DNW5Xbp8+jVzaeNt94ssEEl4w==}
-
-  minimatch@5.1.9:
-    resolution: {integrity: sha512-7o1wEA2RyMP7Iu7GNba9vc0RWWGACJOCZBJX2GJWip0ikV+wcOsgVuY9uE8CPiyQhkGFSlhuSkZPavN7u1c2Fw==}
-    engines: {node: '>=10'}
+  minimatch@11.0.1:
+    resolution: {integrity: sha512-t+Vn6DX4wPCxS23y03C0uhF7S1jpi1GfqPrnlEipCJaA2ykiNbMkVlDutZtmvLfRcUN6R8AYVlzTsQrT4RZoLQ==}
+    engines: {node: 18 || 20 || >=22}
 
   minimist@1.2.8:
     resolution: {integrity: sha512-2yyAR8qBkN3YuheJanUpWC5U3bb5osDywNB8RzDVlDwDHbocAJveqqj1u8+SVD7jkWT4yvsHCpWqqWqAxb0zCA==}
@@ -3501,6 +3503,8 @@ snapshots:
 
   '@intlify/shared@11.4.14': {}
 
+  '@isaacs/nonrecursive-glob-match@1.0.3': {}
+
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
@@ -4032,7 +4036,7 @@ snapshots:
 
   '@vscode/markdown-it-katex@1.1.2':
     dependencies:
-      katex: 0.16.47
+      katex: 0.18.2
 
   '@vue/compiler-core@3.5.44':
     dependencies:
@@ -4688,7 +4692,7 @@ snapshots:
 
   dotignore@0.1.2:
     dependencies:
-      minimatch: 3.1.5
+      minimatch: 11.0.1
 
   duck@0.1.12:
     dependencies:
@@ -4963,7 +4967,7 @@ snapshots:
       fs.realpath: 1.0.0
       inflight: 1.0.6
       inherits: 2.0.4
-      minimatch: 3.1.5
+      minimatch: 11.0.1
       once: 1.4.0
       path-is-absolute: 1.0.1
 
@@ -5189,7 +5193,7 @@ snapshots:
       readable-stream: 2.3.8
       setimmediate: 1.0.5
 
-  katex@0.16.47:
+  katex@0.18.2:
     dependencies:
       commander: 8.3.0
 
@@ -5322,7 +5326,7 @@ snapshots:
       '@babel/runtime': 7.28.6
       '@vscode/markdown-it-katex': 1.1.2
       highlight.js: 11.11.1
-      katex: 0.16.47
+      katex: 0.18.2
       markdown-it: 14.3.3
       markdown-it-ins: 4.0.0
       markdown-it-mark: 4.0.0
@@ -5362,7 +5366,7 @@ snapshots:
       dayjs: 1.11.21
       dompurify: 3.4.17
       es-toolkit: 1.46.1
-      katex: 0.16.47
+      katex: 0.18.2
       khroma: 2.1.0
       marked: 16.4.2
       roughjs: 4.6.6
@@ -5370,12 +5374,9 @@ snapshots:
       ts-dedent: 2.2.0
       uuid: 11.1.1
 
-  minimatch@3.1.5:
+  minimatch@11.0.1:
     dependencies:
-      brace-expansion: 5.0.12
-
-  minimatch@5.1.9:
-    dependencies:
+      '@isaacs/nonrecursive-glob-match': 1.0.3
       brace-expansion: 5.0.12
 
   minimist@1.2.8: {}
@@ -5554,7 +5555,7 @@ snapshots:
 
   readdir-glob@1.1.3:
     dependencies:
-      minimatch: 5.1.9
+      minimatch: 11.0.1
 
   readdirp@3.6.0:
     dependencies:

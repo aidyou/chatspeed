@@ -55,7 +55,7 @@
     "ghostty-web": "0.4.0",
     "he": "^1.2.0",
     "highlight.js": "^11.11.1",
-    "katex": "^0.16.25",
+    "katex": "^0.18.2",
     "mammoth": "^1.12.0",
     "marked": "^16.4.1",
     "markmap-common": "^0.18",
@@ -88,12 +88,14 @@
       "braces": "3.0.3",
       "dompurify": "3.4.17",
       "immutable": "5.1.9",
+      "katex": "0.18.2",
       "linkify-it": "5.0.2",
       "esbuild": "0.28.1",
       "lodash": "4.18.1",
       "lodash-es": "4.18.1",
       "markdown-it": "14.3.3",
       "micromatch": "4.0.8",
+      "minimatch": "11.0.1",
       "nanoid": "3.3.18",
       "picomatch@2": "2.3.2",
       "picomatch@4": "4.0.4",
@@ -108,6 +110,10 @@
     },
     "patchedDependencies": {
       "ghostty-web@0.4.0": "src/patches/ghostty-web@0.4.0.patch"
-    }
+    },
+    "onlyBuiltDependencies": [
+      "@parcel/watcher",
+      "esbuild"
+    ]
   }
 }
