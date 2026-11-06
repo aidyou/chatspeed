@@ -15,7 +15,7 @@ use crate::workflow::react::types::{TaskGoalLedger, TaskGoalState, TaskGoalStatu
 
 use rust_i18n::t;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -135,7 +135,8 @@ impl ContextCompressor {
                     return None;
                 }
                 let merged_content = ContextManager::content_for_context_projection(m);
-                let content = Self::sanitize_message_content_for_compression(&merged_content);
+                let content = Self::content_without_repeated_file_arguments(m, &merged_content);
+                let content = Self::sanitize_message_content_for_compression(&content);
                 let item = Self::build_purified_history_message(m, content);
                 let has_structured_payload = item.reasoning.is_some()
                     || !item.tool_calls.is_empty()
@@ -572,9 +573,7 @@ impl ContextCompressor {
                             t!("workflow.compression_empty_evidence").to_string(),
                         ));
                     }
-                    Err(error)
-                        if is_context_window_error(&error) && context_reductions < 6 =>
-                    {
+                    Err(error) if is_context_window_error(&error) && context_reductions < 6 => {
                         let Some(smaller_budget) = Self::smaller_input_budget(
                             request_budget,
                             Self::request_tokens(&Self::reduction_messages(fragment)),
@@ -622,19 +621,66 @@ impl ContextCompressor {
     }
 
     fn deduplicate_tool_result_arguments(history: &mut [CompressionHistoryMessage]) {
-        let calls = history
-            .iter()
-            .flat_map(|message| &message.tool_calls)
-            .filter_map(|call| Some((call.id.clone()?, call.name.clone(), call.args.clone()?)))
-            .collect::<HashSet<_>>();
+        let mut calls = HashMap::new();
+        for call in history.iter().flat_map(|message| &message.tool_calls) {
+            if let (Some(id), Some(args)) = (&call.id, &call.args) {
+                calls
+                    .entry((id.clone(), call.name.clone()))
+                    .or_insert_with(Vec::new)
+                    .push((args.clone(), serde_json::from_str::<Value>(args).ok()));
+            }
+        }
         for message in history {
             if let Some(result) = &mut message.tool_result {
                 if let (Some(id), Some(args)) = (&result.id, &result.args) {
-                    if calls.contains(&(id.clone(), result.name.clone(), args.clone())) {
-                        result.args = None;
+                    if let Some(candidates) = calls.get(&(id.clone(), result.name.clone())) {
+                        // Providers may store the same arguments as formatted JSON or an object.
+                        // Compare values only within one call identity, never across invocations.
+                        let parsed = serde_json::from_str::<Value>(args).ok();
+                        if candidates.iter().any(|(raw, value)| {
+                            raw == args
+                                || parsed
+                                    .as_ref()
+                                    .is_some_and(|parsed| value.as_ref() == Some(parsed))
+                        }) {
+                            result.args = None;
+                        }
                     }
                 }
             }
+        }
+    }
+
+    fn content_without_repeated_file_arguments(message: &WorkflowMessage, content: &str) -> String {
+        let metadata = message.metadata.as_ref();
+        let tool_name = metadata
+            .and_then(|metadata| metadata.get("tool_name"))
+            .and_then(Value::as_str);
+        if message.role != "tool" || !Self::is_file_mutation_tool(tool_name) {
+            return content.to_string();
+        }
+        let Some(arguments) = metadata.and_then(Self::structured_tool_arguments) else {
+            return content.to_string();
+        };
+        let Ok(Value::Object(mut result)) = serde_json::from_str::<Value>(content) else {
+            return content.to_string();
+        };
+        // UI previews echo mutation inputs. Keep those bytes in the call arguments only,
+        // while retaining result-only evidence and leaving the durable preview untouched.
+        let mut removed = false;
+        for key in ["old_string", "new_string", "content"] {
+            if result
+                .get(key)
+                .is_some_and(|value| value.is_string() && arguments.get(key) == Some(value))
+            {
+                result.remove(key);
+                removed = true;
+            }
+        }
+        if removed {
+            Value::Object(result).to_string()
+        } else {
+            content.to_string()
         }
     }
 
@@ -1022,6 +1068,11 @@ impl ContextCompressor {
         let id = metadata
             .get("tool_call_id")
             .and_then(Value::as_str)
+            .or_else(|| {
+                tool_call
+                    .and_then(|call| call.get("id"))
+                    .and_then(Value::as_str)
+            })
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
@@ -1066,7 +1117,12 @@ impl ContextCompressor {
             let user_query = segment
                 .iter()
                 .filter(|message| ContextManager::is_user_authored_task_message(message))
-                .map(|message| message.message.trim())
+                .map(|message| {
+                    Self::strip_system_reminders(&message.message)
+                        .trim()
+                        .to_string()
+                })
+                .filter(|content| !content.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n---\n");
 
@@ -1075,6 +1131,7 @@ impl ContextCompressor {
                 .rev()
                 .find(|message| message.role == "assistant")
                 .map(IntelligenceManager::extract_completion_summary)
+                .map(|summary| Self::strip_system_reminders(&summary))
                 .unwrap_or_default();
 
             if !user_query.trim().is_empty() || !result_summary.trim().is_empty() {
@@ -2396,6 +2453,7 @@ mod tests {
         db::WorkflowMessage,
         workflow::react::{
             constants::TASK_FINISHED,
+            context::ContextManager,
             error::is_context_window_error,
             prompts::{BLOCKING_CONTEXT_COMPRESSION_PROMPT, ROLLUP_CONTEXT_COMPRESSION_PROMPT},
             types::{TaskGoalLedger, TaskGoalSourcePreview},
@@ -2408,6 +2466,10 @@ mod tests {
         assert_eq!(
             ContextCompressor::request_budget(1_000_000, 40_000),
             (760_000, 40_000)
+        );
+        assert_eq!(
+            ContextCompressor::request_budget(1_000_000, 128_000),
+            (672_000, 128_000)
         );
         assert_eq!(
             ContextCompressor::request_budget(128_000, 128_000),
@@ -2744,6 +2806,277 @@ mod tests {
             result.metadata.as_ref().unwrap()["tool_call"]["function"]["arguments"],
             args
         );
+    }
+
+    #[test]
+    fn compression_deduplicates_equivalent_json_arguments_by_call_identity() {
+        let raw = r#"{ "options": { "b": 2, "a": 1 }, "file_path": "src/feature.rs" }"#;
+        let equivalent = json!({"file_path": "src/feature.rs", "options": {"a": 1, "b": 2}});
+        for (source, result, id, name, deduplicated) in [
+            (raw, equivalent.clone(), Some("call-1"), "read_file", true),
+            (
+                raw,
+                json!(equivalent.to_string()),
+                Some("call-1"),
+                "read_file",
+                true,
+            ),
+            (
+                raw,
+                json!({"file_path": "other.rs"}),
+                Some("call-1"),
+                "read_file",
+                false,
+            ),
+            (
+                raw,
+                equivalent.clone(),
+                Some("other-call"),
+                "read_file",
+                false,
+            ),
+            (raw, equivalent.clone(), Some("call-1"), "write_file", false),
+            (raw, equivalent, None, "read_file", false),
+            (
+                raw,
+                json!("invalid JSON"),
+                Some("call-1"),
+                "read_file",
+                false,
+            ),
+            (
+                "{invalid",
+                json!("{invalid"),
+                Some("call-1"),
+                "read_file",
+                true,
+            ),
+            (
+                "{invalid",
+                json!("{different"),
+                Some("call-1"),
+                "read_file",
+                false,
+            ),
+        ] {
+            let assistant = purified_history_test_message(
+                "assistant",
+                "",
+                None,
+                Some(json!({
+                    "tool_calls": [{"id": "call-1", "function": {"name": "read_file", "arguments": source}}]
+                })),
+            );
+            let tool = purified_history_test_message(
+                "tool",
+                "result evidence",
+                None,
+                Some(json!({
+                    "tool_name": name,
+                    "tool_call": {"id": id, "function": {"name": name, "arguments": result}}
+                })),
+            );
+            let original_metadata = tool.metadata.clone();
+            let mut history = [&assistant, &tool]
+                .into_iter()
+                .map(|message| {
+                    ContextCompressor::build_purified_history_message(
+                        message,
+                        message.message.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            ContextCompressor::deduplicate_tool_result_arguments(&mut history);
+            let tool_result = history[1].tool_result.as_ref().expect("tool result");
+            assert_eq!(tool_result.id.as_deref(), id);
+            assert_eq!(tool_result.name, name);
+            assert_eq!(tool_result.body, "result evidence");
+            assert_eq!(
+                tool_result.args.is_none(),
+                deduplicated,
+                "{source}, {result}, {id:?}, {name}"
+            );
+            let transcript = ContextCompressor::render_history_as_transcript(&history);
+            assert_eq!(
+                transcript.matches(" args=\"").count(),
+                if deduplicated { 1 } else { 2 }
+            );
+            assert_eq!(transcript.matches("result evidence").count(), 1);
+            assert_eq!(tool.metadata, original_metadata);
+        }
+    }
+
+    #[test]
+    fn compression_projection_strips_reminders_without_repeating_tool_payloads() {
+        let literal = "<SYSTEM_REMINDER>literal file content</SYSTEM_REMINDER>";
+        let arguments = json!({"file_path": "src/feature.rs", "content": literal});
+        let messages = [
+            purified_history_test_message(
+                "assistant",
+                "Applying change<SYSTEM_REMINDER>assistant runtime hint</SYSTEM_REMINDER>",
+                Some("Checked evidence<SYSTEM_REMINDER>reasoning runtime hint</SYSTEM_REMINDER>"),
+                Some(json!({
+                    "tool_calls": [{"id": "call-1", "function": {"name": "write_file", "arguments": arguments.to_string()}}]
+                })),
+            ),
+            purified_history_test_message(
+                "tool",
+                "unprojected output",
+                None,
+                Some(json!({
+                    "tool_call_id": "call-1", "tool_name": "write_file",
+                    "tool_call": {"function": {"name": "write_file", "arguments": arguments}},
+                    "llm_content": "write evidence<SYSTEM_REMINDER>first tool hint</SYSTEM_REMINDER>\n<SYSTEM_REMINDER>second tool hint</SYSTEM_REMINDER>"
+                })),
+            ),
+        ];
+        let mut history = messages
+            .iter()
+            .map(|message| {
+                let projected = ContextManager::content_for_context_projection(message);
+                ContextCompressor::build_purified_history_message(
+                    message,
+                    ContextCompressor::sanitize_message_content_for_compression(&projected),
+                )
+            })
+            .collect::<Vec<_>>();
+        ContextCompressor::deduplicate_tool_result_arguments(&mut history);
+        let transcript = ContextCompressor::render_history_as_transcript(&history);
+        assert_eq!(transcript.matches(" args=\"").count(), 1);
+        assert_eq!(transcript.matches("write evidence").count(), 1);
+        assert_eq!(transcript.matches("literal file content").count(), 1);
+        assert_eq!(transcript.matches("id=\"call-1\"").count(), 2);
+        assert!(transcript
+            .contains("&lt;SYSTEM_REMINDER&gt;literal file content&lt;/SYSTEM_REMINDER&gt;"));
+        assert!(transcript.contains("Applying change"));
+        assert!(transcript.contains("Checked evidence"));
+        for hint in [
+            "assistant runtime hint",
+            "reasoning runtime hint",
+            "first tool hint",
+            "second tool hint",
+            "unprojected output",
+        ] {
+            assert!(!transcript.contains(hint));
+        }
+        assert!(messages[0].message.contains("assistant runtime hint"));
+        assert!(messages[1].metadata.as_ref().unwrap()["llm_content"]
+            .as_str()
+            .unwrap()
+            .contains("first tool hint"));
+    }
+
+    #[test]
+    fn compression_file_result_echoes_do_not_repeat_mutation_input() {
+        for (name, arguments, result) in [
+            (
+                "edit_file",
+                json!({"file_path": "src/feature.rs", "old_string": "old code", "new_string": "new code"}),
+                json!({"file_path": "src/feature.rs", "old_string": "old code", "new_string": "new code", "start_line": 42, "context_after": ["result-only evidence"]}),
+            ),
+            (
+                "write_file",
+                json!({"file_path": "src/feature.rs", "content": "new code"}),
+                json!({"file_path": "src/feature.rs", "content": "new code", "old_string": "result-only evidence", "bytes_written": 8}),
+            ),
+        ] {
+            let messages = [
+                purified_history_test_message(
+                    "assistant",
+                    "",
+                    None,
+                    Some(
+                        json!({"tool_calls": [{"id": "call-1", "function": {"name": name, "arguments": arguments}}]}),
+                    ),
+                ),
+                purified_history_test_message(
+                    "tool",
+                    &result.to_string(),
+                    None,
+                    Some(
+                        json!({"tool_call_id": "call-1", "tool_name": name, "tool_call": {"function": {"name": name, "arguments": arguments}}}),
+                    ),
+                ),
+            ];
+            let mut history = messages
+                .iter()
+                .map(|message| {
+                    let projected = ContextManager::content_for_context_projection(message);
+                    let content = ContextCompressor::content_without_repeated_file_arguments(
+                        message, &projected,
+                    );
+                    ContextCompressor::build_purified_history_message(
+                        message,
+                        ContextCompressor::sanitize_message_content_for_compression(&content),
+                    )
+                })
+                .collect::<Vec<_>>();
+            ContextCompressor::deduplicate_tool_result_arguments(&mut history);
+            let transcript = ContextCompressor::render_history_as_transcript(&history);
+            assert_eq!(transcript.matches("new code").count(), 1);
+            assert_eq!(transcript.matches(" args=\"").count(), 1);
+            assert_eq!(transcript.matches("result-only evidence").count(), 1);
+            let body = &history[1].tool_result.as_ref().expect("result").body;
+            let body: Value = serde_json::from_str(body).expect("structured result");
+            assert_eq!(body["file_path"], "src/feature.rs");
+            if name == "edit_file" {
+                assert!(body.get("old_string").is_none());
+                assert!(body.get("new_string").is_none());
+                assert_eq!(body["start_line"], 42);
+            } else {
+                assert!(body.get("content").is_none());
+                assert_eq!(body["old_string"], "result-only evidence");
+                assert_eq!(body["bytes_written"], 8);
+            }
+            assert_eq!(messages[1].message, result.to_string());
+        }
+    }
+
+    #[test]
+    fn compression_file_result_deduplication_preserves_unmatched_evidence() {
+        let metadata = json!({
+            "tool_name": "edit_file",
+            "tool_call": {"function": {"name": "edit_file", "arguments": {"old_string": "old", "new_string": "requested"}}}
+        });
+        for (role, content, metadata) in [
+            (
+                "tool",
+                r#"{"new_string":"actual result","content":"result evidence"}"#,
+                Some(metadata.clone()),
+            ),
+            ("tool", "plain result evidence", Some(metadata.clone())),
+            ("tool", r#"{"new_string":"requested"}"#, None),
+            (
+                "assistant",
+                r#"{"new_string":"requested"}"#,
+                Some(metadata.clone()),
+            ),
+            (
+                "tool",
+                r#"{"new_string":"requested"}"#,
+                Some(json!({"tool_name": "read_file", "tool_call": metadata["tool_call"]})),
+            ),
+        ] {
+            let message = purified_history_test_message(role, content, None, metadata);
+            assert_eq!(
+                ContextCompressor::content_without_repeated_file_arguments(&message, content),
+                content
+            );
+        }
+        let message = purified_history_test_message("tool", "", None, Some(metadata));
+        let result = ContextCompressor::content_without_repeated_file_arguments(
+            &message,
+            r#"{"new_string":"requested","start_line":42}"#,
+        );
+        let item = ContextCompressor::build_purified_history_message(&message, result);
+        assert!(item
+            .tool_result
+            .as_ref()
+            .expect("result")
+            .args
+            .as_ref()
+            .expect("orphan result arguments")
+            .contains("requested"));
     }
 
     fn active_task_goal_ledger() -> TaskGoalLedger {
@@ -3277,6 +3610,17 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_compression_content_removes_repeated_and_unclosed_reminders() {
+        for (content, expected) in [
+            ("Before\n<SYSTEM_REMINDER>first hint</SYSTEM_REMINDER>\nBetween\n<SYSTEM_REMINDER>second hint</SYSTEM_REMINDER>\nAfter", "Before Between After"),
+            ("Keep evidence\n<SYSTEM_REMINDER>unfinished runtime hint", "Keep evidence"),
+            ("<SYSTEM_REMINDER>runtime only</SYSTEM_REMINDER>", ""),
+        ] {
+            assert_eq!(ContextCompressor::sanitize_message_content_for_compression(content), expected);
+        }
+    }
+
+    #[test]
     fn compression_metadata_keeps_only_review_and_failure_semantics() {
         let mut message = WorkflowMessage {
             id: Some(1),
@@ -3717,6 +4061,42 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn render_completed_tasks_strips_runtime_reminders_from_queries_and_reports() {
+        let messages = [
+            purified_history_test_message(
+                "user",
+                "Implement the fix\n<SYSTEM_REMINDER>user runtime hint</SYSTEM_REMINDER>",
+                None,
+                None,
+            ),
+            purified_history_test_message(
+                "assistant",
+                "Implementation complete\n<SYSTEM_REMINDER>report runtime hint</SYSTEM_REMINDER>",
+                None,
+                Some(json!({
+                    "tool_calls": [{"function": {"name": "complete_workflow", "arguments": {
+                        "summary": "Focused tests passed\n<SYSTEM_REMINDER>summary runtime hint</SYSTEM_REMINDER>"
+                    }}}]
+                })),
+            ),
+            purified_history_test_message(
+                "tool",
+                TASK_FINISHED,
+                None,
+                Some(json!({"tool_name": "complete_workflow"})),
+            ),
+        ];
+        let rendered = ContextCompressor::render_completed_tasks(&messages);
+        assert!(rendered.contains("<user_query>Implement the fix</user_query>"));
+        assert!(rendered.contains("Implementation complete"));
+        assert!(rendered.contains("Focused tests passed"));
+        assert!(!rendered.contains("SYSTEM_REMINDER"));
+        assert!(!rendered.contains("runtime hint"));
+        assert!(messages[0].message.contains("user runtime hint"));
+        assert!(messages[1].message.contains("report runtime hint"));
     }
 
     #[test]

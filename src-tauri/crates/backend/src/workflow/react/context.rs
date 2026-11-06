@@ -14,7 +14,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-const CONTEXT_PRESSURE_COMPRESSION_THRESHOLD: f64 = 0.75;
+const CONTEXT_PRESSURE_COMPRESSION_THRESHOLD: f64 = 0.90;
+// Keep checkpoint retention independent from the headroom needed to trigger compression.
+const CONTEXT_PRESSURE_RETAINED_TOKEN_RATIO: f64 = 0.25;
 const UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT: usize = 20_000;
 const TASK_GOAL_LEDGER_PREVIEW_LIMIT: usize = 6;
 const TASK_GOAL_LEDGER_PREVIEW_CHAR_LIMIT: usize = 1_200;
@@ -688,7 +690,7 @@ impl ContextManager {
         let todo_anchor_tokens = self.pressure_todo_anchor_tokens();
         let expected_handoff_tokens = self.pressure_handoff_reserve_tokens();
         let target_tail_tokens = self.max_tokens.saturating_sub(self.output_reserve_tokens) as f64
-            * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD)
+            * CONTEXT_PRESSURE_RETAINED_TOKEN_RATIO
             - self.request_overhead_tokens;
         (target_tail_tokens - fixed_anchor_tokens - todo_anchor_tokens - expected_handoff_tokens)
             .max(0.0)
@@ -999,8 +1001,7 @@ impl ContextManager {
         let todo_anchor_tokens = self.pressure_todo_anchor_tokens();
         // Reserve space for the actual prior handoff size plus growth in newly retained evidence.
         let expected_handoff_tokens = self.pressure_handoff_reserve_tokens();
-        let target_tail_tokens =
-            self.max_tokens as f64 * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD);
+        let target_tail_tokens = self.max_tokens as f64 * CONTEXT_PRESSURE_RETAINED_TOKEN_RATIO;
         let retained_token_budget = (target_tail_tokens
             - fixed_anchor_tokens
             - todo_anchor_tokens
@@ -2191,8 +2192,7 @@ impl ContextManager {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextManager, CONTEXT_PRESSURE_COMPRESSION_THRESHOLD,
-        TASK_GOAL_LEDGER_PREVIEW_CHAR_LIMIT, TASK_GOAL_LEDGER_PREVIEW_LIMIT,
+        ContextManager, TASK_GOAL_LEDGER_PREVIEW_CHAR_LIMIT, TASK_GOAL_LEDGER_PREVIEW_LIMIT,
         UNREFERENCED_CONTEXT_CONTENT_CHAR_LIMIT,
     };
     use crate::ccproxy::utils::token_estimator::estimate_tokens;
@@ -2314,21 +2314,73 @@ mod tests {
         assert_eq!(context.current_token_estimate(), 1234);
     }
 
+    #[test]
+    fn pressure_check_triggers_only_above_ninety_percent_of_input_budget() {
+        let (_dir, store) = setup_store();
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        for (max_tokens, output_reserve_tokens, threshold) in [
+            (10_000, 0, 9_000),
+            (10_000, 4_000, 5_400),
+            (372_000, 32_000, 306_000),
+            (372_000, 128_000, 219_600),
+            (1_000_000, 128_000, 784_800),
+            (10_000, 10_000, 0),
+            (10_000, 12_000, 0),
+        ] {
+            let mut context = ContextManager::new(
+                "pressure-threshold".to_string(),
+                store.clone(),
+                max_tokens,
+                tsid_generator.clone(),
+            );
+            context.output_reserve_tokens = output_reserve_tokens;
+            context.request_overhead_tokens = threshold as f64;
+            assert!(
+                !context.needs_pressure_compression(),
+                "must not compress at or below 90%: window={max_tokens}, output={output_reserve_tokens}"
+            );
+            context.request_overhead_tokens += 1.0;
+            assert!(
+                context.needs_pressure_compression(),
+                "must compress above 90%: window={max_tokens}, output={output_reserve_tokens}"
+            );
+        }
+    }
+
+    #[test]
+    fn pressure_retained_tail_keeps_quarter_budget_independent_of_trigger() {
+        let (_dir, store) = setup_store();
+        let session_id = "pressure-retained-budget";
+        insert_workflow(&store, session_id);
+        let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+        let mut context =
+            ContextManager::new(session_id.to_string(), store, 100_000, tsid_generator);
+        context.output_reserve_tokens = 20_000;
+        context.request_overhead_tokens = 1_000.0;
+
+        assert_eq!(
+            context.pressure_retained_raw_tail_budget(),
+            20_000.0
+                - context.request_overhead_tokens
+                - context.pressure_todo_anchor_tokens()
+                - context.pressure_handoff_reserve_tokens(),
+            "retain 25% of the usable input budget before subtracting overhead and anchors"
+        );
+    }
+
     #[tokio::test]
     async fn pressure_check_subtracts_output_reservation_and_counts_overhead() {
-        // 5000 overhead tokens sit above the 4500-token threshold implied by a 4000-token
-        // output reservation ((10000 - 4000) * 0.75) but below the 7500-token threshold the
-        // unreserved window allows, so the two cases isolate both accounting changes.
+        // 5600 overhead tokens exceed the reserved threshold ((10000 - 4000) * 0.90)
+        // but fit the unreserved 9000-token threshold, isolating both accounting changes.
         async fn pressure_signal(output_reserve_tokens: usize) -> bool {
             let (_dir, store) = setup_store();
             let session_id = "pressure-accounting";
             insert_workflow(&store, session_id);
-            let tsid_generator =
-                Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
+            let tsid_generator = Arc::new(TsidGenerator::new(1).expect("failed to create tsid"));
             let mut context =
                 ContextManager::new(session_id.to_string(), store, 10_000, tsid_generator);
             context.output_reserve_tokens = output_reserve_tokens;
-            context.request_overhead_tokens = 5000.0;
+            context.request_overhead_tokens = 5600.0;
             let (_, needs_compression) = context
                 .add_message(
                     "user".to_string(),
@@ -2348,7 +2400,7 @@ mod tests {
 
         assert!(
             !pressure_signal(0).await,
-            "without an output reservation the overhead still fits the 75% window"
+            "without an output reservation the overhead still fits the 90% window"
         );
         assert!(
             pressure_signal(4000).await,
@@ -4646,8 +4698,7 @@ mod tests {
             .filter(|message| message.role == "user")
             .map(ContextManager::estimate_workflow_message_tokens)
             .sum::<f64>();
-        let pressure_target =
-            context.max_tokens as f64 * (1.0 - CONTEXT_PRESSURE_COMPRESSION_THRESHOLD);
+        let pressure_target = context.max_tokens as f64 * 0.25;
         assert!(
             permanent_anchor_tokens
                 + todo_tokens
