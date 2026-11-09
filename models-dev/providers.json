@@ -552,7 +552,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 77,
+      "modelCount": 78,
       "name": "Deep Infra",
       "responses": false
     },
@@ -981,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 375,
+      "modelCount": 374,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1375,7 +1375,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 641,
+      "modelCount": 642,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -2154,7 +2154,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 128,
+      "modelCount": 125,
       "name": "Venice AI",
       "responses": false
     },
@@ -2401,9 +2401,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "ae62b0ab1307d233a2a5189d82fe516bebf3bd73ddfe1b55003e3885b78d6a44",
-    "generatedAt": "2026-11-08T10:25:43Z",
+    "catalogSha256": "bd0aa6dd7762e1659b7522edfbc68ada7762ace37c2abf2d6313b86952cfe32b",
+    "generatedAt": "2026-11-09T11:36:08Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "6eed0315b02b17deb542c259bd7f593112a7062d"
+    "revision": "bda5ad010f3e42023315c0c20c0c0be2bdc0305b"
   }
 }
