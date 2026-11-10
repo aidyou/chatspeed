@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "chatspeed"
-version = "2.0.17"
+version = "2.1.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
