@@ -18,6 +18,7 @@ This file is for global rules only. Keep it short. When a subdirectory has its o
 - Frontend conventions are Vue 3 Composition API with `<script setup>`, Element Plus, Pinia, Vue Router, vue-i18n, and SCSS. Reuse these choices instead of introducing parallel UI or state-management stacks.
 - Use pnpm for frontend dependencies and scripts; `package.json` and `pnpm-lock.yaml` are authoritative. Use Cargo from `src-tauri/` for Rust dependencies and commands. Do not use npm or yarn, and do not create another lockfile.
 - Keep cross-boundary changes explicit: trace Vue/TypeScript or JavaScript calls through the Tauri command/event contract to Rust, and verify both sides when that contract changes.
+- Release versions must stay synchronized across the desktop (`src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`), runtime (`crates/daemon`), backend (`crates/backend`), CLI (`crates/cli`), client (`crates/client`), and shared contracts (`crates/contracts`), with crate paths relative to `src-tauri/`. Update all six Rust package versions and `src-tauri/Cargo.lock` together; never bump only the desktop. The desktop compares the runtime's self-reported package version, so mismatches can repeatedly stop a freshly built runtime. When changing release tooling, include every package above in version updates, verification, and staging; verify resolved Cargo metadata and lockfile versions match the Tauri version before release.
 
 ## General Workflow
 
