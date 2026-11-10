@@ -4,21 +4,75 @@
 
 ## [2.0.18]
 
+### 🚀 New Features
+
+- **Command-line interface and automation**:
+  - Added the bundled `cscli` command-line client with local HTTP/SSE access to agents and workflows, including session-level model, planning and final-review options, structured output, and runtime diagnostics.
+  - Added CLI management for MCP servers and Agent Skills: installation, inspection, verification, lifecycle controls and removal, with a bundled Help Skill covering the supported commands.
+  - Unified local automation management across the runtime and CLI: create, inspect, update, schedule, enable, disable and run automations, review execution history, or draft and apply a plan with revision, permission and duplicate-request safeguards.
+- **Agents and workflow**:
+  - Added optional decision-model-assisted completion review and report selection, with provider/model settings and a System One-compatible `/systemone` proxy endpoint.
+  - Added configurable persistent task-tracking tools and a minimal coding agent, plus agent-specific `AGENTS.md` instructions and manifest-based MCP tool configuration.
+  - Agents can now be switched at task boundaries without discarding authorized paths; follow-up requests are queued without interrupting active work unless the user explicitly changes priority or cancels.
+- **Terminal**:
+  - Replaced the terminal renderer with `ghostty-web`, added selectable color skins, and made bare `www` addresses clickable.
+- **Agent Skills and plugins**:
+  - Added a dedicated Agent Skills surface that can be docked beside Workflow, with improved installed-skill management and uninstall feedback; docked plugin views are isolated from the workflow interface.
+- **AI execution resource limits**:
+  - Added a Resource Limits settings tab for host Bash tasks on Linux, macOS and Windows, with shared concurrency and memory budgets plus per-task memory and process limits.
+  - Protection monitors AI-launched process trees and can terminate tasks that exceed memory or process budgets. It is monitoring-based protection, not kernel-enforced isolation; direct user terminals, remote commands, Docker workloads and external MCP tools are outside these budgets.
+
 ### 🪄 Improvements
 
-- **Workflow**:
-  - Streamlined the agent toolset for weaker models: planning-note operations now go through a single tool and detailed todo lookups are folded into the list, so smaller models pick tools more reliably.
+- **Workflow and agents**:
+  - Streamlined the agent toolset for weaker models: planning-note operations now go through a single tool, detailed todo lookups are folded into the list, and file discovery is consolidated into `grep`.
+  - Refined coding-agent execution, delegation and handoff guidance, including explicit report requirements; child agents hand off user decisions to the parent rather than opening their own approval dialogs.
+  - Added runtime goal tracking before context compression, configurable task tracking, and brief completion reports by default.
+  - Improved context-budget estimation to include request overhead and model limits; oversized compression inputs are bounded and reduced after rejection, long compression requests are handled more reliably, and duplicate inputs are avoided.
+  - Batched streaming updates and parent-history reads, removed synchronous scans during streaming, and kept the loading skeleton visible until messages are rendered to improve responsiveness in large conversations.
+  - Added a refresh action for the selected sandbox configuration and sorted model options alphabetically in the agent editor.
+- **Runtime and startup**:
+  - Separated the desktop, runtime, CLI and shared contracts into dedicated Rust crates; desktop and CLI operations now share the runtime control plane.
+  - Deferred non-critical startup work, legacy migration scans and Models.dev catalog loading, and unified frontend initialization around runtime readiness with loading feedback in the main message pane.
+  - Improved runtime discovery, connection recovery, upgrade coordination and shutdown, including automation lifecycle handling and startup diagnostics.
+- **Interface and diagnostics**:
+  - Standardized spacing and corner-radius tokens, refined workflow alerts and tool-error indicators, and improved Agent Skills and settings layouts.
+  - Reordered tray menu entries and made proxy server IDs and API addresses copyable.
+  - Unified localized, safe error feedback and structured diagnostics across frontend and backend, while reducing duplicate errors and noisy runtime/dependency logs.
+- **Model compatibility and maintenance**:
+  - Extended reasoning-summary support across compatible GPT versions, normalized Gemini thinking levels against the model catalog, and aligned Codex client metadata with the actual client surface.
+  - Added tiered retry backoff for rate limits versus other transient model errors and bounded proxy retries to avoid multiplying retry attempts.
+  - Upgraded Tauri to 2.12 and matching plugins/APIs, updated frontend and Rust dependencies with published security fixes, and improved development sidecar builds and desktop bundle boundaries.
 
 ### 🐞 Bug Fixes
 
 - **Workflow**:
-  - Sending a message now always pins the message list to the newest content, so queued or still-growing streaming messages can no longer cover the input box.
+  - Sending a message now always pins the message list to the newest content, so queued or still-growing streaming messages can no longer cover the input box; approval prompts and tail alerts also keep their intended scroll position.
   - The sidebar resize handle now aligns exactly with the sidebar edge.
   - Tool execution no longer freezes the interface while the sandbox runtime is being detected (the UI could previously become unresponsive during tool runs on Ubuntu).
-- **ChatHub**:
+  - Restored tool labels and file-path presentation, kept MCP tools out of built-in tool configuration tabs, and prevented partial inherited settings from clearing agent tools.
+  - Stopping an already-finished workflow is now a no-op; terminal model failures are shown durably, retry messages are classified correctly, and the Continue button stays hidden while submission is pending.
+  - Fixed large backup/history responses, history pagination and event replay, missing runtime events, and recovery of workflow state and approval prompts after reconnects or runtime restarts.
+  - Pending user-decision waits now survive runtime shutdown; workflows remain usable when optional MCP services are unavailable or individual runtime operations fail.
+  - Fixed proxy-backed context compression and language detection, and refreshed context before clearing it.
+- **MCP, Skills and plugins**:
+  - Fixed stale MCP connections, cold-start status updates, host environment initialization, global server lookup and workflow tool discovery after runtime migration.
+  - Restored manual MCP tool calls, preserved tool errors, fixed tool injection and cleanup races, and serialized reconciliation to prevent overlapping lifecycle operations.
+  - Completed installation/verification paths, hardened plugin and skill lifecycle safety, and routed Skill downloads from GitHub through the configured global proxy.
+- **Terminal and shell**:
+  - Fixed duplicate shell entries and output relays, terminal input/rendering, input-method key forwarding, repeated shortcut handling, local screen clearing and preference restoration.
+  - Restored SSH/SCP and remote-transfer target handling; bundled `cscli` commands now resolve to the host executable without bypassing mutation approvals.
+- **ChatHub and docked views**:
   - Links clicked inside a docked chat page now open in the default browser instead of doing nothing.
-- **Sandbox**:
-  - `~/.chatspeed` now resolves to the same location inside the sandbox as on the host, so paths no longer diverge when the sandbox user name differs.
+  - Fixed native window widening/restoration, rounded-corner clipping, responsive plugin layouts, tab visibility and ChatHub entry logos.
+- **Desktop and runtime**:
+  - Restored window resizing on Linux and for windows created hidden; fixed resize hit areas around docked webviews.
+  - Closing Workflow now hides the macOS Dock icon correctly; launching another app instance no longer unexpectedly opens the chat window, and tray labels refresh after changing the interface language.
+  - Fixed stale discovery and provider leases, runtime lock-directory creation, host environment/resource paths, interrupted startup recovery and coordinated shutdown.
+  - Resource protection now recovers correctly after tracked tasks exit.
+- **CCProxy and sandbox**:
+  - Exact model aliases now take priority, and unsupported sampling parameters are filtered from reasoning requests.
+  - Sandbox `~/.chatspeed` paths now match the host even when usernames differ; sandbox image loading is skipped when `msb` is unavailable, and stable microsandbox 0.6.8+ releases are recognized without accepting prereleases.
 
 ---
 
