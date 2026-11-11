@@ -452,7 +452,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 74,
+      "modelCount": 76,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -622,7 +622,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 383,
+      "modelCount": 387,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -714,7 +714,7 @@
       "documentationUrl": "https://docs.github.com/en/copilot",
       "id": "github-copilot",
       "logo": "https://models.dev/logos/github-copilot.svg",
-      "modelCount": 36,
+      "modelCount": 38,
       "name": "GitHub Copilot",
       "protocol": "openai",
       "responses": false
@@ -743,7 +743,7 @@
       "documentationUrl": "https://ai.google.dev/gemini-api/docs/models",
       "id": "google",
       "logo": "https://models.dev/logos/google.svg",
-      "modelCount": 36,
+      "modelCount": 37,
       "name": "Google",
       "protocol": "gemini",
       "responses": false
@@ -752,7 +752,7 @@
       "documentationUrl": "https://cloud.google.com/vertex-ai/generative-ai/docs/models",
       "id": "google-vertex",
       "logo": "https://models.dev/logos/google-vertex.svg",
-      "modelCount": 62,
+      "modelCount": 63,
       "name": "Vertex",
       "responses": false
     },
@@ -981,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 376,
+      "modelCount": 380,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 203,
+      "modelCount": 204,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1071,7 +1071,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 440,
+      "modelCount": 450,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1171,7 +1171,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 204,
+      "modelCount": 205,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1375,7 +1375,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 632,
+      "modelCount": 634,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1385,7 +1385,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 60,
+      "modelCount": 59,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1476,7 +1476,7 @@
       "documentationUrl": "https://ofox.ai/docs",
       "id": "ofox",
       "logo": "https://models.dev/logos/ofox.svg",
-      "modelCount": 150,
+      "modelCount": 151,
       "name": "Ofox",
       "protocol": "openai",
       "responses": false
@@ -1519,7 +1519,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 137,
+      "modelCount": 138,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
@@ -1550,7 +1550,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 376,
+      "modelCount": 379,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -1662,7 +1662,7 @@
       "documentationUrl": "https://docs.primeintellect.ai/inference/overview",
       "id": "prime",
       "logo": "https://models.dev/logos/prime.svg",
-      "modelCount": 70,
+      "modelCount": 72,
       "name": "Prime Inference",
       "protocol": "openai",
       "responses": false
@@ -2162,7 +2162,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 419,
+      "modelCount": 418,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2401,9 +2401,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "210ddaccccc944598c837c42e020a59cd3a6029b6fd45b89536b6fda8a9c401f",
-    "generatedAt": "2026-11-10T11:15:16Z",
+    "catalogSha256": "e44a355a41d5a6dcd7281d6b33004da2c57853d0d162763bfad8e67b7fe5e20b",
+    "generatedAt": "2026-11-11T11:00:17Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "5b8d2f03b24ad5d0856c3780cde9fd27286dbddd"
+    "revision": "d099fd9374fe9f88e403195730392eb92fce77c5"
   }
 }
