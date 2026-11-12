@@ -103,7 +103,7 @@
       "documentationUrl": "https://docs.aimlapi.com",
       "id": "aimlapi",
       "logo": "https://models.dev/logos/aimlapi.svg",
-      "modelCount": 169,
+      "modelCount": 168,
       "name": "AI/ML API",
       "protocol": "openai",
       "responses": false
@@ -452,7 +452,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 76,
+      "modelCount": 77,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -503,7 +503,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 106,
+      "modelCount": 105,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -572,7 +572,7 @@
       "documentationUrl": "https://docs.digitalocean.com/products/gradient-ai-platform/details/models/",
       "id": "digitalocean",
       "logo": "https://models.dev/logos/digitalocean.svg",
-      "modelCount": 84,
+      "modelCount": 86,
       "name": "DigitalOcean",
       "protocol": "openai",
       "responses": false
@@ -642,7 +642,7 @@
       "documentationUrl": "https://engy.ai/pricing",
       "id": "engy",
       "logo": "https://models.dev/logos/engy.svg",
-      "modelCount": 9,
+      "modelCount": 10,
       "name": "engy",
       "protocol": "openai",
       "responses": false
@@ -981,7 +981,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 380,
+      "modelCount": 378,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1061,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 204,
+      "modelCount": 200,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1071,7 +1071,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 450,
+      "modelCount": 443,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1375,7 +1375,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 634,
+      "modelCount": 640,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1395,7 +1395,7 @@
       "documentationUrl": "https://docs.tokenfactory.nebius.com/",
       "id": "nebius",
       "logo": "https://models.dev/logos/nebius.svg",
-      "modelCount": 26,
+      "modelCount": 21,
       "name": "Nebius Token Factory",
       "protocol": "openai",
       "responses": false
@@ -1550,7 +1550,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 379,
+      "modelCount": 377,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2401,9 +2401,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "e44a355a41d5a6dcd7281d6b33004da2c57853d0d162763bfad8e67b7fe5e20b",
-    "generatedAt": "2026-11-11T11:00:17Z",
+    "catalogSha256": "e318eadf0e77e6bbdbac10341852ade4206ba27403d509470db74bfb3da7d694",
+    "generatedAt": "2026-11-12T11:15:59Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "d099fd9374fe9f88e403195730392eb92fce77c5"
+    "revision": "90d301ac0d9b5a7aedab39fec75ecc5c0ffce173"
   }
 }
