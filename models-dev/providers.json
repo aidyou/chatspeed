@@ -391,6 +391,16 @@
       "responses": false
     },
     {
+      "api": "https://ark.ap-southeast.bytepluses.com/api/v3",
+      "documentationUrl": "https://docs.byteplus.com/en/docs/ModelArk/1529329",
+      "id": "byteplus",
+      "logo": "https://models.dev/logos/byteplus.svg",
+      "modelCount": 14,
+      "name": "BytePlus ModelArk",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "documentationUrl": "https://inference-docs.cerebras.ai/models/overview",
       "id": "cerebras",
       "logo": "https://models.dev/logos/cerebras.svg",
@@ -462,7 +472,7 @@
       "documentationUrl": "https://developers.cloudflare.com/workers-ai/models/",
       "id": "cloudflare-workers-ai",
       "logo": "https://models.dev/logos/cloudflare-workers-ai.svg",
-      "modelCount": 28,
+      "modelCount": 29,
       "name": "Cloudflare Workers AI",
       "protocol": "openai",
       "responses": false
@@ -503,7 +513,7 @@
       "documentationUrl": "https://api.cortecs.ai/v1/models",
       "id": "cortecs",
       "logo": "https://models.dev/logos/cortecs.svg",
-      "modelCount": 105,
+      "modelCount": 104,
       "name": "Cortecs",
       "protocol": "openai",
       "responses": false
@@ -513,7 +523,7 @@
       "documentationUrl": "https://www.crossmodel.ai/docs",
       "id": "crossmodel",
       "logo": "https://models.dev/logos/crossmodel.svg",
-      "modelCount": 72,
+      "modelCount": 73,
       "name": "CrossModel",
       "protocol": "openai",
       "responses": false
@@ -622,7 +632,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 387,
+      "modelCount": 395,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -703,7 +713,7 @@
       "documentationUrl": "https://docs.frogbot.ai",
       "id": "frogbot",
       "logo": "https://models.dev/logos/frogbot.svg",
-      "modelCount": 26,
+      "modelCount": 51,
       "name": "FrogBot",
       "protocol": "openai",
       "responses": false
@@ -752,7 +762,7 @@
       "documentationUrl": "https://cloud.google.com/vertex-ai/generative-ai/docs/models",
       "id": "google-vertex",
       "logo": "https://models.dev/logos/google-vertex.svg",
-      "modelCount": 63,
+      "modelCount": 64,
       "name": "Vertex",
       "responses": false
     },
@@ -841,7 +851,7 @@
       "documentationUrl": "https://hyper.charm.land",
       "id": "hyper",
       "logo": "https://models.dev/logos/hyper.svg",
-      "modelCount": 18,
+      "modelCount": 19,
       "name": "Charm Hyper",
       "protocol": "openai",
       "responses": false
@@ -981,7 +991,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 378,
+      "modelCount": 469,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1061,7 +1071,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 200,
+      "modelCount": 201,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1071,7 +1081,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 443,
+      "modelCount": 460,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1171,7 +1181,7 @@
       "documentationUrl": "https://docs.merge.dev/merge-gateway",
       "id": "merge-gateway",
       "logo": "https://models.dev/logos/merge-gateway.svg",
-      "modelCount": 205,
+      "modelCount": 206,
       "name": "Merge Gateway",
       "responses": false
     },
@@ -1375,7 +1385,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 640,
+      "modelCount": 618,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1385,7 +1395,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 59,
+      "modelCount": 60,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1519,7 +1529,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 138,
+      "modelCount": 139,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
@@ -1550,7 +1560,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 377,
+      "modelCount": 383,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2054,7 +2064,7 @@
       "documentationUrl": "https://docs.tinfoil.sh",
       "id": "tinfoil",
       "logo": "https://models.dev/logos/tinfoil.svg",
-      "modelCount": 9,
+      "modelCount": 8,
       "name": "Tinfoil",
       "protocol": "openai",
       "responses": false
@@ -2154,7 +2164,7 @@
       "documentationUrl": "https://docs.venice.ai",
       "id": "venice",
       "logo": "https://models.dev/logos/venice.svg",
-      "modelCount": 126,
+      "modelCount": 127,
       "name": "Venice AI",
       "responses": false
     },
@@ -2162,7 +2172,7 @@
       "documentationUrl": "https://github.com/vercel/ai/tree/5eb85cc45a259553501f535b8ac79a77d0e79223/packages/gateway",
       "id": "vercel",
       "logo": "https://models.dev/logos/vercel.svg",
-      "modelCount": 418,
+      "modelCount": 420,
       "name": "Vercel AI Gateway",
       "responses": false
     },
@@ -2401,9 +2411,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "e318eadf0e77e6bbdbac10341852ade4206ba27403d509470db74bfb3da7d694",
-    "generatedAt": "2026-11-12T11:15:59Z",
+    "catalogSha256": "ec0e2274d8957fde9f6d51f34591f03957d5dcc6ebacfa093bde56c0181f7ac2",
+    "generatedAt": "2026-11-13T11:01:33Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "90d301ac0d9b5a7aedab39fec75ecc5c0ffce173"
+    "revision": "9a517985f4b60125ae89311c53d888cb39b3f40d"
   }
 }
