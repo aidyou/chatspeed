@@ -10,8 +10,9 @@
 //!
 //! - Only an explicit `http` proxy is applied. `none` lets a webview go out directly,
 //!   and `system` is left to the webview, which already follows the system proxy.
-//! - macOS only accepts one from macOS 14, where the WebKit key it needs exists. On an
-//!   older release the proxy is skipped instead of reaching a key that is not there.
+//! - macOS requires the opt-in `macos-webview-proxy` build feature and macOS 14+.
+//!   Default builds leave proxy selection to the system so older SDKs do not have
+//!   to link unavailable Network.framework APIs.
 //!
 //! Neither webview library accepts a proxy after the webview exists, so the settings
 //! are read while it is built.
@@ -27,7 +28,7 @@ use crate::runtime_config::{
 };
 
 /// First macOS release whose webviews accept an explicit proxy.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-webview-proxy"))]
 const MACOS_PROXY_MINIMUM_VERSION: u32 = 14;
 
 /// How a webview reaches the proxy server.
@@ -187,9 +188,14 @@ impl WebviewProxy {
 
     /// Whether the webviews of this platform can be given an explicit proxy.
     fn is_supported() -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(all(target_os = "macos", feature = "macos-webview-proxy"))]
         {
             macos_major_version().is_some_and(|major| major >= MACOS_PROXY_MINIMUM_VERSION)
+        }
+
+        #[cfg(all(target_os = "macos", not(feature = "macos-webview-proxy")))]
+        {
+            false
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -200,7 +206,7 @@ impl WebviewProxy {
 }
 
 /// Major version of the macOS release the application runs on.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-webview-proxy"))]
 fn macos_major_version() -> Option<u32> {
     // `kern.osproductversion` holds the release, for example `14.5`.
     let name = b"kern.osproductversion\0";
@@ -251,6 +257,12 @@ fn macos_major_version() -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(target_os = "macos", not(feature = "macos-webview-proxy")))]
+    #[test]
+    fn default_macos_builds_leave_webview_proxy_selection_to_the_system() {
+        assert!(!WebviewProxy::is_supported());
+    }
 
     /// Guard for the network settings boundary: only a proxy a webview can actually use
     /// is forwarded, so a setting that cannot work leaves the webview direct instead of
@@ -314,7 +326,7 @@ mod tests {
 
     /// The version gate decides whether a proxy is applied at all, so reading it has to
     /// work on macOS: a version that cannot be read would silently disable the proxy.
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "macos-webview-proxy"))]
     #[test]
     fn the_macos_version_is_readable() {
         assert!(macos_major_version().is_some_and(|major| major >= 11));
@@ -342,8 +354,12 @@ mod tests {
         );
         assert!(WebviewProxy::from_snapshot(&snapshot("http", "")).is_none());
 
-        let proxy = WebviewProxy::from_snapshot(&snapshot("http", "http://127.0.0.1:7890"))
-            .expect("a usable http proxy has to be accepted");
+        let proxy = WebviewProxy::from_snapshot(&snapshot("http", "http://127.0.0.1:7890"));
+        if !WebviewProxy::is_supported() {
+            assert!(proxy.is_none());
+            return;
+        }
+        let proxy = proxy.expect("a usable http proxy has to be accepted");
         assert_eq!(proxy.host, "127.0.0.1");
         assert_eq!(proxy.port, 7890);
     }
@@ -369,7 +385,12 @@ mod tests {
             cache.store(RuntimeConfigSnapshot::from_settings(settings));
         }
 
-        let proxy = WebviewProxy::current(&app).expect("the cached proxy has to be used");
+        let proxy = WebviewProxy::current(&app);
+        if !WebviewProxy::is_supported() {
+            assert!(proxy.is_none());
+            return;
+        }
+        let proxy = proxy.expect("the cached proxy has to be used");
         assert_eq!(proxy.host, "127.0.0.1");
         assert_eq!(proxy.port, 7890);
     }

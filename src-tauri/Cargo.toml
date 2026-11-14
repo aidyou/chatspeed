@@ -43,6 +43,9 @@ path = "src/main.rs"
 default          = ["desktop"]
 desktop          = []
 legacy-cli-binary = []
+# Opt in only for builds targeting macOS 14+ with a matching SDK. A runtime
+# version check cannot prevent these proxy APIs from being linked on older SDKs.
+macos-webview-proxy = ["tauri/macos-proxy", "wry/mac-proxy"]
 
 [[bin]]
 name = "cs"
@@ -117,9 +120,9 @@ serde_json                   = "1.0.149"
 serde_yaml                   = "0.9.34-deprecated"
 sha2                         = "0.11.0"
 # The `unstable` feature is required for the same-window child webview API
-# (`Window::add_child` / `WebviewBuilder`) used by the ChatHub view, and `macos-proxy` is
-# what makes `WebviewWindowBuilder::proxy_url` take effect on macOS.
-tauri                        = { version = "2.12.0", features = ["macos-private-api", "macos-proxy", "tray-icon", "unstable"] }
+# (`Window::add_child` / `WebviewBuilder`) used by the ChatHub view.
+# Keep macOS proxy APIs behind the opt-in `macos-webview-proxy` feature above.
+tauri                        = { version = "2.12.0", features = ["macos-private-api", "tray-icon", "unstable"] }
 tauri-plugin-dialog          = "2.8.0"
 tauri-plugin-fs              = "2.6.0"
 tauri-plugin-global-shortcut = "2.4.0"
@@ -149,9 +152,9 @@ globset                      = "0.4.18"
 # The ChatHub page is a webview docked inside the Workflow window. It is created with
 # `wry` directly so the embedded site never receives the Tauri IPC that a Tauri webview
 # inside that window would inherit, and on Linux it is placed through GTK, which is what
-# keeps the page inside the window layout instead of on top of it. `mac-proxy` is what
-# makes `WebViewBuilder::with_proxy_config` take effect on macOS.
-wry                          = { version = "0.57", features = ["mac-proxy"] }
+# keeps the page inside the window layout instead of on top of it. macOS proxy support
+# is enabled only through `macos-webview-proxy` so default builds support older SDKs.
+wry                          = "0.57"
 
 # uncomment when deno and python runtime is ready
 # deno_core                    = { version = "0.331", default-features = false }
