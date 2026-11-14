@@ -307,6 +307,47 @@ for (const action of ['EOF', 'SIGINT', 'SIGTERM']) {
   })
 }
 
+test('Vite compiles shared and workflow SCSS without the native Sass dispatcher', { timeout: 30000 }, async () => {
+  const { createRequire } = await import('node:module')
+  const { fileURLToPath } = await import('node:url')
+  const { parse } = await import('vue/compiler-sfc')
+  const { preprocessCSS, resolveConfig } = await import('vite')
+  const config = await resolveConfig({}, 'serve')
+  const require = createRequire(import.meta.url)
+  const viteRequire = createRequire(require.resolve('vite'))
+
+  // Vite prefers this package name, so it must resolve to the JS-only compiler.
+  const sass = viteRequire('sass-embedded')
+  assert.match(sass.info, /^dart-sass\t/)
+  assert.match(sass.info, /dart2js/)
+
+  const files = [
+    'src/App.vue',
+    'src/components/icon/Icon.vue',
+    'src/components/common/ApiKeyUnlockDialog.vue',
+    'src/components/common/QuitConfirmDialog.vue',
+    'src/views/Workflow.vue',
+    'src/components/workflow/TerminalPanel.vue',
+    'src/style/chatspeed/style.scss'
+  ]
+  const styles = (await Promise.all(files.map(async file => {
+    const filename = fileURLToPath(new URL(file, root))
+    const source = await readFile(filename, 'utf8')
+    if (file.endsWith('.scss')) return [{ filename, source }]
+    return parse(source, { filename }).descriptor.styles
+      .filter(style => style.lang === 'scss')
+      .map((style, index) => ({ filename: `${filename}?vue&type=style&index=${index}&lang.scss`, source: style.content }))
+  }))).flat()
+  assert.ok(styles.length >= files.length)
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await Promise.all(styles.map(async ({ filename, source }) => {
+      const result = await preprocessCSS(source, filename, config)
+      assert.ok(result.code.length > 0, filename)
+    }))
+  }
+})
+
 test('the real project Vite configuration loads and can restart after shutdown', deadline, async () => {
   const { createServer } = await import('vite')
   for (let attempt = 0; attempt < 2; attempt++) {
