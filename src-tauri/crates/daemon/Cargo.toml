@@ -1,6 +1,6 @@
 [package]
 name = "chatspeed-runtime"
-version = "2.0.17"
+version = "2.1.1"
 edition = "2021"
 publish = false
 description = "Headless ChatSpeed control-plane runtime (no Tauri/Wry/GTK)."

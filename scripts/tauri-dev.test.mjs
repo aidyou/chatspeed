@@ -43,10 +43,11 @@ test('runtime PATH probing never starts an interactive login shell', async () =>
   assert.doesNotMatch(source, /\["-l", "-i", "-c", "echo \$PATH"\]/)
 })
 
-test('only a real dev command prebuilds; help, version and other commands remain cheap', () => {
+test('dev and build prebuild sidecars; help, version and other commands remain cheap', () => {
+  assert.equal(needsRuntimeBuild(['build']), true)
   assert.equal(needsRuntimeBuild(['dev']), true)
   assert.equal(needsRuntimeBuild(['-v', 'dev', '--target', 'x']), true)
-  for (const args of [['dev', '--help'], ['dev', '-h'], ['--version'], ['build'], ['info'], []]) {
+  for (const args of [['dev', '--help'], ['dev', '-h'], ['build', '--help'], ['--version'], ['info'], []]) {
     assert.equal(needsRuntimeBuild(args), false)
   }
   assert.equal(needsRuntimeBuild(['dev', '--', '--help']), true)
@@ -105,6 +106,55 @@ test('dev prebuild prepares both real sidecars after clean and refreshes them on
   }
 })
 
+test('release prebuild uses the requested architecture, release profile and executable suffix', async t => {
+  const cwd = await mkdtemp(join(tmpdir(), 'chatspeed-release-sidecars-'))
+  t.after(() => rm(cwd, { recursive: true, force: true }))
+  for (const target of ['x86_64-apple-darwin', 'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc']) {
+    const extension = target.includes('windows') ? '.exe' : ''
+    const targetDir = join(cwd, 'custom-target')
+    const args = ['build', '--target', target, '--bundles', 'nsis']
+    const events = []
+    const inspect = async command => ({ stdout: command === 'rustc'
+      ? 'host: aarch64-apple-darwin\n'
+      : JSON.stringify({ target_directory: targetDir }) })
+    const build = async (command, received) => {
+      assert.equal(command, 'cargo')
+      assert.deepEqual(received, [
+        'build', '--manifest-path', 'src-tauri/Cargo.toml',
+        '-p', 'chatspeed-cli', '-p', 'chatspeed-runtime',
+        '--bin', 'cscli', '--bin', 'chatspeed-runtime', '--release', '--target', target
+      ])
+      const directory = join(targetDir, target, 'release')
+      await mkdir(directory, { recursive: true })
+      for (const name of ['cscli', 'chatspeed-runtime']) {
+        await writeFile(join(directory, `${name}${extension}`), `${name}:${target}`)
+      }
+      events.push('build')
+      return 0
+    }
+    assert.equal(await executeTauri(args, {
+      buildRuntime: received => buildDevBinaries(received, { cwd, inspect, build }),
+      runCli: async received => {
+        assert.equal(received, args)
+        for (const name of ['cscli', 'chatspeed-runtime']) {
+          assert.equal(await readFile(join(cwd, 'src-tauri', 'target', 'release', `${name}-${target}${extension}`), 'utf8'), `${name}:${target}`)
+        }
+        events.push('cli')
+      }
+    }), 0)
+    assert.deepEqual(events, ['build', 'cli'])
+  }
+})
+
+test('release prebuild failure stops before Tauri and the frontend hook is shell-neutral', async () => {
+  assert.equal(await executeTauri(['build', '--target', 'aarch64-pc-windows-msvc'], {
+    buildRuntime: async () => 7,
+    runCli: () => assert.fail('failed sidecars must prevent packaging')
+  }), 7)
+  const config = JSON.parse(await readFile(new URL('src-tauri/tauri.conf.json', root), 'utf8'))
+  assert.equal(config.build.beforeBuildCommand, 'pnpm build')
+})
+
 test('dev prebuild failure never publishes sidecars or starts Tauri', async t => {
   const cwd = await mkdtemp(join(tmpdir(), 'chatspeed-dev-failed-'))
   t.after(() => rm(cwd, { recursive: true, force: true }))
@@ -145,8 +195,8 @@ test('failed/cancelled prebuild does not start Tauri or Vite', async () => {
   }
 })
 
-test('non-dev arguments bypass the build and CLI errors propagate', async () => {
-  const args = ['build', '--target', 'x']
+test('non-build arguments bypass the build and CLI errors propagate', async () => {
+  const args = ['info']
   await executeTauri(args, {
     buildRuntime: () => assert.fail('must not build runtime'),
     runCli: received => assert.equal(received, args)

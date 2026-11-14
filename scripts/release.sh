@@ -76,26 +76,46 @@ update_tauri_config() {
     print_success "Updated version in $file to $version"
 }
 
-# Update version in Cargo.toml
+# Only first-party packages sharing the desktop release version belong here.
+RELEASE_MANIFESTS=(
+    src-tauri/Cargo.toml
+    src-tauri/crates/daemon/Cargo.toml
+    src-tauri/crates/backend/Cargo.toml
+    src-tauri/crates/cli/Cargo.toml
+    src-tauri/crates/client/Cargo.toml
+    src-tauri/crates/contracts/Cargo.toml
+)
+
+# Read package metadata without inspecting dependency version requirements.
+get_package_field() {
+    awk -v key="$2" '
+        /^\[package\]$/ { in_package = 1; next }
+        /^\[/ { in_package = 0 }
+        in_package && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            sub(/^[^=]*=[[:space:]]*"/, "")
+            sub(/".*/, "")
+            print
+            exit
+        }
+    ' "$1"
+}
+
+# Update the release packages together, leaving third-party dependencies alone.
 update_cargo_toml() {
     local version=$1
-    local file="src-tauri/Cargo.toml"
-
-    if [[ ! -f "$file" ]]; then
-        print_error "File not found: $file"
-        exit 1
-    fi
-
-    # Use sed to update version number
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS
-        sed -i '' "s/^version[[:space:]]*=[[:space:]]*\"[^\"]*\"/version     = \"$version\"/" "$file"
-    else
-        # Linux/Windows
-        sed -i "s/^version[[:space:]]*=[[:space:]]*\"[^\"]*\"/version     = \"$version\"/" "$file"
-    fi
-
-    print_success "Updated version in $file to $version"
+    local file
+    for file in "${RELEASE_MANIFESTS[@]}"; do
+        if [[ ! -f "$file" ]]; then
+            print_error "File not found: $file"
+            exit 1
+        fi
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "/^\[package\]$/,/^\[/ s/^version[[:space:]]*=[[:space:]]*\"[^\"]*\"/version = \"$version\"/" "$file"
+        else
+            sed -i "/^\[package\]$/,/^\[/ s/^version[[:space:]]*=[[:space:]]*\"[^\"]*\"/version = \"$version\"/" "$file"
+        fi
+        print_success "Updated version in $file to $version"
+    done
 }
 
 # Update version in vcpkg.json
@@ -120,32 +140,55 @@ update_vcpkg_json() {
     print_success "Updated version in $file to $version"
 }
 
-# Verify that all versions were correctly updated
+# Report every mismatch before allowing any release side effects.
 verify_version_update() {
     local expected_version=$1
+    local failed=0
+    local file actual package locked
 
-    local tauri_version=$(grep '"version"' src-tauri/tauri.conf.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
-    local cargo_version=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
-
-    # Check vcpkg.json version if file exists
-    if [[ -f "vcpkg.json" ]]; then
-        local vcpkg_version=$(grep '"version"' vcpkg.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
-        if [[ "$vcpkg_version" != "$expected_version" ]]; then
-            print_error "Version mismatch in vcpkg.json: expected $expected_version, got $vcpkg_version"
-            exit 1
+    actual=$(get_current_version)
+    if [[ "$actual" != "$expected_version" ]]; then
+        print_error "src-tauri/tauri.conf.json: expected $expected_version, got $actual"
+        failed=1
+    fi
+    for file in "${RELEASE_MANIFESTS[@]}"; do
+        if [[ ! -f "$file" ]]; then
+            print_error "$file: missing release manifest"
+            failed=1
+            continue
+        fi
+        actual=$(get_package_field "$file" version)
+        package=$(get_package_field "$file" name)
+        if [[ -z "$package" || "$actual" != "$expected_version" ]]; then
+            print_error "$file [package] ($package): expected $expected_version, got ${actual:-missing}"
+            failed=1
+        fi
+        locked=""
+        if [[ -n "$package" && -f src-tauri/Cargo.lock ]]; then
+            locked=$(awk -v package="$package" '
+                /^\[\[package\]\]$/ { matches = 0 }
+                /^name = / { matches = ($0 == "name = \"" package "\"") }
+                matches && /^version = / {
+                    sub(/^version = "/, ""); sub(/".*/, ""); print
+                }
+            ' src-tauri/Cargo.lock)
+        fi
+        if [[ "$locked" != "$expected_version" ]]; then
+            print_error "src-tauri/Cargo.lock ($package): expected $expected_version, got ${locked:-missing}"
+            failed=1
+        fi
+    done
+    if [[ -f vcpkg.json ]]; then
+        actual=$(grep '"version"' vcpkg.json | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+        if [[ "$actual" != "$expected_version" ]]; then
+            print_error "vcpkg.json: expected $expected_version, got ${actual:-missing}"
+            failed=1
         fi
     fi
-
-    if [[ "$tauri_version" != "$expected_version" ]]; then
-        print_error "Version mismatch in tauri.conf.json: expected $expected_version, got $tauri_version"
+    if [[ "$failed" -ne 0 ]]; then
+        print_error "Release version consistency check failed; release aborted."
         exit 1
     fi
-
-    if [[ "$cargo_version" != "$expected_version" ]]; then
-        print_error "Version mismatch in Cargo.toml: expected $expected_version, got $cargo_version"
-        exit 1
-    fi
-
     print_success "Version verification passed: $expected_version"
 }
 
@@ -159,12 +202,16 @@ commit_version_changes() {
     cargo metadata --format-version 1 > /dev/null 2>&1 || cargo generate-lockfile
     cd ..
 
-    # Check if there are uncommitted changes in version files
-    if ! git diff --quiet src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock vcpkg.json; then
+    # Validate the generated lockfile before staging, committing, or tagging.
+    verify_version_update "$version"
+    local version_files=(src-tauri/tauri.conf.json "${RELEASE_MANIFESTS[@]}" src-tauri/Cargo.lock)
+    if [[ -f vcpkg.json ]]; then
+        version_files+=(vcpkg.json)
+    fi
+    if ! git diff --quiet -- "${version_files[@]}"; then
         print_info "Committing version changes..."
 
-        # Stage version files
-        git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock vcpkg.json
+        git add -- "${version_files[@]}"
 
         # Commit with chore prefix
         git commit -m "chore: bump version to $version"
@@ -281,10 +328,10 @@ show_usage() {
     echo "  $0 v1.0.1-beta.1     # Release pre-release version"
     echo ""
     echo "The script will:"
-    echo "  1. Update version in src-tauri/tauri.conf.json"
-    echo "  2. Update version in src-tauri/Cargo.toml"
-    echo "  3. Update version in vcpkg.json (if exists)"
-    echo "  4. Create a Git tag (v{version})"
+    echo "  1. Check shared release versions before changing files"
+    echo "  2. Update Tauri config and all six first-party Rust packages"
+    echo "  3. Update vcpkg.json (if present) and Cargo.lock; verify again"
+    echo "  4. Commit version files and create a Git tag (v{version})"
     echo "  5. Push tag to remote repository"
 }
 
@@ -331,6 +378,9 @@ main() {
         exit 1
     fi
 
+    # Fail before modifying files if the existing release packages have drifted.
+    verify_version_update "$current_version"
+
     # Sanitize version string
     version=$(validate_version "$version")
 
@@ -357,10 +407,7 @@ main() {
     update_cargo_toml "$version"
     update_vcpkg_json "$version"
 
-    # Validate updates
-    verify_version_update "$version"
-
-    # Commit and tag
+    # Commit regenerates and verifies the lockfile before any Git mutation.
     commit_version_changes "$version"
     create_and_push_tag "$version"
 
