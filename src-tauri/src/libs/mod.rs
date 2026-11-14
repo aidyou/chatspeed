@@ -11,3 +11,5 @@
 pub use chatspeed_runtime_backend::libs::*;
 
 pub mod webview_proxy;
+#[cfg(target_os = "macos")]
+mod webview_proxy_macos;

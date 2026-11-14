@@ -384,6 +384,14 @@ impl WebviewScraper {
 
         // The scraper leaves through the same network settings as the embedded ChatHub
         // page, and like there the proxy can only be given while the webview is built.
+        #[cfg(target_os = "macos")]
+        if let Some(config) = proxy
+            .as_ref()
+            .and_then(|proxy| WebviewProxy::macos_configuration(&proxy.wry_config()))
+        {
+            builder = builder.with_webview_configuration(config);
+        }
+        #[cfg(not(target_os = "macos"))]
         if let Some(proxy_url) = proxy.and_then(|proxy| proxy.proxy_url()) {
             builder = builder.proxy_url(proxy_url);
         }

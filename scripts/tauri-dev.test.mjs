@@ -307,6 +307,34 @@ for (const action of ['EOF', 'SIGINT', 'SIGTERM']) {
   })
 }
 
+test('macOS WebView proxies resolve optional APIs before navigation without hard links', async () => {
+  const read = path => readFile(new URL(path, root), 'utf8')
+  const [manifest, adapter, shared, page, scraper] = await Promise.all([
+    read('src-tauri/Cargo.toml'),
+    read('src-tauri/src/libs/webview_proxy_macos.rs'),
+    read('src-tauri/src/libs/webview_proxy.rs'),
+    read('src-tauri/src/chat_hub/page.rs'),
+    read('src-tauri/src/scraper/webview_wrapper.rs')
+  ])
+  const declarations = manifest.split('\n').filter(line => !line.trimStart().startsWith('#')).join('\n')
+  assert.doesNotMatch(declarations, /"(?:tauri\/macos-proxy|wry\/mac-proxy|macos-proxy|mac-proxy)"/)
+  assert.match(declarations, /macos-webview-proxy = \[\]/)
+  assert.doesNotMatch(adapter, /extern "C"\s*\{|#\[link\(/)
+  for (const symbol of ['nw_endpoint_create_host', 'nw_proxy_config_create_http_connect', 'nw_proxy_config_create_socksv5']) {
+    assert.ok(adapter.includes(`libc::dlsym(handle, c"${symbol}".as_ptr())`))
+  }
+  assert.match(adapter, /respondsToSelector\(sel!\(setProxyConfigurations:\)\)/)
+  assert.ok(adapter.indexOf('respondsToSelector') < adapter.indexOf('objc2::msg_send!'))
+  assert.match(shared, /MACOS_PROXY_MINIMUM_VERSION: u32 = 14/)
+  assert.match(shared, /major >= MACOS_PROXY_MINIMUM_VERSION\)[\s\S]*?webview_proxy_macos::is_available\(\)/)
+  for (const source of [page, scraper]) {
+    assert.match(source, /WebviewProxy::macos_configuration/)
+    assert.match(source, /with_webview_configuration\(config\)/)
+  }
+  assert.match(page, /#\[cfg\(not\(target_os = "macos"\)\)\][\s\S]*?builder\.with_proxy_config\(proxy\)/)
+  assert.match(scraper, /#\[cfg\(not\(target_os = "macos"\)\)\][\s\S]*?builder\.proxy_url\(proxy_url\)/)
+})
+
 test('Vite compiles shared and workflow SCSS without the native Sass dispatcher', { timeout: 30000 }, async () => {
   const { createRequire } = await import('node:module')
   const { fileURLToPath } = await import('node:url')

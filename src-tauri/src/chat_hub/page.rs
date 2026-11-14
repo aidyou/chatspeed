@@ -88,6 +88,17 @@ pub fn page_builder<'a>(
             NewWindowResponse::Deny
         });
 
+    #[cfg(target_os = "macos")]
+    {
+        use crate::libs::webview_proxy::WebviewProxy;
+        use wry::WebViewBuilderExtMacos;
+
+        match proxy.as_ref().and_then(WebviewProxy::macos_configuration) {
+            Some(config) => builder.with_webview_configuration(config),
+            None => builder,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
     match proxy {
         Some(proxy) => builder.with_proxy_config(proxy),
         None => builder,

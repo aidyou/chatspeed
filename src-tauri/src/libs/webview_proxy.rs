@@ -10,9 +10,8 @@
 //!
 //! - Only an explicit `http` proxy is applied. `none` lets a webview go out directly,
 //!   and `system` is left to the webview, which already follows the system proxy.
-//! - macOS requires the opt-in `macos-webview-proxy` build feature and macOS 14+.
-//!   Default builds leave proxy selection to the system so older SDKs do not have
-//!   to link unavailable Network.framework APIs.
+//! - macOS requires macOS 14+ and the corresponding Network and WebKit APIs.
+//!   These are checked at runtime without linking symbols unavailable on older SDKs.
 //!
 //! Neither webview library accepts a proxy after the webview exists, so the settings
 //! are read while it is built.
@@ -28,7 +27,7 @@ use crate::runtime_config::{
 };
 
 /// First macOS release whose webviews accept an explicit proxy.
-#[cfg(all(target_os = "macos", feature = "macos-webview-proxy"))]
+#[cfg(target_os = "macos")]
 const MACOS_PROXY_MINIMUM_VERSION: u32 = 14;
 
 /// How a webview reaches the proxy server.
@@ -160,6 +159,7 @@ impl WebviewProxy {
     ///
     /// `None` when the proxy cannot be written as a URL, which leaves the window
     /// without a proxy instead of keeping it from opening.
+    #[cfg(any(not(target_os = "macos"), test))]
     pub fn proxy_url(&self) -> Option<Url> {
         let scheme = match self.scheme {
             ProxyScheme::Http => "http",
@@ -186,16 +186,23 @@ impl WebviewProxy {
         }
     }
 
+    /// macOS proxy settings must be installed before the first navigation.
+    #[cfg(target_os = "macos")]
+    pub fn macos_configuration(
+        proxy: &ProxyConfig,
+    ) -> Option<objc2::rc::Retained<objc2_web_kit::WKWebViewConfiguration>> {
+        if !Self::is_supported() {
+            return None;
+        }
+        super::webview_proxy_macos::configuration(proxy)
+    }
+
     /// Whether the webviews of this platform can be given an explicit proxy.
     fn is_supported() -> bool {
-        #[cfg(all(target_os = "macos", feature = "macos-webview-proxy"))]
+        #[cfg(target_os = "macos")]
         {
             macos_major_version().is_some_and(|major| major >= MACOS_PROXY_MINIMUM_VERSION)
-        }
-
-        #[cfg(all(target_os = "macos", not(feature = "macos-webview-proxy")))]
-        {
-            false
+                && super::webview_proxy_macos::is_available()
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -206,7 +213,7 @@ impl WebviewProxy {
 }
 
 /// Major version of the macOS release the application runs on.
-#[cfg(all(target_os = "macos", feature = "macos-webview-proxy"))]
+#[cfg(target_os = "macos")]
 fn macos_major_version() -> Option<u32> {
     // `kern.osproductversion` holds the release, for example `14.5`.
     let name = b"kern.osproductversion\0";
@@ -258,10 +265,12 @@ fn macos_major_version() -> Option<u32> {
 mod tests {
     use super::*;
 
-    #[cfg(all(target_os = "macos", not(feature = "macos-webview-proxy")))]
+    #[cfg(target_os = "macos")]
     #[test]
-    fn default_macos_builds_leave_webview_proxy_selection_to_the_system() {
-        assert!(!WebviewProxy::is_supported());
+    fn unsupported_macos_versions_leave_proxy_selection_to_the_system() {
+        if macos_major_version().is_some_and(|major| major < MACOS_PROXY_MINIMUM_VERSION) {
+            assert!(!WebviewProxy::is_supported());
+        }
     }
 
     /// Guard for the network settings boundary: only a proxy a webview can actually use
@@ -326,7 +335,7 @@ mod tests {
 
     /// The version gate decides whether a proxy is applied at all, so reading it has to
     /// work on macOS: a version that cannot be read would silently disable the proxy.
-    #[cfg(all(target_os = "macos", feature = "macos-webview-proxy"))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_macos_version_is_readable() {
         assert!(macos_major_version().is_some_and(|major| major >= 11));

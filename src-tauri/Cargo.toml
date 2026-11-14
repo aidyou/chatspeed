@@ -43,9 +43,8 @@ path = "src/main.rs"
 default          = ["desktop"]
 desktop          = []
 legacy-cli-binary = []
-# Opt in only for builds targeting macOS 14+ with a matching SDK. A runtime
-# version check cannot prevent these proxy APIs from being linked on older SDKs.
-macos-webview-proxy = ["tauri/macos-proxy", "wry/mac-proxy"]
+# Retained for existing build commands; proxy support is detected at runtime now.
+macos-webview-proxy = []
 
 [[bin]]
 name = "cs"
@@ -121,7 +120,7 @@ serde_yaml                   = "0.9.34-deprecated"
 sha2                         = "0.11.0"
 # The `unstable` feature is required for the same-window child webview API
 # (`Window::add_child` / `WebviewBuilder`) used by the ChatHub view.
-# Keep macOS proxy APIs behind the opt-in `macos-webview-proxy` feature above.
+# macOS proxy APIs are resolved dynamically to keep older SDKs and systems usable.
 tauri                        = { version = "2.12.0", features = ["macos-private-api", "tray-icon", "unstable"] }
 tauri-plugin-dialog          = "2.8.0"
 tauri-plugin-fs              = "2.6.0"
@@ -152,14 +151,19 @@ globset                      = "0.4.18"
 # The ChatHub page is a webview docked inside the Workflow window. It is created with
 # `wry` directly so the embedded site never receives the Tauri IPC that a Tauri webview
 # inside that window would inherit, and on Linux it is placed through GTK, which is what
-# keeps the page inside the window layout instead of on top of it. macOS proxy support
-# is enabled only through `macos-webview-proxy` so default builds support older SDKs.
+# keeps the page inside the window layout instead of on top of it. Do not enable
+# `mac-proxy`: its hard-linked Network APIs prevent older macOS SDKs from linking.
 wry                          = "0.57"
 
 # uncomment when deno and python runtime is ready
 # deno_core                    = { version = "0.331", default-features = false }
 # pyo3                         = { version = "0.23.3", features = ["auto-initialize"] }
 # v8                           = { version = "130.0.1", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSObject"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "WKWebViewConfiguration", "WKWebsiteDataStore"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Power", "Win32_UI_WindowsAndMessaging"] }
