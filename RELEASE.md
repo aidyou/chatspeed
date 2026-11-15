@@ -2,6 +2,19 @@
 
 # Release Notes
 
+## [2.1.2]
+
+### Bug Fixes
+
+- **macOS 12 Workflow compatibility**: Removed regular-expression lookbehind from reasoning-preview sentence splitting and terminal `www.` link detection. Older system WebViews could reject these expressions while loading the Workflow route, leaving the task window blank. Sentence previews and terminal link boundaries are preserved.
+- **macOS WebView proxies**: Resolve newer Network proxy APIs at runtime instead of hard-linking them. ChatHub and the WebView scraper apply configured HTTP/SOCKS5 proxies when the required macOS and WebKit capabilities are available; older systems retain system networking. Windows/Linux and Rust HTTP-client proxy behavior are unchanged.
+- **Development on older macOS**: Replaced the native Sass compiler with the same-version JavaScript implementation to avoid the Dart VM's macOS 14 minimum requirement and the resulting `Tried writing to closed dispatcher` errors on macOS 12.
+
+### Maintenance
+
+- Added macOS 12 compatibility requirements and focused regressions covering frontend regex behavior, optional WebView proxy APIs, and JavaScript Sass resolution.
+- Source builds upgrading from an earlier checkout must run `pnpm install --frozen-lockfile` and restart the development server to use the updated Sass dependency.
+
 ## [2.0.18]
 
 ### 🚀 New Features

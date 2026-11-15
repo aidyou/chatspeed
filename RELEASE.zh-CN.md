@@ -2,6 +2,19 @@
 
 # 发布日志
 
+## [2.1.2]
+
+### 修复
+
+- **macOS 12 任务窗口兼容性**：移除思考预览分句与终端 `www.` 链接识别中的正则后行断言。旧版系统 WebView 可能在加载任务路由时拒绝解析这些表达式，导致任务窗口空白；修复后保留原有分句预览及终端链接边界。
+- **macOS WebView 代理**：通过运行时动态查找新版 Network 代理 API，替代硬链接。ChatHub 与 WebView 抓取器在系统及 WebKit 能力支持时应用配置的 HTTP/SOCKS5 代理，旧系统沿用系统网络配置；Windows/Linux 与 Rust HTTP 客户端的代理行为不变。
+- **旧版 macOS 开发环境**：将原生 Sass 编译器替换为同版本 JavaScript 实现，避免 Dart VM 要求 macOS 14 而在 macOS 12 上退出，继而触发 `Tried writing to closed dispatcher` 样式编译错误。
+
+### 维护
+
+- 新增 macOS 12 兼容性约束及定向回归，覆盖前端正则行为、可选 WebView 代理 API 和 JavaScript Sass 依赖解析。
+- 从旧 checkout 更新源码后，需要执行 `pnpm install --frozen-lockfile` 并重启开发服务器，才能使用更新后的 Sass 依赖。
+
 ## [2.0.18]
 
 ### 🚀 新功能
