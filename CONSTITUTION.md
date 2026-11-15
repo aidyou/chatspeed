@@ -2,10 +2,68 @@
 
 ## Scope
 
-These rules apply to logging and error diagnostics throughout the repository.
+These rules apply to platform compatibility, logging, and error diagnostics
+throughout the repository.
 Read them together with `AGENTS.md` and the applicable module constitution.
 Module-specific rules continue to protect their existing runtime, persistence,
 and protocol contracts. This document does not authorize unrelated migrations.
+
+## Platform Compatibility
+
+### 1. macOS 12 runtime support is mandatory
+
+- Desktop releases must remain runnable on macOS 12, including Intel macOS 12.7.6.
+  Do not raise the effective minimum OS version through dependencies, native
+  symbols, frontend syntax, or build tools without explicit approval.
+- Tauri uses the system WKWebView on macOS. A successful run in current Chrome,
+  Node.js, or a newer Safari does not prove compatibility with macOS 12 WebKit.
+  Treat development-server output and packaged frontend assets as separate
+  compatibility paths; both must remain usable on the supported WebView.
+
+### 2. Frontend modules must parse before capability detection can help
+
+- Do not use regular-expression lookbehind (`(?<=...)` or `(?<!...)`) in
+  browser-executed source, including regex literals and `RegExp` constructors.
+  Use ordinary matching with explicit boundary checks or equivalent scanning.
+  A literal inside an unused function still prevents the importing route from
+  loading on older WebKit; a runtime guard around that function cannot fix it.
+- Review third-party modules in the affected import chain for unsupported syntax
+  and browser APIs. Lazy loading delays a parse failure; it does not make the
+  dependency compatible. Do not assume Vite/esbuild targets rewrite lookbehind
+  or polyfill missing runtime APIs.
+- Compatibility rewrites must preserve matching semantics, punctuation,
+  whitespace, offsets, and link boundaries as applicable. Add focused behavior
+  regressions and a guard against reintroducing the unsupported syntax. Modern
+  Node-only reference expressions may live in test files that are never shipped
+  to the WebView.
+
+### 3. Optional native capabilities must not prevent startup
+
+- Newer macOS APIs must be dynamically resolved or demonstrably weak-linked,
+  with runtime OS and capability checks before use. A version check alone does
+  not remove a hard-linked symbol or make it available to an older SDK.
+- For WebView proxies, keep Wry/Tauri's hard-linking `mac-proxy` / `macos-proxy`
+  features disabled. Reuse the shared dynamic adapter, configure supported
+  proxies before the first navigation, and retain system networking when the
+  required APIs are unavailable. Keep Windows/Linux and Rust HTTP-client proxy
+  behavior unchanged unless separately requested.
+- Prefer retaining the ability to compile on macOS 12 where practical, but never
+  trade away macOS 12 runtime support merely to simplify builds on newer SDKs.
+
+### 4. Build dependencies and verification are part of compatibility
+
+- Check the OS requirements of native executables shipped by build dependencies,
+  not just their Node.js package requirements. The native Sass/Dart VM previously
+  required macOS 14 and failed on macOS 12, leaving Vite with
+  `Tried writing to closed dispatcher`. Preserve the JS-only Sass resolution
+  unless a replacement is verified on the supported systems; check what Vite
+  actually resolves, including optional peers, rather than only `package.json`.
+- For compatibility changes, run focused regressions and inspect the resolved
+  dependency/features as relevant. Verify macOS 12 startup and affected routes
+  in both development and packaged builds when a suitable machine is available;
+  verify newer-system behavior when adding a capability fallback. Explicitly
+  report unavailable or skipped checks. Compilation, formatting, source guards,
+  and tests on a modern engine alone do not prove old-system runtime support.
 
 ## Logging and Error Diagnostics
 
