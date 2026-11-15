@@ -1,6 +1,6 @@
 {
   "name": "chatspeed",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "dependencies": [
     "sqlite3",
     "bzip2"
