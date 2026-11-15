@@ -40,7 +40,10 @@ export function useWorkflowChat({ currentWorkflowId }) {
   // Get last sentence from text (split by punctuation)
   const getLastSentence = (text) => {
     if (!text) return ''
-    const sentences = text.split(/(?<=[。！？.!?])\s*/).filter((s) => s.trim())
+    // Older WKWebView versions reject lookbehind even before this helper runs.
+    const sentences = (text.match(/[^。！？.!?]*[。！？.!?]|[^。！？.!?]+$/g) || [])
+      .map((sentence, index) => index === 0 ? sentence : sentence.replace(/^\s+/, ''))
+      .filter((sentence) => sentence.trim())
     return sentences[sentences.length - 1] || text.slice(-50)
   }
 
