@@ -51,10 +51,10 @@ use crate::workflow::react::runtime_observation::{
     runtime_observation_metadata, runtime_observation_metadata_with_visibility,
     RuntimeObservationLlmVisibility, RuntimeObservationType, RuntimeObservationUiVisibility,
 };
+#[cfg(not(feature = "desktop"))]
+use crate::workflow::react::security::workspace_walk_builder;
 #[cfg(test)]
 use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
-#[cfg(not(feature = "desktop"))]
-use crate::workflow::react::security::{is_protected_ignore_path, workspace_walk_builder};
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::signals::{stash_runtime_signal, SignalType};
 #[cfg(not(feature = "desktop"))]
@@ -874,13 +874,7 @@ fn canonical_allowed_roots(allowed_paths: &[String]) -> Vec<PathBuf> {
 
 #[cfg(not(feature = "desktop"))]
 fn is_path_within_allowed_roots(path: &Path, allowed_roots: &[PathBuf]) -> Option<PathBuf> {
-    if is_protected_ignore_path(path) {
-        return None;
-    }
     let canonical_path = fs::canonicalize(path).ok()?;
-    if is_protected_ignore_path(&canonical_path) {
-        return None;
-    }
     allowed_roots
         .iter()
         .any(|root| canonical_path.starts_with(root))
@@ -909,9 +903,6 @@ fn format_at_mention_token(path: &str) -> String {
 #[cfg(not(feature = "desktop"))]
 fn resolve_at_mention_targets(pattern: &str, allowed_roots: &[PathBuf]) -> Vec<PathBuf> {
     let pattern_path = Path::new(pattern);
-    if is_protected_ignore_path(pattern_path) {
-        return Vec::new();
-    }
     let candidate_patterns = if pattern_path.is_absolute() {
         vec![pattern_path.to_path_buf()]
     } else {
@@ -5948,7 +5939,7 @@ pub(crate) fn search_workspace_files_core(
 
     for root_str in paths {
         let base = PathBuf::from(&root_str);
-        if is_protected_ignore_path(&base) || !base.exists() {
+        if !base.exists() {
             continue;
         }
 
@@ -7361,20 +7352,26 @@ mod tests {
     }
 
     #[test]
-    fn protected_ignore_paths_never_enter_mention_context_or_suggestions() {
+    fn protected_ignore_paths_are_available_to_mentions_and_suggestions() {
         let root = tempfile::tempdir().unwrap();
         let safe = root.path().join(".gitignore.bak");
         std::fs::write(&safe, "safe fixture content").unwrap();
-        let roots = vec![root.path().to_path_buf()];
+        let roots = vec![root.path().canonicalize().unwrap()];
         for name in [".gitignore", ".csignore", "nested/.gitignore"] {
-            assert!(resolve_at_mention_targets(name, &roots).is_empty());
+            let path = root.path().join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "policy fixture\n").unwrap();
+            assert_eq!(
+                resolve_at_mention_targets(name, &roots),
+                vec![path.canonicalize().unwrap()]
+            );
             let (_, attached) = inject_at_mentions(
                 &format!("@{name}"),
                 &[root.path().to_string_lossy().into_owned()],
             );
-            assert!(attached.is_empty());
-            assert!(search_workspace_files_core(
-                vec![root.path().join(name).to_string_lossy().into_owned()],
+            assert!(!attached.is_empty());
+            assert!(!search_workspace_files_core(
+                vec![path.to_string_lossy().into_owned()],
                 String::new()
             )
             .unwrap()
@@ -7382,15 +7379,15 @@ mod tests {
         }
         assert_eq!(
             resolve_at_mention_targets(".gitignore.bak", &roots),
-            vec![safe]
+            vec![safe.canonicalize().unwrap()]
         );
         let results = search_workspace_files_core(
             vec![root.path().to_string_lossy().into_owned()],
             "gitignore".into(),
         )
         .unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].name, ".gitignore.bak");
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().any(|file| file.name == ".gitignore.bak"));
     }
 
     #[test]

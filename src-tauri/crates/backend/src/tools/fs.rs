@@ -68,11 +68,6 @@ fn validate_tool_path_for_listing(
     path: &Path,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> Result<(), ToolError> {
-    if is_protected_ignore_path(path) {
-        return Err(ToolError::Security(
-            "Protected ignore policy path".to_string(),
-        ));
-    }
     if let Some(path_guard) = path_guard {
         let guard = path_guard.read().map_err(|e| {
             ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
@@ -90,14 +85,23 @@ fn validate_tool_path_for_listing(
     Ok(())
 }
 
+fn validate_tool_path_for_write(
+    path: &Path,
+    path_guard: Option<&Arc<RwLock<PathGuard>>>,
+) -> Result<(), ToolError> {
+    if is_protected_ignore_path(path) {
+        return Err(ToolError::Security(
+            "Ignore policy files are read-only".to_string(),
+        ));
+    }
+    validate_tool_path_for_listing(path, path_guard)
+}
+
 fn is_tool_path_allowed(
     path: &Path,
     is_dir: bool,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> Result<bool, ToolError> {
-    if is_protected_ignore_path(path) {
-        return Ok(false);
-    }
     let Some(path_guard) = path_guard else {
         return Ok(true);
     };
@@ -512,7 +516,7 @@ fn execute_edit_file(
     }
 
     let resolved_path = resolve_tool_path(path_str, path_guard);
-    validate_tool_path_for_listing(&resolved_path, path_guard)?;
+    validate_tool_path_for_write(&resolved_path, path_guard)?;
     let raw_content = fs::read_to_string(&resolved_path).map_err(|e| {
         ToolError::IoError(format!(
             "Read failed: {}. Ensure the file exists and is readable.",
@@ -774,7 +778,7 @@ impl ToolDefinition for WriteFile {
             .ok_or(ToolError::InvalidParams("content is required".to_string()))?;
         let overwrite = params["overwrite"].as_bool().unwrap_or(false);
         let path = resolve_tool_path(path_str, self.path_guard.as_ref());
-        validate_tool_path_for_listing(&path, self.path_guard.as_ref())?;
+        validate_tool_path_for_write(&path, self.path_guard.as_ref())?;
         let mut backup_path: Option<PathBuf> = None;
         let mut overwritten = false;
         let mut old_content: Option<String> = None;
@@ -1250,14 +1254,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protected_ignore_paths_deny_native_file_tools_without_guard() {
+    async fn protected_ignore_paths_allow_native_reads_but_deny_writes_without_guard() {
         let root = stable_temp_dir();
         for name in [".gitignore", ".csignore", "nested/.gitignore"] {
-            let path = root.path().join(name).to_string_lossy().into_owned();
-            assert!(matches!(
-                ReadFile::default().call(json!({"file_path": path})).await,
-                Err(ToolError::Security(_))
-            ));
+            let file = root.path().join(name);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, "old\n").unwrap();
+            let path = file.to_string_lossy().into_owned();
+            assert!(ReadFile::default()
+                .call(json!({"file_path": path}))
+                .await
+                .is_ok());
             assert!(matches!(
                 WriteFile::default()
                     .call(json!({"file_path": path, "content": "blocked"}))
@@ -1274,7 +1281,16 @@ mod tests {
                 .call(json!({"path": path}))
                 .await
                 .is_err());
+            assert_eq!(fs::read_to_string(&file).unwrap(), "old\n");
         }
+        let listing = ListDir::default()
+            .call(json!({"path": root.path().to_string_lossy()}))
+            .await
+            .unwrap()
+            .content
+            .unwrap();
+        assert!(listing.contains(".gitignore"));
+        assert!(listing.contains(".csignore"));
     }
 
     #[tokio::test]
@@ -1689,7 +1705,8 @@ mod tests {
         assert!(backup_path.ends_with(".bak"));
         assert!(backup_path.starts_with("/tmp/"));
         let physical_backup_path = resolve_ai_temp_path(Path::new(backup_path));
-        assert!(physical_backup_path.starts_with(std::env::temp_dir()));
+        assert!(physical_backup_path
+            .starts_with(crate::libs::ai_temp::ai_temp_physical_root().unwrap()));
         assert_eq!(fs::read_to_string(&path).unwrap(), "new content");
         assert_eq!(
             fs::read_to_string(&physical_backup_path).unwrap(),

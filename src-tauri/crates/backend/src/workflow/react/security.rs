@@ -37,7 +37,7 @@ const SENSITIVE_SYSTEM_PATHS: &[&str] = &[
 
 pub const CHATSPEED_IGNORE_FILE: &str = ".csignore";
 
-/// Ignore policy files are configuration, never AI-visible file targets.
+/// Ignore policy files may be inspected, but AI must never mutate them.
 pub fn is_protected_ignore_path(path: &Path) -> bool {
     fn has_protected_component(path: &Path) -> bool {
         path.components().any(|component| {
@@ -117,12 +117,11 @@ pub fn workspace_walk_builder(path: &Path) -> ignore::WalkBuilder {
         .hidden(false)
         .add_custom_ignore_filename(CHATSPEED_IGNORE_FILE);
     builder.filter_entry(|entry| {
-        !is_protected_ignore_path(entry.path())
-            && (entry.depth() == 0
-                || entry
-                    .file_name()
-                    .to_str()
-                    .is_none_or(|name| !is_workspace_noise_name(name)))
+        entry.depth() == 0
+            || entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| !is_workspace_noise_name(name))
     });
     builder
 }
@@ -388,20 +387,8 @@ impl PathGuard {
                 None => return Ok(false),
             }
         };
-        if is_protected_ignore_path(&abs_path) {
-            return Err(WorkflowEngineError::Security(format!(
-                "Path Access Denied: {:?} is a protected ignore policy path",
-                target
-            )));
-        }
         let requested_path = Self::normalize_path(&abs_path);
         let final_path = Self::resolve_physical_path(&requested_path);
-        if is_protected_ignore_path(&final_path) {
-            return Err(WorkflowEngineError::Security(format!(
-                "Path Access Denied: {:?} resolves to a protected ignore policy path",
-                target
-            )));
-        }
 
         for root in self.sandbox_roots.iter().chain(self.workspace_roots.iter()) {
             if final_path.starts_with(&root.path) {
@@ -434,7 +421,7 @@ impl PathGuard {
             }
         };
 
-        if is_protected_ignore_path(&abs_path) {
+        if (is_write || is_delete) && is_protected_ignore_path(&abs_path) {
             return Err(WorkflowEngineError::Security(format!(
                 "Path Access Denied: {:?} is a protected ignore policy path",
                 target
@@ -442,7 +429,7 @@ impl PathGuard {
         }
         let requested_path = Self::normalize_path(&abs_path);
         let final_path = Self::resolve_physical_path(&requested_path);
-        if is_protected_ignore_path(&final_path) {
+        if (is_write || is_delete) && is_protected_ignore_path(&final_path) {
             return Err(WorkflowEngineError::Security(format!(
                 "Path Access Denied: {:?} resolves to a protected ignore policy path",
                 target
@@ -634,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_ignore_paths_deny_all_guard_operations() {
+    fn protected_ignore_paths_allow_reads_but_deny_mutations() {
         let root = isolated_temp_dir();
         let guard = PathGuard::new(
             vec![root.path().to_path_buf()],
@@ -648,11 +635,12 @@ mod tests {
             "nested/../.csignore",
         ] {
             for path in [PathBuf::from(name), root.path().join(name)] {
-                for (write, delete) in [(false, false), (true, false), (false, true)] {
+                assert!(guard.validate(&path, false, false, false).is_ok());
+                for (write, delete) in [(true, false), (false, true), (true, true)] {
                     assert!(guard.validate(&path, false, write, delete).is_err());
                 }
-                assert!(guard.validate_for_listing(&path, false).is_err());
-                assert!(!guard.is_chatspeed_allowed(&path, false).unwrap_or(false));
+                assert!(guard.validate_for_listing(&path, false).is_ok());
+                assert!(guard.is_chatspeed_allowed(&path, false).unwrap());
             }
         }
         assert!(guard

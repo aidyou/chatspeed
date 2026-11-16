@@ -4,9 +4,7 @@ use crate::tools::llm_output::{preview_grep_lines_for_llm, preview_path_lines_fo
 use crate::tools::{NativeToolResult, ToolCallResult, ToolCategory, ToolDefinition, ToolError};
 #[cfg(test)]
 use crate::workflow::react::security::CHATSPEED_IGNORE_FILE;
-use crate::workflow::react::security::{
-    is_protected_ignore_path, workspace_walk_builder, PathGuard,
-};
+use crate::workflow::react::security::{workspace_walk_builder, PathGuard};
 use async_trait::async_trait;
 use globset::{Glob as GlobPattern, GlobSet, GlobSetBuilder};
 use regex::Regex;
@@ -64,11 +62,6 @@ fn validate_search_path(
     path: &Path,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> Result<(), ToolError> {
-    if is_protected_ignore_path(path) {
-        return Err(ToolError::Security(
-            "Protected ignore policy path".to_string(),
-        ));
-    }
     if let Some(path_guard) = path_guard {
         let guard = path_guard.read().map_err(|e| {
             ToolError::ExecutionFailed(crate::error_diagnostics::FailureMessage::leaf(format!(
@@ -91,9 +84,6 @@ fn is_search_path_allowed(
     is_dir: bool,
     path_guard: Option<&Arc<RwLock<PathGuard>>>,
 ) -> Result<bool, ToolError> {
-    if is_protected_ignore_path(path) {
-        return Ok(false);
-    }
     let Some(path_guard) = path_guard else {
         return Ok(true);
     };
@@ -642,15 +632,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protected_ignore_paths_deny_native_search_without_guard() {
+    async fn protected_ignore_paths_allow_native_search_without_guard() {
         let root = stable_temp_dir();
         for name in [".gitignore", ".csignore", "nested/.gitignore"] {
-            let path = root.path().join(name).to_string_lossy().into_owned();
-            assert!(Grep::default()
+            let file = root.path().join(name);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, "needle\n").unwrap();
+            let path = file.to_string_lossy().into_owned();
+            let result = Grep::default()
                 .call(json!({"path": path, "pattern": "needle"}))
                 .await
-                .is_err());
-            assert!(!is_search_path_allowed(Path::new(&path), false, None).unwrap());
+                .unwrap();
+            assert!(result.content.unwrap().contains("needle"));
+            assert!(is_search_path_allowed(Path::new(&path), false, None).unwrap());
         }
     }
 

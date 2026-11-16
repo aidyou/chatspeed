@@ -21,7 +21,7 @@ use crate::tools::shell_output::{
 use crate::tools::{NativeToolResult, ToolCategory, ToolDefinition, ToolError};
 use crate::workflow::react::error::WorkflowEngineError;
 use crate::workflow::react::gateway::Gateway;
-use crate::workflow::react::security::PathGuard;
+use crate::workflow::react::security::{is_protected_ignore_path, PathGuard};
 use crate::workflow::react::types::GatewayPayload;
 use async_trait::async_trait;
 use regex::Regex;
@@ -931,6 +931,7 @@ impl ShellPolicyEngine {
                             restrict_to_planning,
                             false,
                             true,
+                            false,
                         ) {
                             ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                             ShellDecision::Review(reason) => {
@@ -974,7 +975,14 @@ impl ShellPolicyEngine {
             }
 
             let arg_index = i.saturating_sub(current_binary_index + 1);
-            let command_args = tokens.get(current_binary_index + 1..).unwrap_or(&[]);
+            let remaining_args = tokens.get(current_binary_index + 1..).unwrap_or(&[]);
+            let segment_end = remaining_args
+                .iter()
+                .position(|arg| {
+                    separators.contains(&arg.as_str()) || redirection_ops.contains(&arg.as_str())
+                })
+                .unwrap_or(remaining_args.len());
+            let command_args = &remaining_args[..segment_end];
             let is_operand = !token.starts_with('-')
                 && !(Self::is_null_device(token)
                     && i > 0
@@ -995,6 +1003,11 @@ impl ShellPolicyEngine {
                     restrict_to_planning,
                     is_delete,
                     force_path_validation,
+                    arg_index < command_args.len()
+                        && Self::allows_ignore_policy_read(&current_binary, command_args)
+                        && !(restrict_to_planning
+                            && current_binary == "git"
+                            && command_args.first().is_some_and(|arg| arg == "add")),
                 ) {
                     ShellDecision::Deny(reason) => return ShellDecision::Deny(reason),
                     ShellDecision::Review(reason) => {
@@ -1492,12 +1505,37 @@ impl ShellPolicyEngine {
         }
     }
 
+    fn allows_ignore_policy_read(command: &str, arguments: &[String]) -> bool {
+        // This exception only changes access to policy files, not general shell approval.
+        match command {
+            "cat" | "head" | "tail" | "nl" | "wc" | "stat" | "ls" | "diff" | "cmp" | "comm"
+            | "grep" | "egrep" | "fgrep" => true,
+            "rg" => !arguments
+                .iter()
+                .any(|arg| arg == "--pre" || arg.starts_with("--pre=")),
+            "git" => {
+                let Some(subcommand) = arguments.first().map(String::as_str) else {
+                    return false;
+                };
+                matches!(subcommand, "diff" | "show" | "status" | "add")
+                    && !arguments.iter().any(|arg| {
+                        arg == "--output"
+                            || arg.starts_with("--output=")
+                            || arg == "--ext-diff"
+                            || arg == "--textconv"
+                    })
+            }
+            _ => false,
+        }
+    }
+
     fn validate_path_token(
         &self,
         token: &str,
         restrict_to_planning: bool,
         is_delete: bool,
         force_path_validation: bool,
+        allow_ignore_policy_read: bool,
     ) -> ShellDecision {
         if token.starts_with('~') {
             return ShellDecision::Deny(
@@ -1521,10 +1559,22 @@ impl ShellPolicyEngine {
                         || expanded_str.starts_with('.')
                     {
                         let valid = if let Ok(guard) = self.path_guard.read() {
+                            let target = Path::new(expanded_str);
+                            let resolved = if target.is_absolute() {
+                                target.to_path_buf()
+                            } else {
+                                guard
+                                    .get_primary_root()
+                                    .map(|root| root.join(target))
+                                    .unwrap_or_else(|| target.to_path_buf())
+                            };
+                            let read_only_policy = allow_ignore_policy_read
+                                && !is_delete
+                                && is_protected_ignore_path(&resolved);
                             guard.validate(
-                                Path::new(expanded_str),
+                                target,
                                 restrict_to_planning,
-                                true,
+                                !read_only_policy,
                                 is_delete,
                             )
                         } else {
@@ -4510,7 +4560,7 @@ mod tests {
         println!("Project root: {:?}", project_root);
 
         for (path, desc) in test_cases {
-            let decision = engine.validate_path_token(path, false, false, false);
+            let decision = engine.validate_path_token(path, false, false, false, false);
             println!("\nPath: {} ({})", path, desc);
             println!("Decision: {:?}", decision);
 
@@ -5730,6 +5780,95 @@ mod tests {
             ),
             ShellDecision::Deny(_)
         ));
+    }
+
+    #[test]
+    fn protected_ignore_shell_reads_and_git_staging_preserve_write_protection() {
+        let root = stable_temp_dir();
+        let project = root.path().canonicalize().unwrap();
+        for name in [".gitignore", ".csignore"] {
+            std::fs::write(project.join(name), "ignored.txt\n").unwrap();
+        }
+        let engine = ShellPolicyEngine::new(
+            Arc::new(RwLock::new(PathGuard::new(vec![project], vec![], vec![]))),
+            vec![],
+        );
+        for command in [
+            "cat .gitignore",
+            "head -10 .csignore",
+            "grep ignored .gitignore",
+            "rg ignored .csignore",
+            "diff .gitignore .csignore",
+            "git diff -- .gitignore .csignore",
+            "git diff --cached -- .gitignore",
+            "git add -- .gitignore .csignore",
+            "git status -- .gitignore",
+            "cat .gitignore | head -10",
+            "git diff -- .gitignore && git add -- .gitignore",
+        ] {
+            assert!(
+                !matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "{command}"
+            );
+        }
+        assert!(!matches!(
+            engine.check("git diff -- .gitignore", true),
+            ShellDecision::Deny(_)
+        ));
+        assert!(matches!(
+            engine.check("git add -- .gitignore", true),
+            ShellDecision::Deny(_)
+        ));
+        for command in [
+            "echo changed > .gitignore",
+            "cat .gitignore > .csignore",
+            "cat .gitignore >> .csignore",
+            "tee .gitignore",
+            "rm .gitignore",
+            "mv .gitignore saved",
+            "mv saved .csignore",
+            "cp saved .gitignore",
+            "sed -i '' 's/a/b/' .gitignore",
+            "sort -o .gitignore .csignore",
+            "git restore -- .gitignore",
+            "git checkout -- .csignore",
+            "git apply .gitignore",
+            "git diff -- .gitignore && tee .csignore",
+            "git diff --output=.csignore -- .gitignore",
+            "rg --pre touch ignored .gitignore",
+        ] {
+            assert!(
+                matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "{command}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_ignore_shell_symlink_reads_stay_within_authorized_roots() {
+        let root = stable_temp_dir();
+        let project = root.path().canonicalize().unwrap();
+        std::fs::write(project.join(".gitignore"), "ignored.txt\n").unwrap();
+        std::os::unix::fs::symlink(".gitignore", project.join("alias")).unwrap();
+        let external = stable_temp_dir();
+        std::fs::write(external.path().join(".csignore"), "external").unwrap();
+        std::os::unix::fs::symlink(external.path().join(".csignore"), project.join("outside"))
+            .unwrap();
+        let engine = ShellPolicyEngine::new(
+            Arc::new(RwLock::new(PathGuard::new(vec![project], vec![], vec![]))),
+            vec![],
+        );
+        assert!(!matches!(
+            engine.check("cat ./alias", false),
+            ShellDecision::Deny(_)
+        ));
+        for command in ["tee ./alias", "echo x > ./alias", "cat ./outside"] {
+            assert!(
+                matches!(engine.check(command, false), ShellDecision::Deny(_)),
+                "{command}"
+            );
+        }
     }
 
     #[test]
