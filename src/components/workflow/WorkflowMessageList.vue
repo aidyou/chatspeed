@@ -3273,24 +3273,21 @@ defineExpose({
 
 .workflow-error-alert-slot {
   --workflow-alert-line-height: 24px;
-  --workflow-alert-single-line-height: calc(
-    var(--workflow-alert-line-height) + 2 * var(--cs-space-sm) + 2px
-  );
-  min-height: var(--workflow-alert-single-line-height);
   margin-top: var(--cs-space-sm);
   margin-right: var(--cs-space);
 }
 
 .workflow-error-alert {
   box-sizing: border-box;
-  min-height: var(--workflow-alert-single-line-height);
-  padding: var(--cs-space-sm) var(--cs-space);
+  padding: var(--cs-space);
   border: 1px solid var(--el-color-danger-light-5);
   border-radius: var(--cs-border-radius-pill);
+  align-items: start;
 
   :deep(.el-alert__icon) {
-    font-size: var(--cs-font-size-md);
-    width: var(--cs-font-size-md);
+    font-size: var(--cs-font-size-xl);
+    width: var(--cs-font-size-xl);
+    height: var(--cs-font-size-xxl)
   }
 
   :deep(.el-alert__content) {
@@ -3315,8 +3312,18 @@ defineExpose({
 
 .workflow-error-alert__body {
   margin-top: var(--cs-space-xs);
-  white-space: pre-wrap;
+  // MarkdownSimple already emits <br>/<p> for line breaks, so pre-wrap is not
+  // needed; keeping it would render the formatter's inter-tag newlines as blank lines.
+  white-space: normal;
   word-break: break-word;
+
+  :deep(.content > :first-child) {
+    margin-top: 0;
+  }
+
+  :deep(.content > :last-child) {
+    margin-bottom: 0;
+  }
 }
 
 .user-message-wrap {
