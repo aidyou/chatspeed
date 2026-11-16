@@ -3138,7 +3138,8 @@ impl WorkflowExecutor {
         acceptance_contract: Option<&Value>,
         approval_source: &str,
     ) -> Result<(), WorkflowEngineError> {
-        self.persist_approved_plan_anchor(approved_plan, acceptance_contract, approval_source)
+        let plan_file = self
+            .persist_approved_plan_anchor(approved_plan, acceptance_contract, approval_source)
             .await?;
 
         let runtime = {
@@ -3186,6 +3187,7 @@ impl WorkflowExecutor {
         self.append_approved_plan_observation(
             tool_call_id,
             approved_plan,
+            &plan_file,
             acceptance_contract,
             approval_source,
         )
@@ -3260,7 +3262,7 @@ impl WorkflowExecutor {
         approved_plan: &str,
         acceptance_contract: Option<&Value>,
         approval_source: &str,
-    ) -> Result<(), WorkflowEngineError> {
+    ) -> Result<String, WorkflowEngineError> {
         let todo_json = {
             let store = self.context.main_store.as_ref();
             let todos = store.get_todo_list_for_workflow(&self.session_id)?;
@@ -3272,10 +3274,73 @@ impl WorkflowExecutor {
                 serde_json::to_string_pretty(contract).unwrap_or_else(|_| contract.to_string())
             })
             .unwrap_or_else(|| "Not available for this legacy approved plan.".to_string());
+        let plan_id = self
+            .tsid_generator
+            .generate()
+            .map_err(WorkflowEngineError::General)?;
+        let plan_file = format!(".cs/plan_{plan_id}.md");
+        let plan_path = {
+            let guard = self.path_guard.read().map_err(|error| {
+                WorkflowEngineError::Security(format!("Cannot access plan path guard: {error}"))
+            })?;
+            let root = guard.get_primary_root().ok_or_else(|| {
+                WorkflowEngineError::Security(
+                    "Cannot save approved plan without an authorized workspace".to_string(),
+                )
+            })?;
+            let path = guard.validate(&root.join(&plan_file), false, true, false)?;
+            if !path.starts_with(root) {
+                return Err(WorkflowEngineError::Security(
+                    "Approved plan path resolves outside the primary workspace".to_string(),
+                ));
+            }
+            path
+        };
+        let document = format!(
+            "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## ACCEPTANCE CONTRACT\n```json\n{}\n```\n",
+            approved_plan, acceptance_contract_text
+        )
+        .replace("\r\n", "\n");
+        let write_result = async {
+            use tokio::io::AsyncWriteExt;
+
+            // Approval authorizes this artifact, not a separate model-issued write tool.
+            let parent = plan_path.parent().ok_or_else(|| {
+                std::io::Error::other("Approved plan path has no parent directory")
+            })?;
+            tokio::fs::create_dir_all(parent).await?;
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&plan_path)
+                .await?;
+            file.write_all(document.as_bytes()).await?;
+            file.sync_all().await
+        }
+        .await;
+        write_result.map_err(|error| {
+            log::error!(
+                "[Workflow][session={}][phase=approval][event=plan_file_failed] path={:?}, error={}",
+                self.session_id, plan_path, error
+            );
+            WorkflowEngineError::General(
+                t!(
+                    "command.fs.write_file_failed",
+                    error = format!("{}: {error}", plan_path.display())
+                )
+                .to_string(),
+            )
+        })?;
+        log::info!(
+            "[Workflow][session={}][phase=approval][event=plan_file_saved] path={:?}, approval_source={}",
+            self.session_id, plan_path, approval_source
+        );
+
         let mut metadata = json!({
             "type": "summary",
             "subtype": "approved_plan",
             "plan_content": approved_plan,
+            "plan_file": plan_file,
             "todo_content": todo_json.clone(),
             "todo_scope": "pre_approval",
             "approval_source": approval_source
@@ -3288,8 +3353,8 @@ impl WorkflowExecutor {
             .add_message_and_notify_internal(
                 "system".to_string(),
                 format!(
-                    "# APPROVED EXECUTION PLAN\n\n## PLAN\n{}\n\n## ACCEPTANCE CONTRACT\n{}\n\n## PRE-APPROVAL TODO SNAPSHOT\n{}",
-                    approved_plan, acceptance_contract_text, todo_json
+                    "# APPROVED EXECUTION PLAN\n\nplan_file: {}\n\n## PLAN\n{}\n\n## ACCEPTANCE CONTRACT\n{}\n\n## PRE-APPROVAL TODO SNAPSHOT\n{}",
+                    plan_file, approved_plan, acceptance_contract_text, todo_json
                 ),
                 None,
                 None,
@@ -3299,13 +3364,14 @@ impl WorkflowExecutor {
                 Some(metadata),
             )
             .await?;
-        Ok(())
+        Ok(plan_file)
     }
 
     async fn append_approved_plan_observation(
         &mut self,
         tool_call_id: Option<&str>,
         approved_plan: &str,
+        plan_file: &str,
         acceptance_contract: Option<&Value>,
         approval_source: &str,
     ) -> Result<(), WorkflowEngineError> {
@@ -3317,6 +3383,7 @@ impl WorkflowExecutor {
             "is_error": false,
             "display_type": "markdown",
             "approval_status": "approved",
+            "plan_file": plan_file,
             "approval_source": approval_source
         });
         if let Some(tool_call_id) = tool_call_id.filter(|id| !id.trim().is_empty()) {
@@ -3336,7 +3403,8 @@ impl WorkflowExecutor {
             .add_message_and_notify_internal(
                 "tool".to_string(),
                 format!(
-                    "# Approved Plan\n\n{}\n\n## Acceptance Contract\n\n```json\n{}\n```\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                    "# Approved Plan\n\nplan_file: {}\n\n{}\n\n## Acceptance Contract\n\n```json\n{}\n```\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                    plan_file,
                     approved_plan,
                     acceptance_contract_text,
                     super::prompts::APPROVED_PLAN_EXECUTION_REMINDER
@@ -11727,7 +11795,7 @@ mod recovery_tests {
 
     #[tokio::test]
     async fn approved_plan_transition_starts_a_clean_execution_phase() {
-        let (_temp_dir, store) = create_test_store();
+        let (temp_dir, store) = create_test_store();
         let session_id = "approved-plan-clean-execution";
         let agent = Agent::new(
             "approved-plan-agent".to_string(),
@@ -11780,7 +11848,7 @@ mod recovery_tests {
             gateway,
             Arc::new(UnusedSubAgentFactory),
             agent,
-            vec![workspace_root()],
+            vec![temp_dir.path().to_path_buf()],
             std::env::temp_dir(),
             None,
             None,
@@ -11865,6 +11933,35 @@ mod recovery_tests {
         assert!(executor.context.ai_context_messages[0]
             .message
             .contains("<acceptance_contract>"));
+        let plan_file = executor.context.ai_context_messages[0]
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("plan_file"))
+            .and_then(Value::as_str)
+            .expect("approved plan must carry its source file")
+            .to_string();
+        assert!(plan_file.starts_with(".cs/plan_"));
+        assert!(plan_file.ends_with(".md"));
+        assert!(executor.context.ai_context_messages[0]
+            .message
+            .contains(&format!("<plan_file>\n{plan_file}\n</plan_file>")));
+        let saved_plan = std::fs::read_to_string(temp_dir.path().join(&plan_file))
+            .expect("approved plan file must exist before execution");
+        assert!(saved_plan.contains("1. Edit the file\n2. Run focused tests"));
+        assert!(saved_plan.contains(&serde_json::to_string_pretty(&acceptance_contract).unwrap()));
+        assert!(!saved_plan.contains("Investigate"));
+        assert!(!saved_plan.contains('\r'));
+        let persisted_plan = store
+            .get_workflow_snapshot(session_id)
+            .expect("read durable plan")
+            .messages
+            .into_iter()
+            .find(|message| message.message_subtype.as_deref() == Some("approved_plan"))
+            .expect("approved plan must be durable");
+        assert_eq!(
+            persisted_plan.metadata.as_ref().unwrap()["plan_file"],
+            plan_file
+        );
         assert!(observed_payloads
             .lock()
             .expect("payload lock")
@@ -11892,11 +11989,114 @@ mod recovery_tests {
             executor.context.current_segment_id
         );
         assert_eq!(snapshot.state, RuntimeState::Running);
+
+        let second_plan_file = executor
+            .persist_approved_plan_anchor("A revised plan", Some(&acceptance_contract), "user")
+            .await
+            .expect("another plan in the same session must save separately");
+        assert_ne!(plan_file, second_plan_file);
+        assert_eq!(
+            std::fs::read_to_string(temp_dir.path().join(&plan_file)).unwrap(),
+            saved_plan
+        );
+        assert!(
+            std::fs::read_to_string(temp_dir.path().join(second_plan_file))
+                .unwrap()
+                .contains("A revised plan")
+        );
+    }
+
+    #[tokio::test]
+    async fn rejected_plan_does_not_create_a_plan_file() {
+        let (temp_dir, store) = create_test_store();
+        let session_id = "rejected-plan-no-file";
+        let mut executor = wrapper_test_executor(
+            store,
+            session_id,
+            Arc::new(std::sync::Mutex::new(Vec::new())),
+        );
+        executor.planning_root = temp_dir.path().join(".cs");
+        executor.path_guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![temp_dir.path().to_path_buf()],
+            vec![executor.planning_root.clone()],
+            vec![],
+        )));
+        let args = json!({
+            "plan": "Do not save this rejected plan",
+            "acceptance_contract": {
+                "acceptance_criteria": [{"id": "AC-1", "description": "Fix"}],
+                "invariants": [],
+                "implementation_units": [{"id": "U-1", "description": "Edit", "covers": ["AC-1"], "depends_on": [], "files": ["test.rs"]}],
+                "verification_items": [{"id": "V-1", "description": "Test", "covers": ["AC-1"], "method": "test", "expected_evidence": "pass"}],
+                "unresolved_blockers": []
+            }
+        });
+        executor
+            .handle_submit_plan_intercept("rejected-call", &args, "")
+            .await
+            .expect("submit plan for approval");
+        assert_eq!(executor.state, WorkflowState::AwaitingApproval);
+        assert!(!executor.planning_root.exists());
+        let (tx, rx) = mpsc::channel(2);
+        executor.attach_signal_rx(rx);
+        tx.send(
+            json!({
+                "type": "approval", "id": "rejected-call", "approved": false,
+                "rejection_message": "Revise the plan"
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        tx.send(json!({"type": "stop"}).to_string()).await.unwrap();
+        executor
+            .run_loop()
+            .await
+            .expect("reject then stop without model calls");
+        assert_eq!(executor.policy.phase, ExecutionPhase::Planning);
+        assert!(!executor.planning_root.exists());
+        assert!(executor.context.messages.iter().any(|message| {
+            message.metadata.as_ref().is_some_and(|metadata| {
+                metadata["tool_call_id"] == "rejected-call"
+                    && metadata["approval_status"] == "rejected"
+            })
+        }));
+    }
+
+    #[tokio::test]
+    async fn approved_plan_write_failure_does_not_start_execution() {
+        let (temp_dir, store) = create_test_store();
+        let mut executor = wrapper_test_executor(
+            store,
+            "plan-write-failure",
+            Arc::new(std::sync::Mutex::new(Vec::new())),
+        );
+        executor.path_guard = Arc::new(RwLock::new(PathGuard::new(
+            vec![temp_dir.path().to_path_buf()],
+            vec![],
+            vec![],
+        )));
+        std::fs::write(temp_dir.path().join(".cs"), "not a directory").unwrap();
+        assert!(executor
+            .activate_approved_plan_with_source(
+                Some("write-failure-call"),
+                "Approved plan",
+                None,
+                "user",
+            )
+            .await
+            .is_err());
+        assert_eq!(executor.policy.phase, ExecutionPhase::Planning);
+        assert!(!executor
+            .context
+            .messages
+            .iter()
+            .any(|message| { message.message_subtype.as_deref() == Some("approved_plan") }));
     }
 
     #[tokio::test]
     async fn automatic_plan_approval_uses_structured_pending_plan_and_skips_confirmation() {
-        let (_temp_dir, store) = create_test_store();
+        let (temp_dir, store) = create_test_store();
         let session_id = "automatic-plan-approval";
         let agent = Agent::new(
             "automatic-plan-agent".to_string(),
@@ -11954,7 +12154,7 @@ mod recovery_tests {
             gateway.clone(),
             Arc::new(UnusedSubAgentFactory),
             agent.clone(),
-            vec![workspace_root()],
+            vec![temp_dir.path().to_path_buf()],
             std::env::temp_dir(),
             None,
             None,
@@ -12009,6 +12209,7 @@ mod recovery_tests {
             .await
             .expect("automatic plan interception should succeed");
         assert!(intercepted.is_none());
+        assert!(!temp_dir.path().join(".cs").exists());
         assert_eq!(executor.state, WorkflowState::AwaitingAutoApproval);
         let pending = executor.export_execution_context().pending_tools;
         assert_eq!(pending.len(), 1);
@@ -12035,7 +12236,7 @@ mod recovery_tests {
             gateway,
             Arc::new(UnusedSubAgentFactory),
             agent,
-            vec![workspace_root()],
+            vec![temp_dir.path().to_path_buf()],
             std::env::temp_dir(),
             None,
             None,
@@ -12054,6 +12255,7 @@ mod recovery_tests {
             WorkflowState::AwaitingAutoApproval
         );
         assert_eq!(recovered_executor.pending_approvals.len(), 1);
+        assert!(!temp_dir.path().join(".cs").exists());
         assert!(observed_payloads
             .lock()
             .expect("payload lock")
@@ -12124,6 +12326,19 @@ mod recovery_tests {
                         == Some(true)
             )));
         assert_eq!(recovered_executor.state, WorkflowState::Thinking);
+        let plan_file = recovered_executor.context.ai_context_messages[0]
+            .metadata
+            .as_ref()
+            .unwrap()["plan_file"]
+            .as_str()
+            .unwrap();
+        assert!(temp_dir.path().join(plan_file).is_file());
+        assert_eq!(
+            std::fs::read_dir(temp_dir.path().join(".cs"))
+                .unwrap()
+                .count(),
+            1
+        );
         assert!(recovered_executor.pending_approvals.is_empty());
         assert!(recovered_executor.context.messages.iter().any(|message| {
             message.message_subtype.as_deref() == Some("approved_plan")

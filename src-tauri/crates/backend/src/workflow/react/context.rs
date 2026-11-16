@@ -1233,17 +1233,24 @@ impl ContextManager {
             })
             .unwrap_or_default();
 
+        let plan_file = metadata
+            .and_then(|meta| meta.get("plan_file"))
+            .and_then(|value| value.as_str())
+            .map(|path| format!("\n<plan_file>\n{path}\n</plan_file>"))
+            .unwrap_or_default();
+
         if todo_scope == Some("pre_approval") {
             format!(
-                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>{}\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
+                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>{}{}\n\n<SYSTEM_REMINDER>{}</SYSTEM_REMINDER>",
                 plan,
+                plan_file,
                 acceptance_contract,
                 super::prompts::APPROVED_PLAN_EXECUTION_REMINDER
             )
         } else {
             format!(
-                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>{}\n<current_todo_list>\n{}\n</current_todo_list>",
-                plan, acceptance_contract, todos
+                "# APPROVED EXECUTION PLAN\n<approved_plan>\n{}\n</approved_plan>{}{}\n<current_todo_list>\n{}\n</current_todo_list>",
+                plan, plan_file, acceptance_contract, todos
             )
         }
     }
@@ -5430,6 +5437,7 @@ mod tests {
                 Some("approved_plan"),
                 Some(json!({
                     "plan_content": "Edit the file and run tests",
+                    "plan_file": ".cs/plan_test_tsid.md",
                     "todo_scope": "pre_approval"
                 })),
             ),
@@ -5462,6 +5470,10 @@ mod tests {
             .expect("approved plan should remain the active execution boundary");
         assert_eq!(execution_projection.len(), 2);
         assert_eq!(execution_projection[0].id, Some(3));
+        assert!(
+            ContextManager::approved_plan_context_projection(&execution_projection[0])
+                .contains("<plan_file>\n.cs/plan_test_tsid.md\n</plan_file>")
+        );
         assert_eq!(execution_projection[1].id, Some(5));
         let handoff = execution_projection
             .iter()
