@@ -13,6 +13,7 @@ dist
 dist-ssr
 vcpkg_installed
 *.local
+.pnpm-store
 
 # Editor directories and files
 .vscode/*
