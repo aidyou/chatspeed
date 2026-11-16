@@ -3,8 +3,7 @@
 # Add allow rules with ! for files that are ignored by git but should remain
 # accessible to ChatSpeed tools and workflow @ file selection.
 
-!dev_data/
 !dev_data/**
-!.cs
+!.cs/*
 !src-tauri/target/debug/
 !src-tauri/target/release/bundle/

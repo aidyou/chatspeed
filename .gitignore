@@ -31,8 +31,8 @@ vcpkg_installed
 
 # element-plus forward scss
 style/element/*.css
-dev_data*/
-.cs
+dev_data*/*
+.cs/*
 
 # Python
 .env
