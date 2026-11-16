@@ -97,6 +97,8 @@
     "resendMessage": "重新发送消息",
     "runtimeLoadFailed": "运行时数据加载失败，正在重试…",
     "runtimeLoading": "正在加载运行时数据…",
+    "runtimeStarting": "正在初始化 ChatSpeed…",
+    "runtimeStartupHint": "就绪后将自动进入应用。如出现系统权限提示，请先完成确认。",
     "runtimeUnavailable": "运行时暂不可用，正在重试…",
     "searchChat": "搜索聊天",
     "selectFile": "选择文件",

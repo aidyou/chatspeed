@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { effectScope } from 'vue'
+import { effectScope, ref } from 'vue'
 import { readFileSync } from 'node:fs'
 import { isRuntimeInitialized, isRuntimeReady, useRuntimeStatus } from './useRuntimeStatus.js'
 
@@ -14,6 +14,58 @@ function mount(invoke, refresh) {
   runtime.start()
   return { runtime, stop: () => scope.stop() }
 }
+
+test('app startup waits through permission delays and latches readiness without remounting pages', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 })
+  const source = readFileSync(new URL('../App.vue', import.meta.url), 'utf8')
+  assert.match(source, /<router-view v-if="startupComplete"/)
+  assert.match(source, /<api-key-unlock-dialog\s+v-if="startupComplete"/)
+  assert.match(source, /initialized && settingStore.windowLabel === 'main'/)
+  const body = source.split('const startupComplete = ref(false)')[1]
+    .split('const refreshRuntimeStores')[0]
+  let status = { state: 'disconnected' }
+  let polls = 0
+  let loads = 0
+  let fail = false
+  const scope = effectScope()
+  const app = scope.run(() => new Function('ref', 'useRuntimeStatus', 'invokeWrapper', 'refreshRuntimeStores',
+    `const startupComplete = ref(false); ${body};
+     return { startupComplete, startupStatusError, startStartupCheck };`)(
+    ref, useRuntimeStatus, async () => {
+      polls++
+      if (fail) throw new Error('status unavailable')
+      return status
+    }, async () => { loads++ }))
+  const advance = async ms => {
+    t.mock.timers.tick(ms)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  try {
+    app.startStartupCheck()
+    await advance(0)
+    await advance(120000)
+    assert.equal(app.startupComplete.value, false)
+    assert.equal(loads, 0)
+    assert.equal(app.startupStatusError.value, null)
+    fail = true
+    await advance(1000)
+    assert.ok(app.startupStatusError.value)
+    fail = false
+    status = { ...ready(1), ready_generation: 0 }
+    await advance(1000)
+    assert.equal(loads, 0)
+    status = ready(1)
+    await advance(1000)
+    assert.equal(loads, 1)
+    assert.equal(app.startupComplete.value, true)
+    assert.equal(app.startupStatusError.value, null)
+    const settledPolls = polls
+    status = { state: 'unavailable' }
+    await advance(10000)
+    assert.equal(app.startupComplete.value, true)
+    assert.equal(polls, settledPolls, 'startup polling stops after the first successful initialization')
+  } finally { scope.stop() }
+})
 
 test('readiness uses authoritative state and heartbeat', () => {
   for (const state of ['disconnected', 'released', 'unavailable']) {
@@ -133,17 +185,19 @@ test('status request failures are exposed separately from normal startup and cle
   } finally { app.stop() }
 })
 
-test('failed data hydration is not empty success and retries while still ready', async () => {
+test('failed data hydration is not empty success and retries while still ready', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 })
   let fail = true
   const app = mount(async () => ready(1), async () => {
     if (fail) throw new Error('load failed')
   })
   try {
-    await wait(20)
+    await new Promise(resolve => setImmediate(resolve))
     assert.ok(app.runtime.error.value)
     assert.equal(app.runtime.usable.value, false)
     fail = false
-    await wait(20)
+    t.mock.timers.tick(5)
+    await new Promise(resolve => setImmediate(resolve))
     assert.equal(app.runtime.error.value, null)
     assert.equal(app.runtime.usable.value, true)
   } finally { app.stop() }

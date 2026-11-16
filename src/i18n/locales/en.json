@@ -97,6 +97,8 @@
     "resendMessage": "Resend Message",
     "runtimeLoadFailed": "Runtime data could not be loaded. Retrying…",
     "runtimeLoading": "Loading runtime data…",
+    "runtimeStarting": "Initializing ChatSpeed…",
+    "runtimeStartupHint": "The app will open automatically when ready. If a system permission prompt appears, please respond to it first.",
     "runtimeUnavailable": "Runtime is unavailable. Retrying…",
     "searchChat": "Search Chat",
     "selectFile": "Select File",

@@ -8,8 +8,14 @@
       data-tauri-drag-region
       @pointerdown="handleDragStart"
       @pointerup="handleDragEnd" />
-    <router-view />
+    <router-view v-if="startupComplete" />
+    <div v-else class="runtime-startup" role="status" aria-live="polite" aria-busy="true">
+      <p>{{ $t('chat.runtimeStarting') }}</p>
+      <p>{{ $t('chat.runtimeStartupHint') }}</p>
+      <p v-if="startupStatusError">{{ $t('chat.runtimeUnavailable') }}</p>
+    </div>
     <api-key-unlock-dialog
+      v-if="startupComplete"
       :active="requiresApiKeyUnlock"
       :window-label="windowStore.windowLabel" />
     <quit-confirm-dialog v-if="isQuitHost" />
@@ -28,7 +34,7 @@ import { useDark, usePreferredDark } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { formatUserError } from '@/libs/error'
 import i18n, { setI18nLanguage } from '@/i18n'
-import { isRuntimeInitialized } from '@/composables/useRuntimeStatus'
+import { useRuntimeStatus } from '@/composables/useRuntimeStatus'
 
 import { invokeWrapper, FrontendAppError } from '@/libs/tauri'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -108,6 +114,17 @@ const applyPrimaryColor = value => {
 
 const RUNTIME_READY_EVENT = 'cs://runtime_ready'
 const updateTrayFlag = ref(false)
+const startupComplete = ref(false)
+const { status: startupStatus, statusError: startupStatusError, start: startStartupCheck, stop: stopStartupCheck } = useRuntimeStatus(
+  invokeWrapper,
+  async isCurrent => {
+    await refreshRuntimeStores(startupStatus.value?.generation)
+    if (!isCurrent()) return
+    // Latch the first readiness so later reconnects never destroy an open page or its drafts.
+    startupComplete.value = true
+    stopStartupCheck()
+  }
+)
 const refreshRuntimeStores = async generation => {
   const runtimeGeneration = Number(generation)
   if (!Number.isFinite(runtimeGeneration) || runtimeGeneration <= lastRuntimeReadyGeneration) return
@@ -149,11 +166,11 @@ const refreshRuntimeStores = async generation => {
 }
 
 watch(
-  () => settings.value.interfaceLanguage,
-  newLang => {
+  () => [settings.value.interfaceLanguage, startupComplete.value],
+  ([newLang, initialized]) => {
     console.log('settings.interfaceLanguage changed', newLang)
     setI18nLanguage(newLang)
-    if (settingStore.windowLabel === 'main' && !updateTrayFlag.value) {
+    if (initialized && settingStore.windowLabel === 'main' && !updateTrayFlag.value) {
       updateTrayFlag.value = true
       settingStore
         .updateTray()
@@ -219,15 +236,7 @@ onMounted(async () => {
   runtimeReadyListener.value = await listen(RUNTIME_READY_EVENT, event => {
     void refreshRuntimeStores(event?.payload?.generation)
   })
-  let runtimeStatus = null
-  try {
-    runtimeStatus = await invokeWrapper('runtime_status')
-  } catch (error) {
-    console.warn('Failed to inspect runtime readiness during app startup:', error)
-  }
-  if (isRuntimeInitialized(runtimeStatus)) {
-    void refreshRuntimeStores(runtimeStatus.generation)
-  }
+  startStartupCheck()
   setTheme()
 
   if (settingStore.windowLabel === 'main' || settingStore.windowLabel === 'note') {
@@ -423,6 +432,22 @@ body {
   background: var(--cs-bg-color);
   border-radius: 0;
   box-sizing: border-box;
+
+  .runtime-startup {
+    height: 100%;
+    box-sizing: border-box;
+    padding: calc(var(--cs-titlebar-height) + 24px) 24px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: var(--cs-text-color-primary);
+
+    p + p {
+      color: var(--cs-text-color-secondary);
+    }
+  }
 
   .titlebar {
     height: var(--cs-titlebar-height);
