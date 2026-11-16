@@ -15,7 +15,9 @@
 - 新增 macOS 12 兼容性约束及定向回归，覆盖前端正则行为、可选 WebView 代理 API 和 JavaScript Sass 依赖解析。
 - 从旧 checkout 更新源码后，需要执行 `pnpm install --frozen-lockfile` 并重启开发服务器，才能使用更新后的 Sass 依赖。
 
-## [2.0.18]
+---
+
+## [2.1.1]
 
 ### 🚀 新功能
 

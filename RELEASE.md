@@ -15,7 +15,9 @@
 - Added macOS 12 compatibility requirements and focused regressions covering frontend regex behavior, optional WebView proxy APIs, and JavaScript Sass resolution.
 - Source builds upgrading from an earlier checkout must run `pnpm install --frozen-lockfile` and restart the development server to use the updated Sass dependency.
 
-## [2.0.18]
+---
+
+## [2.1.1]
 
 ### 🚀 New Features
 
