@@ -1,9 +1,17 @@
 //! Native read-only rendering of the formal workflow message projection.
+//!
+//! Visual rules mirror `src/components/workflow/WorkflowMessageList.vue` and
+//! `src/styles/workflow/messages.scss`: a CLI-style tool transcript, grouped
+//! tool activity, collapsible snapshots and delegated-task cards.
+
 use chatspeed_gpui_observer::{
     icons,
     metrics::Metrics,
     model::Model,
-    presentation::{self, message_text},
+    presentation::{
+        self, ActivityItem, ActivityView, AlertKind, AlertView, AssistantView, FinishTaskView, Row,
+        SnapshotView, SubAgentStatus, SubAgentView, ToolStatus, ToolView, UserView,
+    },
     types::*,
     worker::Worker,
 };
@@ -26,13 +34,88 @@ use std::{
 
 rust_i18n::i18n!("locales", fallback = "en");
 
-fn font_icon(name: &str) -> impl IntoElement {
+/// ChatSpeed's default primary preset. The user-selected preset replaces this
+/// once the native window reads the application theme.
+const ACCENT: u32 = 0x41b555;
+const SUCCESS: u32 = 0x41b555;
+const DANGER: u32 = 0xf56c6c;
+const WARNING: u32 = 0xffc107;
+const INFO: u32 = 0x46a2ed;
+const VIOLET: u32 = 0x8b5cf6;
+const MONO_FONT: &str = "Liberation Mono";
+
+/// Vue's collapsed user bubble: four 1.6-line-height rows at 14px, plus room
+/// for the corner toggle.
+const USER_MESSAGE_LINES: usize = 4;
+const USER_MESSAGE_COLLAPSED_HEIGHT: f32 = 114.;
+
+fn accent() -> Rgba {
+    rgb(ACCENT)
+}
+
+fn success() -> Rgba {
+    rgb(SUCCESS)
+}
+
+fn danger() -> Rgba {
+    rgb(DANGER)
+}
+
+fn warning() -> Rgba {
+    rgb(WARNING)
+}
+
+fn info() -> Rgba {
+    rgb(INFO)
+}
+
+fn violet() -> Rgba {
+    rgb(VIOLET)
+}
+
+/// Iconfont glyph inside a square box so glyph metrics never shift baselines.
+fn font_icon(name: &str, size: f32, color: impl Into<Hsla>) -> impl IntoElement {
     div()
         .flex_none()
-        .w_4()
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(size))
+        .h(px(size))
         .font_family(icons::FAMILY)
-        .text_size(px(16.))
+        .text_size(px(size))
+        // The square line box keeps the glyph's own ascent/descent from pushing
+        // the icon below the text it sits next to.
+        .line_height(px(size))
+        .text_color(color)
         .child(icons::glyph(name))
+}
+
+fn pill(label: String, color: Rgba, background: Option<Rgba>) -> impl IntoElement {
+    div()
+        .flex_none()
+        .px_2()
+        .py(px(1.))
+        .rounded(px(4.))
+        .text_size(px(10.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(color)
+        .when_some(background, |view, background| view.bg(background))
+        .child(label)
+}
+
+/// User and raw tool text keep their authored line breaks.
+fn plain_text(text: &str, color: impl Into<Hsla>) -> impl IntoElement {
+    let color = color.into();
+    let mut body = v_flex().w_full().min_w_0();
+    for line in text.split('\n') {
+        body = body.child(if line.trim().is_empty() {
+            div().h(px(8.))
+        } else {
+            div().text_color(color).child(line.to_string())
+        });
+    }
+    body
 }
 
 struct Observer {
@@ -47,8 +130,10 @@ struct Observer {
     scroll: ScrollHandle,
     prepend_anchor: Option<(Point<Pixels>, Point<Pixels>)>,
     deferred_update: Option<Update>,
+    rows: Vec<Row>,
     markdown: BTreeMap<String, (String, Entity<TextViewState>)>,
     expanded: BTreeSet<String>,
+    compression_started: Option<Instant>,
     metrics: Metrics,
     switched: Option<Instant>,
     last_metrics: Instant,
@@ -76,8 +161,10 @@ impl Observer {
             scroll: ScrollHandle::new(),
             prepend_anchor: None,
             deferred_update: None,
+            rows: Vec::new(),
             markdown: BTreeMap::new(),
             expanded: BTreeSet::new(),
+            compression_started: None,
             metrics: Metrics {
                 started: Some(Instant::now()),
                 ..Metrics::default()
@@ -105,11 +192,13 @@ impl Observer {
         self.selected = Some(id);
         self.markdown.clear();
         self.expanded.clear();
+        self.rows.clear();
         self.follow = true;
         self.switched = Some(Instant::now());
         self.scroll = ScrollHandle::new();
         self.prepend_anchor = None;
         self.deferred_update = None;
+        self.compression_started = None;
         cx.notify();
     }
 
@@ -178,10 +267,17 @@ impl Observer {
             }
             dirty = true;
         }
+        if self.model.compressing && self.compression_started.is_none() {
+            self.compression_started = Some(Instant::now());
+        }
+        if !self.model.compressing {
+            self.compression_started = None;
+        }
         if dirty {
             if self.follow {
                 self.scroll_pending = true;
             }
+            self.rows = presentation::project(self.transcript(), self.roots());
             self.refresh_markdown(cx);
             self.metrics.ui_batches += 1;
             cx.notify();
@@ -202,7 +298,12 @@ impl Observer {
         }
     }
 
-    fn display_rows(&self) -> Vec<DisplayRow> {
+    fn roots(&self) -> &[String] {
+        &[]
+    }
+
+    /// Durable rows plus the transient live message and live tool lifecycle state.
+    fn transcript(&self) -> Vec<Message> {
         let mut messages: Vec<Message> = self.model.visible().cloned().collect();
         if !self.model.live.message.is_empty() || self.model.live.reasoning.is_some() {
             let mut live = self.model.live.clone();
@@ -214,6 +315,12 @@ impl Observer {
             let Some(tool) = self.model.tools.get(id) else {
                 continue;
             };
+            if messages
+                .iter()
+                .any(|message| message.metadata["tool_call_id"].as_str() == Some(id.as_str()))
+            {
+                continue;
+            }
             use std::hash::{Hash, Hasher};
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             id.hash(&mut hash);
@@ -224,44 +331,64 @@ impl Observer {
                 ..Message::default()
             });
         }
-        presentation::project_messages(messages)
+        messages
     }
 
+    /// Collect every visible Markdown row once per projection change.
     fn refresh_markdown(&mut self, cx: &mut Context<Self>) {
         let start = Instant::now();
-        let mut rows = Vec::new();
-        for projected in self.display_rows() {
-            let messages = match projected {
-                DisplayRow::Message(message) => vec![message],
-                DisplayRow::Activity { key, items } => {
-                    if !self.expanded.contains(&key) {
+        let mut rows: Vec<(String, String)> = Vec::new();
+        for row in &self.rows {
+            match row {
+                Row::Assistant(view) => {
+                    if !view.markdown.is_empty() {
+                        rows.push((view.key.clone(), view.markdown.clone()));
+                    }
+                    if self.expanded.contains(&view.thought_key) {
+                        if let Some(reasoning) = &view.reasoning {
+                            rows.push((view.thought_key.clone(), reasoning.clone()));
+                        }
+                    }
+                }
+                Row::Activity(group) => {
+                    if !self.expanded.contains(&group.key) {
                         continue;
                     }
-                    items
+                    for item in &group.items {
+                        if let Some(thought) = &item.thought {
+                            if self.expanded.contains(&item.thought_key) {
+                                rows.push((item.thought_key.clone(), thought.clone()));
+                            }
+                        }
+                        if let Some(tool) = &item.tool {
+                            if self.expanded.contains(&tool.detail_key) && !tool.detail.is_empty() {
+                                rows.push((tool.detail_key.clone(), tool.detail.clone()));
+                            }
+                        }
+                    }
                 }
-            };
-            for mut message in messages {
-                let key = presentation::message_key(&message);
-                if let Some(reasoning) = message.reasoning.take() {
-                    // Group expansion reveals thoughts directly, without a second disclosure.
-                    rows.push((
-                        format!("thought-{key}"),
-                        presentation::clean_text(&reasoning),
-                    ));
+                Row::Tool(tool) => {
+                    if self.expanded.contains(&tool.detail_key) && !tool.detail.is_empty() {
+                        rows.push((tool.detail_key.clone(), tool.detail.clone()));
+                    }
                 }
-                let text = if presentation::tool_name(&message.metadata) == "complete_workflow" {
-                    presentation::completion_summary(&message)
-                } else if presentation::is_tool_message(&message) {
-                    if !self.expanded.contains(&format!("detail-{key}")) {
+                Row::Snapshot(snapshot) => {
+                    if self.expanded.contains(&snapshot.key) && !snapshot.body.is_empty() {
+                        rows.push((snapshot.body_key.clone(), snapshot.body.clone()));
+                    }
+                }
+                Row::SubAgent(card) => {
+                    if !self.expanded.contains(&card.key) {
                         continue;
                     }
-                    message_text(&message)
-                } else {
-                    message_text(&message)
-                };
-                if !text.is_empty() {
-                    rows.push((key, text));
+                    if self.expanded.contains(&card.task_key) && !card.task.is_empty() {
+                        rows.push((card.task_key.clone(), card.task.clone()));
+                    }
+                    if self.expanded.contains(&card.result_key) && !card.result.is_empty() {
+                        rows.push((card.result_key.clone(), card.result.clone()));
+                    }
                 }
+                Row::User(_) | Row::FinishTask(_) | Row::Alert(_) | Row::Divider => {}
             }
         }
         self.markdown
@@ -287,295 +414,914 @@ impl Observer {
         self.metrics.markdown_update_us += start.elapsed().as_micros() as u64;
     }
 
-    fn activity_group(&self, key: String, items: &[Message], cx: &mut Context<Self>) -> AnyElement {
+    fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
+        if !self.expanded.remove(&key) {
+            self.expanded.insert(key);
+        }
+        self.refresh_markdown(cx);
+        cx.notify();
+    }
+
+    fn markdown_view(&self, key: &str) -> AnyElement {
+        match self.markdown.get(key) {
+            Some((_, state)) => div()
+                .w_full()
+                .min_w_0()
+                .child(TextView::new(state).selectable(true))
+                .into_any_element(),
+            None => div().into_any_element(),
+        }
+    }
+
+    fn user_row(&self, view: &UserView, cx: &mut Context<Self>) -> AnyElement {
+        // Vue collapses past four lines and keeps the toggle in the corner.
+        let toggle_key = format!("{}:user", view.key);
+        let target = toggle_key.clone();
+        let expanded = self.expanded.contains(&toggle_key);
+        let expandable = presentation::user_message_lines(&view.text) > USER_MESSAGE_LINES;
+        let toggle = h_flex()
+            .id(SharedString::from(toggle_key))
+            .absolute()
+            .right_1()
+            .bottom_1()
+            .w(px(20.))
+            .h(px(20.))
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .bg(cx.theme().muted)
+            .cursor_pointer()
+            .child(font_icon(
+                if expanded {
+                    "caret-down"
+                } else {
+                    "double-arrow-down"
+                },
+                12.,
+                cx.theme().muted_foreground,
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)));
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .justify_end()
+            .child(
+                div()
+                    .relative()
+                    .max_w(px(680.))
+                    .min_w_0()
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().muted)
+                    .px_4()
+                    .py_3()
+                    .text_size(px(14.))
+                    .when(expandable && !expanded, |bubble| {
+                        // Reserve the corner so the toggle never covers the text.
+                        bubble
+                            .max_h(px(USER_MESSAGE_COLLAPSED_HEIGHT))
+                            .overflow_hidden()
+                            .pr(px(28.))
+                            .pb(px(28.))
+                    })
+                    .when(expandable, |bubble| bubble.child(toggle))
+                    .child(plain_text(&view.text, cx.theme().foreground)),
+            )
+            .into_any_element()
+    }
+
+    fn thought_row(
+        &self,
+        key: String,
+        title: String,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let open = self.expanded.contains(&key);
         let target = key.clone();
-        let summary = presentation::activity_summary(items);
-        let thought_count = items
-            .iter()
-            .filter(|item| presentation::think_only(item))
-            .count();
-        let mut body = v_flex().w_full().min_w_0().items_start().gap_2().child(
-            h_flex()
-                .id(SharedString::from(key))
-                .w_full()
-                .min_w_0()
-                .justify_start()
-                .items_start()
-                .gap_2()
-                .py_1()
-                .cursor_pointer()
-                .hover(|style| style.bg(cx.theme().muted))
-                .child(font_icon(if open { "caret-down" } else { "caret-right" }))
-                .child(font_icon(icons::activity_icon(items)))
-                .child(div().flex_1().min_w_0().child(format!(
-                    "{}{}",
-                    summary,
-                    if thought_count > 0 {
-                        format!(" · {} x{thought_count}", t!("reasoning"))
-                    } else {
-                        String::new()
-                    }
-                )))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.expanded.remove(&target) {
-                        this.expanded.insert(target.clone());
-                    }
-                    this.refresh_markdown(cx);
-                    cx.notify();
-                })),
-        );
-        if open {
-            let mut details = v_flex()
-                .w_full()
-                .min_w_0()
-                .gap_2()
-                .pl_12()
-                .border_l_1()
-                .border_color(cx.theme().border);
-            for item in items {
-                if item.reasoning.is_some() {
-                    details = details.child(self.disclosure(
-                        format!("thought-{}", presentation::message_key(item)),
-                        t!("reasoning").to_string(),
-                        cx,
-                    ));
-                }
-                if !presentation::think_only(item) {
-                    details = details.child(self.tool_item(item, cx));
-                }
-            }
-            body = body.child(details);
-        }
-        body.into_any_element()
-    }
-
-    fn tool_item(&self, message: &Message, cx: &mut Context<Self>) -> AnyElement {
-        let key = presentation::message_key(&message);
-        let target = format!("detail-{key}");
-        let open = self.expanded.contains(&target);
-        let label = presentation::tool_label(&message.metadata);
-        let mut body = v_flex().w_full().min_w_0().items_start().gap_2().child(
-            h_flex()
-                .id(SharedString::from(target.clone()))
-                .w_full()
-                .min_w_0()
-                .justify_start()
-                .items_start()
-                .gap_2()
-                .py_1()
-                .cursor_pointer()
-                .hover(|style| style.bg(cx.theme().muted))
-                .child(font_icon(if open { "caret-down" } else { "caret-right" }))
-                .child(font_icon(icons::tool_icon(presentation::tool_name(
-                    &message.metadata,
-                ))))
-                .child(div().flex_1().min_w_0().child(label.clone()))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.expanded.remove(&target) {
-                        this.expanded.insert(target.clone());
-                    }
-                    this.refresh_markdown(cx);
-                    cx.notify();
-                })),
-        );
-        if !open {
-            let status = presentation::tool_status(&message.metadata);
-            let status_label = match status {
-                "running" => t!("running").to_string(),
-                "failed" => t!("failed").to_string(),
-                "completed" => t!("completed").to_string(),
-                _ => String::new(),
-            };
-            if !status_label.is_empty() {
-                body = body.child(
-                    div()
-                        .pl_12()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(status_label),
-                );
-            }
-            let summary = presentation::tool_result_summary(message);
-            if !summary.is_empty() {
-                body = body.child(
-                    div()
-                        .pl_12()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(summary),
-                );
-            }
-        }
-        if open {
-            body = body.child(self.message_card(&key, "tool", label, &message.metadata, cx));
-        }
-        body.into_any_element()
-    }
-
-    fn disclosure(&self, key: String, label: String, cx: &mut Context<Self>) -> AnyElement {
-        let expanded = self.expanded.contains(&key);
-        let target = key.clone();
+        let muted = cx.theme().muted_foreground;
         v_flex()
             .w_full()
+            .min_w_0()
             .gap_2()
             .child(
                 h_flex()
                     .id(SharedString::from(key.clone()))
                     .w_full()
                     .min_w_0()
-                    .justify_start()
-                    .items_start()
+                    .items_center()
                     .gap_2()
                     .py_1()
                     .cursor_pointer()
                     .hover(|style| style.bg(cx.theme().muted))
-                    .child(font_icon(if expanded {
-                        "caret-down"
-                    } else {
-                        "caret-right"
-                    }))
-                    .child(font_icon("reasoning"))
-                    .child(div().flex_1().min_w_0().child(label))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.expanded.remove(&target) {
-                            this.expanded.insert(target.clone());
-                        }
-                        this.refresh_markdown(cx);
-                        cx.notify();
-                    })),
-            )
-            .when(expanded, |view| {
-                if let Some((_, state)) = self.markdown.get(&key) {
-                    view.child(
+                    .child(font_icon("reasoning", 14., muted))
+                    .child(
                         div()
-                            .pl_12()
-                            .border_l_1()
-                            .border_color(cx.theme().border)
-                            .child(TextView::new(state).selectable(true)),
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_size(px(13.))
+                            .text_color(muted)
+                            .italic()
+                            .child(title),
                     )
-                } else {
-                    view
-                }
+                    .child(font_icon(
+                        if open { "caret-down" } else { "caret-right" },
+                        12.,
+                        muted,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
+            )
+            .when(open, |view| {
+                view.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .rounded(px(4.))
+                        .border_l_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().muted)
+                        .px_3()
+                        .py_2()
+                        .text_size(px(13.))
+                        .italic()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(plain_text(text, cx.theme().muted_foreground)),
+                )
             })
             .into_any_element()
     }
 
-    fn message_card(
-        &self,
-        key: &str,
-        role: &str,
-        title: String,
-        metadata: &serde_json::Value,
-        cx: &App,
-    ) -> AnyElement {
-        let theme = cx.theme();
-        let is_user = role == "user";
-        let is_tool = role == "tool";
-        let icon = if is_user {
-            "talk"
-        } else if is_tool {
-            icons::tool_icon(presentation::tool_name(metadata))
-        } else {
-            "assistant"
-        };
-        let accent = if is_tool {
-            theme.primary
-        } else {
-            theme.muted_foreground
-        };
+    fn assistant_row(&self, view: &AssistantView, cx: &mut Context<Self>) -> AnyElement {
         let mut body = v_flex().w_full().min_w_0().gap_2();
-        let metadata = Some(metadata);
-        let title = metadata
-            .and_then(|value| {
-                value["tool_name"]
-                    .as_str()
-                    .or_else(|| value["tool_call"]["function"]["name"].as_str())
-            })
-            .map(str::to_owned)
-            .unwrap_or(title);
-        if let Some(lines) = metadata.and_then(chatspeed_gpui_observer::presentation::edit_lines) {
-            let mut diff = v_flex().w_full().font_family("Liberation Mono").text_sm();
-            let mut old_line = 0usize;
-            let mut new_line = 0usize;
+        if let Some(reasoning) = &view.reasoning {
+            body = body.child(self.thought_row(
+                view.thought_key.clone(),
+                view.thought_title.clone(),
+                reasoning,
+                cx,
+            ));
+        }
+        if !view.markdown.is_empty() {
+            body = body.child(self.markdown_view(&view.key));
+        }
+        body.into_any_element()
+    }
+
+    fn tool_icon_color(&self, tool: &ToolView) -> Rgba {
+        match tool.kind {
+            Some(presentation::ToolGroupKind::Read)
+            | Some(presentation::ToolGroupKind::Search)
+            | Some(presentation::ToolGroupKind::Mutation) => accent(),
+            Some(presentation::ToolGroupKind::Command) => info(),
+            Some(presentation::ToolGroupKind::Task) => violet(),
+            _ => accent(),
+        }
+    }
+
+    fn tool_row(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.expanded.contains(&tool.detail_key);
+        let target_key = tool.detail_key.clone();
+        let muted = cx.theme().muted_foreground;
+        let foreground = cx.theme().foreground;
+        let border = cx.theme().border;
+        let summary_color: Hsla = if tool.status.is_error() {
+            danger().into()
+        } else {
+            muted
+        };
+        let status_color: Hsla = match tool.status {
+            ToolStatus::Running | ToolStatus::Pending => accent().into(),
+            ToolStatus::Failed | ToolStatus::Rejected => danger().into(),
+            ToolStatus::Completed => border,
+        };
+        let expandable = !tool.detail.is_empty()
+            || tool.diff.is_some()
+            || tool.command.is_some()
+            || tool.arguments.is_some();
+        let mut title = h_flex()
+            .id(SharedString::from(tool.detail_key.clone()))
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .py_1()
+            .pl_2()
+            .border_l_2()
+            .border_color(status_color)
+            .cursor_pointer()
+            .child(font_icon(tool.icon, 15., self.tool_icon_color(tool)))
+            .child(
+                div()
+                    .flex_none()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(foreground)
+                    .child(truncate_text(&tool.action, 160)),
+            );
+        if !tool.target.is_empty() {
+            title = title.child(
+                div()
+                    .flex_none()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_size(px(13.))
+                    .text_color(muted)
+                    .child(truncate_text(&tool.target, 120)),
+            );
+        }
+        title = title.child(div().flex_1());
+        for badge in &tool.badges {
+            title = title.child(
+                div()
+                    .flex_none()
+                    .px_1()
+                    .rounded(px(4.))
+                    .border_1()
+                    .border_color(border)
+                    .text_size(px(10.))
+                    .text_color(muted)
+                    .child(badge.clone()),
+            );
+        }
+        if tool.approved {
+            title = title.child(font_icon("check", 12., success()));
+        }
+        if expandable {
+            title = title
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle(target_key.clone(), cx)));
+        }
+        let mut body = v_flex().w_full().min_w_0().cursor_pointer().child(title);
+        if !open {
+            let mut summary = h_flex().w_full().min_w_0().items_start().gap_1().pl_6();
+            summary = summary
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(12.))
+                        .text_color(muted)
+                        .child("⎿"),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_size(px(12.))
+                        .text_color(summary_color)
+                        .child(tool.summary.clone()),
+                );
+            // Vue keeps the hint right after the summary instead of pinning it
+            // to the far edge of the row.
+            if expandable {
+                summary = summary.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(12.))
+                        .text_color(muted)
+                        .opacity(0.6)
+                        .child(t!("click_to_expand").to_string()),
+                );
+            }
+            if !tool.summary.is_empty() {
+                body = body.child(summary);
+            }
+        } else {
+            body = body.child(self.tool_detail(tool, cx));
+        }
+        body.into_any_element()
+    }
+
+    fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
+        let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
+        if let Some(lines) = &tool.diff {
+            let mut diff = v_flex()
+                .w_full()
+                .rounded(px(4.))
+                .text_size(px(12.))
+                .font_family(MONO_FONT);
+            let (mut old_line, mut new_line) = (0usize, 0usize);
             for (added, line) in lines {
-                if added {
+                if *added {
                     new_line += 1;
                 } else {
                     old_line += 1;
                 }
-                let color = if added { rgb(0x41b555) } else { rgb(0xf56c6c) };
-                diff = diff.child(
-                    h_flex()
-                        .w_full()
-                        .gap_3()
-                        .px_3()
-                        .py_1()
-                        .bg(color.opacity(0.12))
-                        .text_color(color)
-                        .child(div().w(px(36.)).text_xs().child(if added {
-                            new_line.to_string()
-                        } else {
-                            old_line.to_string()
-                        }))
-                        .child(
-                            div()
-                                .flex_1()
-                                .child(format!("{} {line}", if added { "+" } else { "−" })),
-                        ),
-                );
+                let color = if *added { success() } else { danger() };
+                diff =
+                    diff.child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_2()
+                            .px_2()
+                            .bg(color.opacity(0.12))
+                            .text_color(color)
+                            .child(div().flex_none().w(px(36.)).text_size(px(10.)).child(
+                                if *added {
+                                    new_line.to_string()
+                                } else {
+                                    old_line.to_string()
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(format!("{} {line}", if *added { "+" } else { "−" })),
+                            ),
+                    );
             }
-            body = body.child(diff);
-        } else if let Some((_, state)) = self.markdown.get(key) {
-            body = body.child(TextView::new(state).selectable(true));
+            detail = detail.child(diff);
         }
-        if is_tool {
-            return div()
-                .w_full()
-                .min_w_0()
-                .pl_12()
+        if let Some(command) = &tool.command {
+            detail = detail.child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_start()
+                    .gap_2()
+                    .text_size(px(13.))
+                    .font_family(MONO_FONT)
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(accent())
+                            .child("$"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(plain_text(command, cx.theme().muted_foreground)),
+                    ),
+            );
+        }
+        if let Some(arguments) = &tool.arguments {
+            detail = detail
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("arguments_label").to_string()),
+                )
                 .child(
                     div()
                         .w_full()
                         .min_w_0()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.muted)
-                        .p_3()
-                        .child(body),
-                )
-                .into_any_element();
+                        .rounded(px(4.))
+                        .bg(cx.theme().muted)
+                        .px_2()
+                        .py_1()
+                        .text_size(px(12.))
+                        .font_family(MONO_FONT)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(plain_text(arguments, cx.theme().muted_foreground)),
+                );
         }
+        if !tool.detail.is_empty() {
+            detail = detail.child(self.markdown_view(&tool.detail_key));
+        }
+        detail.into_any_element()
+    }
+
+    fn activity_row(&self, group: &ActivityView, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.expanded.contains(&group.key);
+        let target = group.key.clone();
+        let muted = cx.theme().muted_foreground;
+        let mut header = h_flex()
+            .id(SharedString::from(group.key.clone()))
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .py_1()
+            .pl_2()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .hover(|style| style.bg(cx.theme().muted))
+            .child(font_icon(group.icon, 15., muted));
+        if group.thought_count > 0 {
+            header = header.child(pill(
+                format!("{} x{}", t!("thought"), group.thought_count),
+                accent(),
+                Some(accent().opacity(0.12)),
+            ));
+        }
+        if group.error_count > 0 {
+            // Vue tints group errors into the background instead of shouting in red.
+            header = header.child(
+                div()
+                    .flex_none()
+                    .px_2()
+                    .py(px(1.))
+                    .rounded(px(4.))
+                    .bg(cx.theme().border.opacity(0.35))
+                    .text_size(px(10.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(muted)
+                    .child(format!("{} x{}", t!("error"), group.error_count)),
+            );
+        }
+        header = header
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_size(px(13.))
+                    .text_color(if group.ongoing {
+                        cx.theme().foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(group.summary.clone()),
+            )
+            .child(font_icon(
+                if open { "caret-down" } else { "caret-right" },
+                14.,
+                muted,
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)));
+        let mut body = v_flex().w_full().min_w_0().child(header);
+        if open {
+            let mut details = v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .pl_4()
+                .pt_1()
+                .border_l_1()
+                .border_color(cx.theme().border);
+            for item in &group.items {
+                details = details.child(self.activity_item(item, cx));
+            }
+            body = body.child(details);
+        }
+        body.into_any_element()
+    }
+
+    fn activity_item(&self, item: &ActivityItem, cx: &mut Context<Self>) -> AnyElement {
+        match (&item.thought, &item.tool) {
+            (Some(thought), _) => self.thought_row(
+                item.thought_key.clone(),
+                t!("thought_completed").to_string(),
+                thought,
+                cx,
+            ),
+            (None, Some(tool)) => self.tool_row(tool, cx),
+            (None, None) => div().into_any_element(),
+        }
+    }
+
+    fn status_color(&self, status: SubAgentStatus) -> Rgba {
+        match status {
+            SubAgentStatus::Running => accent(),
+            SubAgentStatus::Completed => success(),
+            SubAgentStatus::Failed => danger(),
+            SubAgentStatus::Cancelled => rgb(0x848586),
+        }
+    }
+
+    fn sub_agent_row(&self, card: &SubAgentView, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.expanded.contains(&card.key);
+        let target = card.key.clone();
+        let status_color = self.status_color(card.status);
+        let muted = cx.theme().muted_foreground;
+        let header = h_flex()
+            .id(SharedString::from(card.key.clone()))
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .py_1()
+            .pl_2()
+            .cursor_pointer()
+            .hover(|style| style.bg(cx.theme().muted))
+            .child(font_icon("skill-relation-chart", 15., muted))
+            .child(pill(
+                card.status_label.clone(),
+                status_color,
+                Some(status_color.opacity(0.12)),
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_size(px(13.))
+                    .text_color(cx.theme().foreground)
+                    .child(card.agent.clone()),
+            )
+            .child(font_icon(
+                if open { "caret-down" } else { "caret-right" },
+                14.,
+                muted,
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)));
+        let mut body = v_flex().w_full().min_w_0().child(header);
+        if open {
+            let mut rows = h_flex().w_full().min_w_0().gap_3();
+            for (label, value) in [
+                (t!("sub_agent_agent").to_string(), card.agent.clone()),
+                (t!("sub_agent_mode").to_string(), card.mode.clone()),
+                (t!("sub_agent_tools").to_string(), card.tools.clone()),
+                (t!("sub_agent_context").to_string(), card.context.clone()),
+            ] {
+                rows = rows.child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(muted)
+                                .child(label.to_uppercase()),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_size(px(13.))
+                                .text_color(cx.theme().foreground)
+                                .child(value),
+                        ),
+                );
+            }
+            body = body.child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_3()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().muted)
+                    .p_3()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap_2()
+                            .child(font_icon("task", 15., warning()))
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child(t!("sub_agent_delegated_task").to_string()),
+                            )
+                            .child(div().flex_1())
+                            .when(!card.usage.is_empty(), |view| {
+                                view.child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(10.))
+                                        .text_color(muted)
+                                        .child(card.usage.clone()),
+                                )
+                            }),
+                    )
+                    .child(rows)
+                    .child(self.sub_agent_section(
+                        t!("sub_agent_task_section").to_string(),
+                        card.task_key.clone(),
+                        &card.task,
+                        &card.task_preview,
+                        cx,
+                    ))
+                    .when(card.has_result, |view| {
+                        view.child(self.sub_agent_section(
+                            t!("sub_agent_result_section").to_string(),
+                            card.result_key.clone(),
+                            &card.result,
+                            &card.result_preview,
+                            cx,
+                        ))
+                    }),
+            );
+        }
+        body.into_any_element()
+    }
+
+    fn sub_agent_section(
+        &self,
+        label: String,
+        key: String,
+        body: &str,
+        preview: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let open = self.expanded.contains(&key);
+        let target = key.clone();
+        let muted = cx.theme().muted_foreground;
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .rounded(px(6.))
+            .bg(cx.theme().background)
+            .p_2()
+            .child(
+                h_flex()
+                    .id(SharedString::from(key.clone()))
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(10.))
+                            .text_color(muted)
+                            .child(label.to_uppercase()),
+                    )
+                    .when(!open && !preview.is_empty(), |view| {
+                        view.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_size(px(12.))
+                                .text_color(muted)
+                                .child(preview.to_string()),
+                        )
+                    })
+                    .when(open || preview.is_empty(), |view| {
+                        view.child(div().flex_1())
+                    })
+                    .child(font_icon(
+                        if open { "caret-down" } else { "caret-right" },
+                        12.,
+                        muted,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
+            )
+            .when(open, |view| {
+                view.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .pt_1()
+                        .child(self.markdown_view(&key)),
+                )
+            })
+            .when(!open && !body.is_empty() && preview.is_empty(), |view| {
+                view.child(div().text_size(px(12.)).text_color(muted).child(" "))
+            })
+            .into_any_element()
+    }
+
+    fn snapshot_row(&self, snapshot: &SnapshotView, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.expanded.contains(&snapshot.key);
+        let target = snapshot.key.clone();
+        let muted = cx.theme().muted_foreground;
+        let mut body = v_flex()
+            .w_full()
+            .min_w_0()
+            .mb_2()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().muted)
+            .overflow_hidden()
+            .child(
+                h_flex()
+                    .id(SharedString::from(snapshot.key.clone()))
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(cx.theme().background))
+                    .child(font_icon("compress", 14., accent()))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().foreground)
+                            .child(snapshot.title.clone()),
+                    )
+                    .when(!snapshot.preview.is_empty(), |view| {
+                        view.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_size(px(10.))
+                                .text_color(muted)
+                                .child(snapshot.preview.clone()),
+                        )
+                    })
+                    .when(snapshot.preview.is_empty(), |view| {
+                        view.child(div().flex_1())
+                    })
+                    .child(font_icon(
+                        if open { "caret-down" } else { "caret-right" },
+                        14.,
+                        muted,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
+            );
+        if open {
+            body = body.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .px_3()
+                    .py_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(self.markdown_view(&snapshot.body_key)),
+            );
+        }
+        body.into_any_element()
+    }
+
+    fn finish_task_row(&self, view: &FinishTaskView) -> AnyElement {
+        let (icon, color) = if view.failed {
+            ("check-x", danger())
+        } else {
+            ("check-circle", success())
+        };
         h_flex()
             .w_full()
-            .items_start()
+            .items_center()
+            .gap_2()
+            .pl_2()
+            .child(font_icon(icon, 15., color))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(color)
+                    .child(view.label.clone()),
+            )
+            .into_any_element()
+    }
+
+    fn alert_row(&self, view: &AlertView, cx: &mut Context<Self>) -> AnyElement {
+        let is_warning = view.kind == AlertKind::Warning;
+        let (icon, color) = if is_warning {
+            ("warning", warning())
+        } else {
+            ("error", danger())
+        };
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(color.opacity(0.45))
+            .bg(color.opacity(0.08))
+            .px_4()
+            .py_3()
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .child(font_icon(icon, 18., color))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(color)
+                            .child(view.title.clone()),
+                    ),
+            )
+            .when(!view.body.is_empty(), |alert| {
+                alert.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .text_size(px(13.))
+                        .text_color(cx.theme().foreground)
+                        .child(plain_text(&view.body, cx.theme().foreground)),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn divider_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        h_flex()
+            .w_full()
+            .items_center()
             .gap_3()
             .py_3()
-            .child(div().pt_1().text_color(accent).child(font_icon(icon)))
+            .child(div().flex_1().h(px(1.)).bg(cx.theme().border))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("clear_context_divider").to_string()),
+            )
+            .child(div().flex_1().h(px(1.)).bg(cx.theme().border))
+            .into_any_element()
+    }
+
+    fn row(&self, row: &Row, cx: &mut Context<Self>) -> AnyElement {
+        match row {
+            Row::User(view) => self.user_row(view, cx),
+            Row::Assistant(view) => self.assistant_row(view, cx),
+            Row::Activity(group) => self.activity_row(group, cx),
+            Row::Tool(tool) => self.tool_row(tool, cx),
+            Row::SubAgent(card) => self.sub_agent_row(card, cx),
+            Row::FinishTask(view) => self.finish_task_row(view),
+            Row::Snapshot(snapshot) => self.snapshot_row(snapshot, cx),
+            Row::Alert(alert) => self.alert_row(alert, cx),
+            Row::Divider => self.divider_row(cx),
+        }
+    }
+
+    fn status_color_for(&self, status: &str) -> Rgba {
+        match status.to_lowercase().as_str() {
+            "executing" | "running" | "pending" | "waiting" => accent(),
+            "completed" => success(),
+            "failed" | "error" => danger(),
+            _ => rgb(0x848586),
+        }
+    }
+
+    fn session_row(&self, index: usize, session: &Session, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.selected.as_deref() == Some(session.id.as_str());
+        let id = session.id.clone();
+        let status_color = self.status_color_for(&session.status);
+        let title = if session.title.trim().is_empty() {
+            t!("untitled").to_string()
+        } else {
+            session.title.clone()
+        };
+        h_flex()
+            .id(("session", index))
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_2()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .when(active, |view| view.bg(accent().opacity(0.14)))
+            .when(!active, |view| {
+                view.hover(|style| style.bg(cx.theme().muted))
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(6.))
+                    .h(px(6.))
+                    .rounded_full()
+                    .bg(status_color),
+            )
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap_2()
-                    .child(h_flex().gap_2().text_xs().text_color(accent).child(title))
                     .child(
                         div()
-                            .w_full()
                             .min_w_0()
-                            .rounded(px(if is_user { 16. } else { 12. }))
-                            .when(is_user, |view| {
-                                view.bg(theme.muted)
-                                    .p_4()
-                                    .border_1()
-                                    .border_color(theme.border)
+                            .overflow_hidden()
+                            .text_size(px(13.))
+                            .when(active, |view| {
+                                view.text_color(accent()).font_weight(FontWeight::SEMIBOLD)
                             })
-                            .when(is_tool, |view| view.bg(theme.muted).p_2())
-                            .child(body),
+                            .when(!active, |view| view.text_color(cx.theme().foreground))
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(session.status.clone()),
                     ),
             )
+            .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
             .into_any_element()
     }
+}
+
+fn truncate_text(text: &str, max: usize) -> String {
+    let mut chars = text.chars();
+    let mut result: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() {
+        result.push_str("...");
+    }
+    result
 }
 
 impl Render for Observer {
@@ -607,32 +1353,64 @@ impl Render for Observer {
         }
         // Retain the polling task for the lifetime of this window only.
         let _ = &self.task;
-        let mut sessions = v_flex()
+
+        let border = cx.theme().border;
+        let surface = cx.theme().muted;
+        let background = cx.theme().background;
+        let foreground = cx.theme().foreground;
+        let muted = cx.theme().muted_foreground;
+
+        let mut sidebar = v_flex()
             .id("sessions")
             .w(px(260.))
             .h_full()
+            .flex_none()
             .overflow_y_scroll()
-            .gap_2()
+            .gap_1()
             .p_3()
             .border_r_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted)
-            .child(t!("sessions").to_string());
+            .border_color(border)
+            .bg(background)
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .pb_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(muted)
+                            .child(t!("sessions").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(muted)
+                            .child(self.sessions.len().to_string()),
+                    ),
+            );
         for (index, session) in self.sessions.iter().enumerate() {
-            let id = session.id.clone();
-            sessions = sessions.child(
-                Button::new(("session", index))
-                    .ghost()
-                    .label(format!("{} · {}", session.title, session.status))
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx))),
+            sidebar = sidebar.child(self.session_row(index, session, cx));
+        }
+        if self.sessions.is_empty() {
+            sidebar = sidebar.child(
+                div()
+                    .pt_2()
+                    .text_size(px(11.))
+                    .text_color(muted)
+                    .child(t!("no_sessions").to_string()),
             );
         }
+
         let mut content = v_flex()
             .id("history")
             .flex_1()
             .min_h_0()
             .p_4()
-            .gap_4()
+            .gap_3()
             .track_scroll(&self.scroll)
             .overflow_y_scroll()
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
@@ -648,19 +1426,45 @@ impl Render for Observer {
                 }
             }));
         if self.selected.is_none() {
-            content = content.child(t!("select").to_string());
+            content = content.child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(muted)
+                    .child(t!("select").to_string()),
+            );
         }
         if self.model.hidden > 0 {
+            let before = self.model.before.clone();
             content = content.child(
-                Button::new("earlier")
-                    .link()
-                    .label(t!("earlier").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let (Some(id), Some(before)) = (&this.selected, &this.model.before) {
+                h_flex()
+                    .id("earlier")
+                    .w_full()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .mb_2()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_dashed()
+                    .border_color(border)
+                    .bg(background)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(surface).border_color(accent().opacity(0.45)))
+                    .child(font_icon("double-arrow-down", 12., muted))
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(muted)
+                            .child(t!("earlier").to_string()),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let (Some(id), Some(previous)) = (&this.selected, before.clone()) {
                             let _ = this.worker.commands.try_send(Command::Older {
                                 generation: this.model.generation,
                                 id: id.clone(),
-                                before: before.clone(),
+                                before: previous,
                             });
                             this.follow = false;
                             cx.notify();
@@ -668,127 +1472,120 @@ impl Render for Observer {
                     })),
             );
         }
-        for row in self.display_rows() {
-            let mut row_view = v_flex().w_full().min_w_0().gap_2();
-            match row {
-                DisplayRow::Activity { key, items } => {
-                    row_view = row_view.child(self.activity_group(key, &items, cx));
-                }
-                DisplayRow::Message(message) => {
-                    let key = presentation::message_key(&message);
-                    if presentation::tool_name(&message.metadata) == "complete_workflow" {
-                        if let Some((_, state)) = self.markdown.get(&key) {
-                            row_view = row_view
-                                .child(div().w_full().child(TextView::new(state).selectable(true)));
-                        }
-                        let status = presentation::tool_status(&message.metadata);
-                        let failed = status == "failed";
-                        let finish_label = if failed {
-                            t!("failed").to_string()
-                        } else if status == "running" {
-                            t!("running").to_string()
-                        } else {
-                            t!("finish_task").to_string()
-                        };
-                        row_view = row_view.child(
-                            div()
-                                .text_sm()
-                                .text_color(if failed {
-                                    rgb(0xf56c6c).into()
-                                } else {
-                                    cx.theme().muted_foreground
-                                })
-                                .child(finish_label),
-                        );
-                    } else if presentation::is_tool_message(&message) {
-                        row_view = row_view.child(self.tool_item(&message, cx));
-                    } else {
-                        if message.reasoning.is_some() {
-                            row_view = row_view.child(self.disclosure(
-                                format!("thought-{key}"),
-                                t!("reasoning").to_string(),
-                                cx,
-                            ));
-                        }
-                        if self.markdown.contains_key(&key) {
-                            let label = if message.role == "user" {
-                                t!("user")
-                            } else {
-                                t!("assistant")
-                            };
-                            row_view = row_view.child(self.message_card(
-                                &key,
-                                &message.role,
-                                label.to_string(),
-                                &message.metadata,
-                                cx,
-                            ));
-                        }
-                    }
-                }
-            }
-            content = content.child(row_view);
+        for row in &self.rows {
+            // Vue separates transcript entries with the medium spacing token.
+            content = content.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .mb(px(20.))
+                    .child(self.row(row, cx)),
+            );
         }
+        if self.model.live_overflow {
+            content = content.child(
+                div()
+                    .px_4()
+                    .text_size(px(10.))
+                    .text_color(muted)
+                    .child(t!("live_overflow").to_string()),
+            );
+        }
+        if self.model.compressing {
+            let seconds = self
+                .compression_started
+                .map(|started| started.elapsed().as_secs())
+                .unwrap_or(0);
+            let hint = self
+                .model
+                .compression_message
+                .trim_end_matches(['.', '…'])
+                .trim()
+                .to_owned();
+            content = content.child(
+                h_flex().w_full().justify_center().py_3().child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .px_4()
+                        .py_2()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(border)
+                        .bg(surface)
+                        .child(font_icon("loading", 14., accent()))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(muted)
+                                .child(format!("{hint} {seconds}s...")),
+                        ),
+                ),
+            );
+        }
+
+        let mut header = h_flex()
+            .w_full()
+            .items_center()
+            .gap_3()
+            .px_4()
+            .py_2()
+            .border_b_1()
+            .border_color(border);
+        header = header
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(6.))
+                    .h(px(6.))
+                    .rounded_full()
+                    .bg(if self.connected { success() } else { danger() }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_size(px(11.))
+                    .text_color(muted)
+                    .child(format!(
+                        "{} · {}",
+                        if self.connected {
+                            t!("connected")
+                        } else {
+                            t!("connecting")
+                        },
+                        self.model.state
+                    )),
+            );
+        if !self.follow {
+            header = header.child(
+                Button::new("follow")
+                    .ghost()
+                    .compact()
+                    .label(t!("follow").to_string())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.resume_follow();
+                        this.follow = true;
+                        this.scroll_pending = true;
+                        this.refresh_markdown(cx);
+                        cx.notify();
+                    })),
+            );
+        }
+
         h_flex()
             .size_full()
             .text_size(px(14.))
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .child(sessions)
+            .bg(background)
+            .text_color(foreground)
+            .child(sidebar)
             .child(
                 v_flex()
                     .flex_1()
                     .h_full()
                     .min_w_0()
-                    .gap_2()
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .gap_3()
-                            .px_4()
-                            .py_2()
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!(
-                                        "{} · {}",
-                                        if self.connected {
-                                            t!("connected")
-                                        } else {
-                                            t!("connecting")
-                                        },
-                                        self.model.state
-                                    )),
-                            )
-                            .when(!self.follow, |view| {
-                                view.child(
-                                    Button::new("follow")
-                                        .ghost()
-                                        .compact()
-                                        .label(t!("follow").to_string())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.model.resume_follow();
-                                            this.follow = true;
-                                            this.scroll_pending = true;
-                                            this.refresh_markdown(cx);
-                                            cx.notify();
-                                        })),
-                                )
-                            }),
-                    )
-                    .when(self.model.live_overflow, |view| {
-                        view.child(
-                            div()
-                                .px_4()
-                                .text_xs()
-                                .child(t!("live_overflow").to_string()),
-                        )
-                    })
+                    .child(header)
                     .child(content),
             )
     }

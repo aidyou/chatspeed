@@ -19,6 +19,9 @@ pub struct Model {
     pub reading_history: bool,
     pub live_overflow: bool,
     pub state: String,
+    /// Backend-owned compression hint, mirrored from `compression_status` events.
+    pub compressing: bool,
+    pub compression_message: String,
 }
 
 impl Model {
@@ -145,6 +148,7 @@ impl Model {
                         message: event["content"].as_str().unwrap_or_default().to_owned(),
                         reasoning: event["reasoning"].as_str().map(str::to_owned),
                         metadata: event["metadata"].clone(),
+                        ..Message::default()
                     };
                     if let Some(tool) = row.metadata["tool_call_id"].as_str() {
                         self.tools.remove(tool);
@@ -179,6 +183,14 @@ impl Model {
                 }
             }
             "state" => self.state = event["state"].as_str().unwrap_or_default().to_owned(),
+            "compression_status" => {
+                self.compressing = event["is_compressing"].as_bool().unwrap_or(false);
+                self.compression_message = event["message"].as_str().unwrap_or_default().to_owned();
+            }
+            "compression_applied" => {
+                self.compressing = false;
+                self.compression_message.clear();
+            }
             _ => {}
         }
     }
@@ -207,6 +219,7 @@ impl Model {
                 message: format!("## Replay {id}\n\nA deterministic **Markdown** row.\n\n```rust\nlet answer = 42;\n```\n\n- first\n- second"),
                 reasoning: Some("Bounded replay reasoning.".into()),
                 metadata: json!({"tool_call_id": format!("demo-{id}"), "tool_name": "read_only_demo"}),
+                ..Message::default()
             }).collect(),
             ..Page::default()
         }

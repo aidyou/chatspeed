@@ -25,6 +25,10 @@ pub struct Session {
 }
 
 /// Durable transcript row; aliases exist only at the HTTP compatibility boundary.
+///
+/// The authoritative columns (`messageKind`, `stepType`, ...) stay outside
+/// `metadata`, so the native list must read them to find snapshots, completion
+/// reports and hidden observations.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Message {
     pub id: i64,
@@ -33,15 +37,22 @@ pub struct Message {
     #[serde(default)]
     pub message: String,
     pub reasoning: Option<String>,
+    #[serde(default, alias = "messageKind")]
+    pub message_kind: String,
+    #[serde(default, alias = "messageSubtype")]
+    pub message_subtype: Option<String>,
+    #[serde(default, alias = "stepType")]
+    pub step_type: Option<String>,
+    #[serde(default, alias = "stepIndex")]
+    pub step_index: i64,
+    #[serde(default, alias = "segmentId")]
+    pub segment_id: i64,
+    #[serde(default, alias = "isError")]
+    pub is_error: bool,
+    #[serde(default, alias = "errorType")]
+    pub error_type: Option<String>,
     #[serde(default)]
     pub metadata: Value,
-}
-
-/// Semantic list projection, shared by Markdown caching and native rendering.
-#[derive(Clone, Debug)]
-pub enum DisplayRow {
-    Message(Message),
-    Activity { key: String, items: Vec<Message> },
 }
 
 /// Bounded history response, either a snapshot or the older-message adapter.
