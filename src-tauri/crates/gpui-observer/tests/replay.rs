@@ -1,0 +1,298 @@
+//! Focused replay and cancellation checks; no daemon, database or display is required.
+use chatspeed_gpui_observer::{
+    types::{Command, Options, UpdateKind},
+    worker::Worker,
+};
+use std::time::{Duration, Instant};
+
+#[test]
+fn replay_is_ordered_and_window_drop_joins_worker() {
+    let mut worker = Worker::start(Options {
+        discovery: None,
+        metrics: None,
+        demo: true,
+    })
+    .unwrap();
+    worker
+        .commands
+        .try_send(Command::Select {
+            generation: 9,
+            id: "demo".into(),
+        })
+        .unwrap();
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut snapshot = false;
+    let mut event = false;
+    while Instant::now() < until {
+        if let Ok(update) = worker.updates.try_recv() {
+            match update.kind {
+                UpdateKind::Snapshot(page) => {
+                    assert_eq!(update.generation, 9);
+                    assert_eq!(page.messages.len(), 300);
+                    snapshot = true;
+                }
+                UpdateKind::Event(_) => {
+                    assert!(snapshot);
+                    event = true;
+                    break;
+                }
+                _ => {}
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    assert!(snapshot && event);
+    let start = Instant::now();
+    drop(worker);
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn immediate_shutdown_cancels_selected_worker() {
+    let worker = Worker::start(Options {
+        discovery: None,
+        metrics: None,
+        demo: true,
+    })
+    .unwrap();
+    worker
+        .commands
+        .try_send(Command::Select {
+            generation: 1,
+            id: "demo".into(),
+        })
+        .unwrap();
+    let start = Instant::now();
+    drop(worker);
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn demo_switching_and_older_pages_stay_local() {
+    let mut worker = Worker::start(Options {
+        discovery: None,
+        metrics: None,
+        demo: true,
+    })
+    .unwrap();
+    let mut bodies = Vec::new();
+    for generation in 1..=3 {
+        worker
+            .commands
+            .try_send(Command::Select {
+                generation,
+                id: format!("demo-{generation}"),
+            })
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut before = None;
+        while Instant::now() < deadline {
+            if let Ok(update) = worker.updates.try_recv() {
+                if update.generation == generation {
+                    if let UpdateKind::Snapshot(page) = update.kind {
+                        bodies.push(page.messages[0].message.clone());
+                        before = page.message_window_before_id;
+                        break;
+                    }
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        worker
+            .commands
+            .try_send(Command::Older {
+                generation,
+                id: format!("demo-{generation}"),
+                before: before.expect("demo has older history"),
+            })
+            .unwrap();
+        let mut older = false;
+        while Instant::now() < deadline {
+            if let Ok(update) = worker.updates.try_recv() {
+                if update.generation == generation {
+                    if let UpdateKind::Older(page) = update.kind {
+                        assert_eq!(page.messages[0].id, 301);
+                        assert_eq!(page.messages.last().unwrap().id, 600);
+                        older = true;
+                        break;
+                    }
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert!(older);
+    }
+    assert_eq!(bodies.len(), 3);
+    assert!(bodies[0] != bodies[1] && bodies[1] != bodies[2]);
+}
+
+#[test]
+fn loopback_reconnect_reset_and_snapshot_race_converge() {
+    use chatspeed_gpui_observer::model::Model;
+    use serde_json::json;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let discovery = std::env::temp_dir().join(format!(
+        "observer-discovery-{}-{port}.json",
+        std::process::id()
+    ));
+    std::fs::write(&discovery, json!({"protocol_version":"1","server_instance_id":"mock","pid":std::process::id(),"host":"127.0.0.1","port":port,"token":"fixture","started_at":"fixture"}).to_string()).unwrap();
+    let done = Arc::new(AtomicBool::new(false));
+    let done_server = done.clone();
+    let server = std::thread::spawn(move || {
+        let mut held_streams = Vec::new();
+        let mut streams = 0;
+        let mut snapshots = 0;
+        while !done_server.load(Ordering::Relaxed) {
+            let Ok((mut socket, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0; 4096];
+            while let Ok(n) = socket.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buf[..n]);
+                if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request
+                .to_lowercase()
+                .contains("authorization: bearer fixture"));
+            let path = request.split_whitespace().nth(1).unwrap();
+            let frame = |seq, payload| {
+                format!(
+                    "data: {}\n\n",
+                    json!({"schema_version":1,"server_instance_id":"mock","sequence":seq,"session_id":"session","payload":payload})
+                )
+            };
+            let (content_type, body) = if path == "/control/v1/meta" {
+                ("application/json", json!({"service":"chatspeed-runtime","protocol_version":"1","schema_version":1,"server_instance_id":"mock","pid":std::process::id()}).to_string())
+            } else if path.ends_with("/stream") {
+                streams += 1;
+                let body = match streams {
+                    1 => {
+                        assert!(!request.to_lowercase().contains("last-event-id"));
+                        frame(1, json!({"type":"chunk","content":"part"}))
+                    }
+                    2 => {
+                        assert_eq!(snapshots, 1, "ordinary reconnect must not snapshot");
+                        assert!(request.to_lowercase().contains("last-event-id: mock:1"));
+                        format!(
+                            "{}{}{}",
+                            frame(1, json!({"type":"chunk","content":"part"})),
+                            frame(2, json!({"type":"chunk","content":"ial"})),
+                            "event: reset\ndata: {\"error\":{\"code\":\"reset_required\"}}\n\n"
+                        )
+                    }
+                    _ => {
+                        assert!(snapshots >= 2);
+                        assert!(!request.to_lowercase().contains("last-event-id"));
+                        // A final was durable before subscription. Its stale delta must
+                        // disappear at periodic authoritative terminal reconciliation.
+                        frame(3, json!({"type":"chunk","content":"stale"}))
+                    }
+                };
+                ("text/event-stream", body)
+            } else if path == "/control/v1/workflows/session" {
+                snapshots += 1;
+                ("application/json", if snapshots == 1 { json!({"messages":[],"status":"executing"}) } else { json!({"messages":[{"id":7,"role":"assistant","message":"durable final"}],"workflow":{"status":"completed"}}) }.to_string())
+            } else {
+                ("application/json", "[]".to_string())
+            };
+            if streams >= 3 && content_type == "text/event-stream" {
+                let _ = socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n", body.len()).as_bytes());
+                // Keep SSE open while allowing the worker's periodic HTTP snapshot.
+                held_streams.push(socket);
+            } else {
+                let _ = socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
+            }
+        }
+    });
+    let mut worker = Worker::start(Options {
+        discovery: Some(discovery.clone()),
+        metrics: None,
+        demo: false,
+    })
+    .unwrap();
+    let mut model = Model::default();
+    let generation = model.select();
+    worker
+        .commands
+        .try_send(Command::Select {
+            generation,
+            id: "session".into(),
+        })
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(18);
+    let mut reset = false;
+    let mut partial = false;
+    let mut converged = false;
+    let mut pages = 0;
+    while Instant::now() < deadline {
+        if let Ok(update) = worker.updates.try_recv() {
+            if update.generation != generation {
+                continue;
+            }
+            match update.kind {
+                UpdateKind::Snapshot(page) => {
+                    pages += 1;
+                    model.page(page, false);
+                    if pages >= 3
+                        && model.live.message.is_empty()
+                        && model
+                            .messages
+                            .get(&7)
+                            .is_some_and(|m| m.message == "durable final")
+                    {
+                        converged = true;
+                        break;
+                    }
+                }
+                UpdateKind::Reset => {
+                    reset = true;
+                    model.reset_live();
+                    assert!(model.live.message.is_empty());
+                }
+                UpdateKind::Event(event) => {
+                    model.event(event);
+                    if model.live.message == "partial" {
+                        partial = true;
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    drop(worker);
+    done.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    std::fs::remove_file(discovery).unwrap();
+    assert!(partial, "resume must not duplicate partial delta");
+    assert!(reset, "client reset must clear transient state");
+    assert!(
+        converged,
+        "periodic snapshot must clear post-snapshot stale delta"
+    );
+}

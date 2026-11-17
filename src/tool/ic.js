@@ -89,10 +89,18 @@ function processIconFontJson(iconfontDir, output) {
  * @param {string} output
  */
 function processFontFiles(iconfontDir, output) {
-  // Copy woff2 file
-  let woff2File = join(output, 'iconfont.woff2');
-  copyFileSync(join(iconfontDir, 'iconfont.woff2'), woff2File);
-  console.log('iconfont.woff2 file has been copied to: ' + woff2File);
+  // Keep the web and native fonts from the same iconfont export in sync.
+  const fontFiles = ['iconfont.woff2', 'iconfont.ttf'];
+  for (const file of fontFiles) {
+    if (!existsSync(join(iconfontDir, file))) {
+      throw new Error(`The iconfont export is missing ${file}. Please download the complete font package.`);
+    }
+  }
+  for (const file of fontFiles) {
+    const destination = join(output, file);
+    copyFileSync(join(iconfontDir, file), destination);
+    console.log(`${file} file has been copied to: ${destination}`);
+  }
 
   // Process CSS file
   let cssFile = join(iconfontDir, 'iconfont.css');

@@ -1,0 +1,115 @@
+_version: 2
+assistant:
+  en: Assistant
+  zh-CN: 助手
+body:
+  en: Body
+  zh-CN: 正文
+completed:
+  en: Completed
+  zh-CN: 已完成
+connected:
+  en: Connected (read-only)
+  zh-CN: 已连接（只读）
+connecting:
+  en: Disconnected — retrying discovery
+  zh-CN: 未连接 — 正在重试发现
+demo:
+  en: Deterministic local replay
+  zh-CN: 确定性本地回放
+earlier:
+  en: Load earlier messages
+  zh-CN: 加载更早的消息
+failed:
+  en: Failed
+  zh-CN: 失败
+finish_task:
+  en: ☑️ Complete task
+  zh-CN: ☑️完成任务
+follow:
+  en: Follow latest
+  zh-CN: 跟随最新
+font_error:
+  en: Cannot load ChatSpeed icon font
+  zh-CN: 无法加载 ChatSpeed 图标字体
+frozen:
+  en: Following paused — messages continue updating
+  zh-CN: 已暂停跟随 — 消息仍持续更新
+group_agent:
+  en: Fetch agent result
+  zh-CN: 获取代理结果
+group_command:
+  en: Run command
+  zh-CN: 执行命令
+group_edit:
+  en: Edit
+  zh-CN: 编辑
+group_mcp:
+  en: Call MCP
+  zh-CN: 调用 MCP
+group_read:
+  en: Read file
+  zh-CN: 读取文件
+group_search:
+  en: Search
+  zh-CN: 搜索
+group_skill:
+  en: Use skill
+  zh-CN: 使用技能
+group_tasks:
+  en: Update tasks
+  zh-CN: 更新任务
+group_tool:
+  en: Use tool
+  zh-CN: 使用工具
+group_web:
+  en: Read web
+  zh-CN: 读取网页
+history:
+  en: History window
+  zh-CN: 历史窗口
+live_overflow:
+  en: Live preview limit reached — awaiting durable final
+  zh-CN: 实时预览已达上限 — 等待耐久正文
+metrics_error:
+  en: Metrics output unavailable
+  zh-CN: 无法写入性能指标
+next:
+  en: Next 12
+  zh-CN: 后 12 条
+previous:
+  en: Previous 12
+  zh-CN: 前 12 条
+reasoning:
+  en: Reasoning
+  zh-CN: 思考
+running:
+  en: Running
+  zh-CN: 运行中
+select:
+  en: Select a workflow session
+  zh-CN: 请选择工作流会话
+sessions:
+  en: Workflow sessions
+  zh-CN: 工作流会话
+state:
+  en: State
+  zh-CN: 状态
+streaming:
+  en: Responding
+  zh-CN: 正在回复
+title:
+  en: ChatSpeed GPUI observer
+  zh-CN: ChatSpeed GPUI 观察器
+tools:
+  en: Structured tool data
+  zh-CN: 结构化工具数据
+user:
+  en: You
+  zh-CN: 你
+window_error:
+  en: Cannot open GPUI window
+  zh-CN: 无法打开 GPUI 窗口
+worker_error:
+  en: Cannot start observer worker
+  zh-CN: 无法启动观察器后台线程
