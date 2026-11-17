@@ -335,6 +335,7 @@ pub struct ToolView {
     pub arguments: Option<String>,
     pub diff: Option<Vec<(bool, String)>>,
     pub detail: String,
+    pub choices: Vec<ChoiceGroupView>,
 }
 
 impl ToolView {
@@ -404,8 +405,109 @@ impl ToolView {
             arguments,
             diff,
             detail,
+            choices: Vec::new(),
         }
     }
+}
+
+/// Token and cost totals for one view of a task (alone or with sub-agents).
+#[derive(Clone, Debug, Default)]
+pub struct CostTotals {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_tokens: u64,
+    pub total_tokens: u64,
+    pub estimated_cost: Option<f64>,
+    pub effective_cost_per_million: Option<f64>,
+}
+
+impl CostTotals {
+    fn parse(value: &Value) -> Option<Self> {
+        let number = |key: &str| value[key].as_u64();
+        Some(Self {
+            input_tokens: number("input_tokens")?,
+            output_tokens: number("output_tokens")?,
+            cache_tokens: number("cache_tokens")?,
+            total_tokens: number("total_tokens")?,
+            estimated_cost: value["estimated_cost"].as_f64(),
+            effective_cost_per_million: value["effective_cost_per_million"].as_f64(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CostModel {
+    pub backend_model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_tokens: u64,
+    pub cache_hit_rate: Option<f64>,
+    pub input_per_million: Option<f64>,
+    pub output_per_million: Option<f64>,
+    pub cache_per_million: Option<f64>,
+    pub multiplier: Option<f64>,
+    pub estimated_cost: Option<f64>,
+}
+
+impl CostModel {
+    fn parse(value: &Value) -> Option<Self> {
+        let input_tokens = value["input_tokens"].as_u64()?;
+        let cache_tokens = value["cache_tokens"].as_u64()?;
+        Some(Self {
+            backend_model: value["backend_model"].as_str().unwrap_or("").to_owned(),
+            input_tokens,
+            output_tokens: value["output_tokens"].as_u64()?,
+            cache_tokens,
+            cache_hit_rate: (input_tokens > 0)
+                .then(|| cache_tokens as f64 / input_tokens as f64 * 100.0),
+            input_per_million: value["input_per_million"].as_f64(),
+            output_per_million: value["output_per_million"].as_f64(),
+            cache_per_million: value["cache_per_million"].as_f64(),
+            multiplier: value["multiplier"].as_f64(),
+            estimated_cost: value["estimated_cost"].as_f64(),
+        })
+    }
+}
+
+/// Cost card shared by completion reports and delegated-task cards.
+#[derive(Clone, Debug, Default)]
+pub struct CostView {
+    pub duration_ms: Option<u64>,
+    pub self_usage: CostTotals,
+    pub with_sub_agents: CostTotals,
+    pub has_sub_agents: bool,
+    pub is_partial: bool,
+    pub models: Vec<CostModel>,
+}
+
+impl CostView {
+    /// Vue's `normalizeUsageSummary`: version 1 envelopes with complete totals.
+    pub fn parse(value: &Value) -> Option<Self> {
+        if value["version"].as_i64() != Some(1) {
+            return None;
+        }
+        Some(Self {
+            duration_ms: value["duration_ms"].as_u64(),
+            self_usage: CostTotals::parse(&value["self_usage"])?,
+            with_sub_agents: CostTotals::parse(&value["with_sub_agents"])?,
+            has_sub_agents: value["has_sub_agents"].as_bool().unwrap_or(false),
+            is_partial: value["is_partial"].as_bool().unwrap_or(false),
+            models: value["model_breakdowns"]
+                .as_array()
+                .map(|models| models.iter().filter_map(CostModel::parse).collect())
+                .unwrap_or_default(),
+        })
+    }
+}
+
+/// One `ask_user` question with its read-only answer state.
+#[derive(Clone, Debug, Default)]
+pub struct ChoiceGroupView {
+    pub title: String,
+    pub options: Vec<String>,
+    pub selected: Option<usize>,
+    pub other_selected: bool,
+    pub answer: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -447,6 +549,8 @@ pub struct FinishTaskView {
     pub key: String,
     pub failed: bool,
     pub label: String,
+    pub cost_key: String,
+    pub cost: Option<CostView>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -523,6 +627,8 @@ pub struct SubAgentView {
     pub result_key: String,
     pub has_result: bool,
     pub usage: String,
+    pub cost_key: String,
+    pub cost: Option<CostView>,
 }
 
 #[derive(Clone, Debug)]
@@ -931,7 +1037,8 @@ fn tool_detail(
         cleaned.replace("\r\n", "\n").trim() == command.replace("\r\n", "\n").trim()
     });
     // Structured diffs own the expanded body; the JSON result would repeat it.
-    if !cleaned.is_empty() && !duplicate_command && !has_diff {
+    // Choice payloads belong to the `ask_user` card, not the raw text section.
+    if !cleaned.is_empty() && !duplicate_command && !has_diff && display_type != "choice" {
         if display_type == "markdown" {
             sections.push(cleaned);
         } else {
@@ -1544,10 +1651,18 @@ fn sub_agent_view(
             .or(completion.get("usage_summary"))
             .unwrap_or(&Value::Null),
     );
+    let cost = CostView::parse(
+        completion_result
+            .get("usage_summary")
+            .or(completion.get("usage_summary"))
+            .or(message.metadata.get("usage_summary"))
+            .unwrap_or(&Value::Null),
+    );
     let key = message_key(message);
     Some(SubAgentView {
         task_key: format!("{key}:task"),
         result_key: format!("{key}:result"),
+        cost_key: format!("{key}:cost"),
         result_preview: preview(&result, 96),
         task_preview: preview(&task, 96),
         has_result: !result.is_empty(),
@@ -1560,6 +1675,7 @@ fn sub_agent_view(
         task,
         result,
         usage,
+        cost,
         key,
     })
 }
@@ -1887,6 +2003,123 @@ fn normalize_alert_content(content: &str) -> String {
     }
 }
 
+#[derive(Clone, Debug)]
+struct AskUserAnswer {
+    title: String,
+    choice_index: u64,
+    choice: String,
+    source: String,
+}
+
+/// Answers arrive as `<ask_user_response>[{title, choice_index, choice, source}]</ask_user_response>`.
+fn parse_ask_user_answers(text: &str) -> Option<Vec<AskUserAnswer>> {
+    const OPEN: &str = "<ask_user_response>";
+    const CLOSE: &str = "</ask_user_response>";
+    let start = text.find(OPEN)? + OPEN.len();
+    let end = start + text[start..].find(CLOSE)?;
+    let payload = serde_json::from_str::<Value>(text[start..end].trim()).ok()?;
+    Some(
+        payload
+            .as_array()?
+            .iter()
+            .map(|item| AskUserAnswer {
+                title: item["title"].as_str().unwrap_or("").to_owned(),
+                choice_index: item["choice_index"].as_u64().unwrap_or(0),
+                choice: item["choice"].as_str().unwrap_or("").to_owned(),
+                source: item["source"].as_str().unwrap_or("").to_lowercase(),
+            })
+            .collect(),
+    )
+}
+
+/// Matches each answered `ask_user` tool call to the response that follows it.
+fn collect_ask_user_answers(messages: &[Message]) -> BTreeMap<String, Vec<AskUserAnswer>> {
+    let mut answers = BTreeMap::new();
+    let mut pending: Option<String> = None;
+    for message in messages {
+        if message.role == "tool" && tool_name(&message.metadata) == "ask_user" {
+            pending = tool_call_id(message).map(str::to_owned);
+            continue;
+        }
+        if let Some(items) = parse_ask_user_answers(&message.message) {
+            if let Some(id) = pending.take() {
+                answers.entry(id).or_insert(items);
+            }
+        }
+    }
+    answers
+}
+
+fn ask_user_choices(message: &Message, answers: Option<&[AskUserAnswer]>) -> Vec<ChoiceGroupView> {
+    let args = tool_arguments(&message.metadata);
+    let items = args["items"]
+        .as_array()
+        .cloned()
+        .or_else(|| {
+            serde_json::from_str::<Value>(&clean_text(&message.message))
+                .ok()
+                .and_then(|value| value.as_array().cloned())
+        })
+        .unwrap_or_default();
+    items
+        .iter()
+        .filter_map(|item| {
+            let title = item["title"].as_str()?.trim().to_owned();
+            if title.is_empty() {
+                return None;
+            }
+            let options: Vec<String> = item["options"]
+                .as_array()
+                .map(|options| {
+                    options
+                        .iter()
+                        .filter_map(|option| option.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let answer = answers.and_then(|answers| {
+                answers
+                    .iter()
+                    .find(|answer| answer.title.trim() == title)
+                    .cloned()
+            });
+            let (selected, other_selected, supplement) = match &answer {
+                Some(answer) => {
+                    let other = matches!(answer.source.as_str(), "other" | "custom")
+                        || answer.choice_index == options.len() as u64 + 1;
+                    let selected = (!other
+                        && answer.choice_index >= 1
+                        && answer.choice_index <= options.len() as u64)
+                        .then(|| answer.choice_index as usize - 1);
+                    let answer_text = match selected {
+                        Some(index) => {
+                            let prefix = format!("{}\n", options[index]);
+                            answer
+                                .choice
+                                .strip_prefix(&prefix)
+                                .map(str::trim)
+                                .filter(|text| !text.is_empty())
+                                .map(str::to_owned)
+                        }
+                        None => {
+                            Some(answer.choice.trim().to_owned()).filter(|text| !text.is_empty())
+                        }
+                    };
+                    (selected, other, answer_text)
+                }
+                None => (None, false, None),
+            };
+            Some(ChoiceGroupView {
+                title,
+                options,
+                selected,
+                other_selected,
+                answer: supplement,
+            })
+        })
+        .collect()
+}
+
 /// Build the renderable transcript.
 ///
 /// `roots` are the workflow's authorized display roots; they only shorten
@@ -1921,6 +2154,8 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
         .collect();
     let completions = collect_sub_agent_completions(&messages);
     let tail = tail_alert(&messages);
+    // Answers live on hidden rows, so they are collected before visibility filtering.
+    let ask_answers = collect_ask_user_answers(&messages);
     let durable_tool_ids: Vec<String> = messages
         .iter()
         .filter_map(|message| tool_call_id(message).map(str::to_owned))
@@ -2063,13 +2298,26 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
             if let Some(card) = sub_agent_view(message, &completions) {
                 rows.push(Row::SubAgent(Box::new(card)));
             } else if is_completion_message(message) {
+                let key = message_key(message);
+                let status = ToolStatus::from_message(message);
                 rows.push(Row::FinishTask(FinishTaskView {
-                    key: message_key(message),
-                    failed: ToolStatus::from_message(message).is_error(),
+                    key: key.clone(),
+                    failed: status.is_error(),
                     label: finish_task_label(message),
+                    cost_key: format!("{key}:cost"),
+                    cost: (status == ToolStatus::Completed)
+                        .then(|| CostView::parse(&message.metadata["usage_summary"]))
+                        .flatten(),
                 }));
             } else {
-                rows.push(Row::Tool(Box::new(ToolView::new(message, roots))));
+                let mut tool = ToolView::new(message, roots);
+                if tool.name == "ask_user" {
+                    let answers = tool_call_id(message)
+                        .and_then(|id| ask_answers.get(id))
+                        .map(Vec::as_slice);
+                    tool.choices = ask_user_choices(message, answers);
+                }
+                rows.push(Row::Tool(Box::new(tool)));
             }
             index += 1;
             continue;
@@ -2495,6 +2743,139 @@ mod tests {
         assert_eq!(user_message_lines("a\nb\nc\nd\ne"), 5);
         assert!(user_message_lines(&"a".repeat(400)) > 4);
         assert!(user_message_lines(&"中".repeat(200)) > 4);
+    }
+
+    #[test]
+    fn ask_user_choices_keep_the_selected_option() {
+        let ask = Message {
+            id: 50,
+            role: "tool".into(),
+            message: r#"[{"title":"Pick one","options":["A","B"]}]"#.into(),
+            metadata: json!({
+                "tool_name": "ask_user",
+                "display_type": "choice",
+                "tool_call_id": "call_ask",
+                "tool_call": {"function": {"arguments": r#"{"items":[{"title":"Pick one","options":["A","B"]}]}"#}}
+            }),
+            ..Message::default()
+        };
+        let answer = Message {
+            id: 51,
+            role: "user".into(),
+            message: concat!(
+                "<ask_user_response>[",
+                r#"{"title":"Pick one","choice_index":2,"choice":"B","source":"option"}"#,
+                "]</ask_user_response>"
+            )
+            .into(),
+            metadata: json!({"ui_visibility": "hide"}),
+            ..Message::default()
+        };
+        let rows = project(vec![ask, answer], &[]);
+        let tool = rows
+            .iter()
+            .find_map(|row| match row {
+                Row::Tool(tool) => Some(tool),
+                _ => None,
+            })
+            .expect("ask_user card");
+        assert_eq!(tool.choices.len(), 1);
+        assert_eq!(tool.choices[0].title, "Pick one");
+        assert_eq!(tool.choices[0].options, ["A", "B"]);
+        assert_eq!(tool.choices[0].selected, Some(1));
+        assert!(!tool.choices[0].other_selected);
+        assert!(tool.choices[0].answer.is_none());
+    }
+
+    #[test]
+    fn ask_user_custom_answer_marks_other() {
+        let ask = Message {
+            id: 52,
+            role: "tool".into(),
+            message: r#"[{"title":"Pick one","options":["A"]}]"#.into(),
+            metadata: json!({"tool_name": "ask_user", "display_type": "choice", "tool_call_id": "call_x"}),
+            ..Message::default()
+        };
+        let answer = Message {
+            id: 53,
+            role: "user".into(),
+            message: concat!(
+                "<ask_user_response>[",
+                r#"{"title":"Pick one","choice_index":2,"choice":"something else","source":"custom"}"#,
+                "]</ask_user_response>"
+            )
+            .into(),
+            metadata: json!({"ui_visibility": "hide"}),
+            ..Message::default()
+        };
+        let rows = project(vec![ask, answer], &[]);
+        let Row::Tool(tool) = rows
+            .iter()
+            .find(|row| matches!(row, Row::Tool(_)))
+            .expect("ask_user card")
+        else {
+            unreachable!()
+        };
+        assert_eq!(tool.choices[0].selected, None);
+        assert!(tool.choices[0].other_selected);
+        assert_eq!(tool.choices[0].answer.as_deref(), Some("something else"));
+    }
+
+    #[test]
+    fn completion_reports_expose_the_cost_card() {
+        let message = Message {
+            id: 60,
+            role: "tool".into(),
+            message: "Finished".into(),
+            metadata: json!({
+                "tool_name": "complete_workflow",
+                "execution_status": "completed",
+                "usage_summary": {
+                    "version": 1,
+                    "duration_ms": 65000,
+                    "has_sub_agents": true,
+                    "is_partial": false,
+                    "self_usage": {
+                        "input_tokens": 1200,
+                        "output_tokens": 300,
+                        "cache_tokens": 100,
+                        "total_tokens": 1500,
+                        "estimated_cost": 0.42,
+                        "effective_cost_per_million": 0.25
+                    },
+                    "with_sub_agents": {
+                        "input_tokens": 2200,
+                        "output_tokens": 500,
+                        "cache_tokens": 300,
+                        "total_tokens": 2700,
+                        "estimated_cost": null,
+                        "effective_cost_per_million": null
+                    },
+                    "model_breakdowns": [{
+                        "backend_model": "qwen3.8-flash",
+                        "input_tokens": 1200,
+                        "output_tokens": 300,
+                        "cache_tokens": 100,
+                        "input_per_million": 0.1,
+                        "output_per_million": 0.4,
+                        "cache_per_million": 0.02,
+                        "multiplier": 1.0,
+                        "estimated_cost": 0.42
+                    }]
+                }
+            }),
+            ..Message::default()
+        };
+        let rows = project(vec![message], &[]);
+        let Row::FinishTask(view) = &rows[0] else {
+            panic!("expected a completion row");
+        };
+        let cost = view.cost.as_ref().expect("cost card");
+        assert_eq!(cost.duration_ms, Some(65000));
+        assert_eq!(cost.with_sub_agents.total_tokens, 2700);
+        assert!(cost.has_sub_agents);
+        assert_eq!(cost.models.len(), 1);
+        assert!((cost.models[0].cache_hit_rate.unwrap_or_default() - 100.0 / 12.0).abs() < 1e-9);
     }
 
     #[test]

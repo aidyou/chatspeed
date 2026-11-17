@@ -9,8 +9,9 @@ use chatspeed_gpui_observer::{
     metrics::Metrics,
     model::Model,
     presentation::{
-        self, ActivityItem, ActivityView, AlertKind, AlertView, AssistantView, FinishTaskView, Row,
-        SnapshotView, SubAgentStatus, SubAgentView, ToolStatus, ToolView, UserView,
+        self, ActivityItem, ActivityView, AlertKind, AlertView, AssistantView, ChoiceGroupView,
+        CostTotals, CostView, FinishTaskView, Row, SnapshotView, SubAgentStatus, SubAgentView,
+        ToolStatus, ToolView, UserView,
     },
     types::*,
     worker::Worker,
@@ -116,6 +117,75 @@ fn plain_text(text: &str, color: impl Into<Hsla>) -> impl IntoElement {
         });
     }
     body
+}
+
+/// Groups digits the way `Intl.NumberFormat` does for token counts.
+fn grouped_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+fn format_cost(value: Option<f64>) -> String {
+    match value {
+        Some(cost) => format!("${cost:.6}"),
+        None => t!("cost_unpriced").to_string(),
+    }
+}
+
+fn format_rate(value: Option<f64>) -> String {
+    match value {
+        Some(rate) => format!("${rate:.4} / M"),
+        None => t!("cost_unpriced_rate").to_string(),
+    }
+}
+
+fn format_percent(value: f64) -> String {
+    format!("{value:.2}%")
+}
+
+fn format_cost_duration(duration_ms: Option<u64>) -> String {
+    match duration_ms {
+        Some(duration) => {
+            let seconds = duration / 1000;
+            format!("{}m {}s", seconds / 60, seconds % 60)
+        }
+        None => "--".to_owned(),
+    }
+}
+
+/// One numbered `ask_user` option with its read-only selection marker.
+fn choice_option(label: String, selected: bool, cx: &mut App) -> AnyElement {
+    let (icon, color) = if selected {
+        ("check-circle", Hsla::from(accent()))
+    } else {
+        ("uncheck", cx.theme().muted_foreground)
+    };
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .py(px(1.))
+        .child(font_icon(icon, 14., color))
+        .child(
+            div()
+                .min_w_0()
+                .text_size(px(12.))
+                .text_color(if selected {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .child(label),
+        )
+        .into_any_element()
 }
 
 struct Observer {
@@ -427,7 +497,42 @@ impl Observer {
             Some((_, state)) => div()
                 .w_full()
                 .min_w_0()
-                .child(TextView::new(state).selectable(true))
+                .child(TextView::new(state).selectable(true).code_block_actions(
+                    |code_block, _, cx| {
+                        // GPUI renders these in the code block's top-right corner, where
+                        // the language label would otherwise sit.
+                        let code = code_block.code().to_string();
+                        let lang = code_block
+                            .lang()
+                            .map(|lang| lang.to_string())
+                            .unwrap_or_default();
+                        let muted = cx.theme().muted_foreground;
+                        h_flex()
+                            .id("code-actions")
+                            .items_center()
+                            .gap_2()
+                            .px_1()
+                            .text_size(px(10.))
+                            .text_color(muted)
+                            .when(!lang.is_empty(), |row| row.child(lang))
+                            .child(
+                                h_flex()
+                                    .id("copy-code")
+                                    .items_center()
+                                    .rounded(px(4.))
+                                    .p(px(2.))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(cx.theme().muted))
+                                    .child(font_icon("copy", 12., muted))
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            code.clone(),
+                                        ));
+                                    }),
+                            )
+                            .into_any_element()
+                    },
+                ))
                 .into_any_element(),
             None => div().into_any_element(),
         }
@@ -453,7 +558,7 @@ impl Observer {
             .cursor_pointer()
             .child(font_icon(
                 if expanded {
-                    "caret-down"
+                    "double-arrow-up"
                 } else {
                     "double-arrow-down"
                 },
@@ -596,6 +701,7 @@ impl Observer {
             ToolStatus::Completed => border,
         };
         let expandable = !tool.detail.is_empty()
+            || !tool.choices.is_empty()
             || tool.diff.is_some()
             || tool.command.is_some()
             || tool.arguments.is_some();
@@ -695,6 +801,13 @@ impl Observer {
 
     fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
         let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
+        if !tool.choices.is_empty() {
+            let mut choices = v_flex().w_full().min_w_0().gap_3();
+            for group in &tool.choices {
+                choices = choices.child(self.choice_group(group, cx));
+            }
+            detail = detail.child(choices);
+        }
         if let Some(lines) = &tool.diff {
             let mut diff = v_flex()
                 .w_full()
@@ -830,7 +943,6 @@ impl Observer {
         header = header
             .child(
                 div()
-                    .flex_1()
                     .min_w_0()
                     .overflow_hidden()
                     .text_size(px(13.))
@@ -1003,10 +1115,283 @@ impl Observer {
                             &card.result_preview,
                             cx,
                         ))
+                    })
+                    .when_some(card.cost.as_ref(), |view, cost| {
+                        view.child(self.cost_section(card.cost_key.clone(), cost, cx))
                     }),
             );
         }
         body.into_any_element()
+    }
+
+    fn choice_group(&self, group: &ChoiceGroupView, cx: &mut Context<Self>) -> AnyElement {
+        let mut options = v_flex().w_full().min_w_0().gap_1();
+        for (index, option) in group.options.iter().enumerate() {
+            options = options.child(choice_option(
+                format!("{}. {option}", index + 1),
+                group.selected == Some(index),
+                cx,
+            ));
+        }
+        options = options.child(choice_option(
+            format!("{}. {}", group.options.len() + 1, t!("ask_user_other")),
+            group.other_selected,
+            cx,
+        ));
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().foreground)
+                    .child(group.title.clone()),
+            )
+            .child(options)
+            .when_some(group.answer.as_ref(), |view, answer| {
+                view.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .rounded(px(6.))
+                        .bg(cx.theme().muted)
+                        .px_3()
+                        .py_2()
+                        .text_size(px(12.))
+                        .text_color(cx.theme().foreground)
+                        .child(answer.clone()),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn cost_section(&self, key: String, cost: &CostView, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.expanded.contains(&key);
+        let target = key.clone();
+        let muted = cx.theme().muted_foreground;
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .child(
+                h_flex()
+                    .id(SharedString::from(key.clone()))
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(10.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(muted)
+                            .child(t!("cost_label").to_string().to_uppercase()),
+                    )
+                    .child(font_icon(
+                        if open {
+                            "double-arrow-up"
+                        } else {
+                            "double-arrow-down"
+                        },
+                        12.,
+                        muted,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
+            )
+            .when(open, |view| view.child(self.cost_card(cost, cx)))
+            .into_any_element()
+    }
+
+    fn cost_card(&self, cost: &CostView, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let mut card = v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .px_3()
+            .py_2()
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(10.))
+                            .text_color(muted)
+                            .child(format_cost_duration(cost.duration_ms)),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(10.))
+                            .text_color(muted)
+                            .child(format!(
+                                "{} {}",
+                                grouped_number(cost.with_sub_agents.total_tokens),
+                                t!("cost_tokens")
+                            )),
+                    ),
+            )
+            .child(self.cost_row(t!("cost_self").to_string(), &cost.self_usage, true, cx));
+        if cost.has_sub_agents {
+            card = card.child(self.cost_row(
+                t!("cost_with_sub_agents").to_string(),
+                &cost.with_sub_agents,
+                false,
+                cx,
+            ));
+        }
+        for model in &cost.models {
+            let mut tokens = h_flex().w_full().gap_3();
+            for (label, value) in [
+                (t!("cost_input").to_string(), model.input_tokens),
+                (t!("cost_cache").to_string(), model.cache_tokens),
+                (t!("cost_output").to_string(), model.output_tokens),
+            ] {
+                tokens = tokens.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.))
+                        .text_color(muted)
+                        .child(format!("{label} {}", grouped_number(value))),
+                );
+            }
+            if let Some(rate) = model.cache_hit_rate {
+                tokens = tokens.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.))
+                        .text_color(muted)
+                        .child(format!(
+                            "{} {}",
+                            t!("cost_cache_hit_rate"),
+                            format_percent(rate)
+                        )),
+                );
+            }
+            let mut rates = h_flex().w_full().gap_3();
+            for (label, rate) in [
+                (t!("cost_input").to_string(), model.input_per_million),
+                (t!("cost_cache").to_string(), model.cache_per_million),
+                (t!("cost_output").to_string(), model.output_per_million),
+            ] {
+                rates = rates.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.))
+                        .text_color(muted)
+                        .child(format!("{label} {}", format_rate(rate))),
+                );
+            }
+            if let Some(multiplier) = model.multiplier {
+                rates = rates.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.))
+                        .text_color(muted)
+                        .child(format!("×{multiplier}")),
+                );
+            }
+            card = card.child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .rounded(px(6.))
+                    .bg(cx.theme().muted)
+                    .px_2()
+                    .py_1()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_size(px(11.))
+                                    .text_color(cx.theme().foreground)
+                                    .child(model.backend_model.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child(format_cost(model.estimated_cost)),
+                            ),
+                    )
+                    .child(tokens)
+                    .child(rates),
+            );
+        }
+        if cost.is_partial {
+            card = card.child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(warning())
+                    .child(t!("cost_partial").to_string()),
+            );
+        }
+        card.into_any_element()
+    }
+
+    fn cost_row(
+        &self,
+        label: String,
+        totals: &CostTotals,
+        primary: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let color = if primary {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        };
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(11.))
+                    .text_color(color)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(color)
+                    .child(format_cost(totals.estimated_cost)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format_rate(totals.effective_cost_per_million)),
+            )
+            .into_any_element()
     }
 
     fn sub_agent_section(
@@ -1057,7 +1442,11 @@ impl Observer {
                         view.child(div().flex_1())
                     })
                     .child(font_icon(
-                        if open { "caret-down" } else { "caret-right" },
+                        if open {
+                            "double-arrow-up"
+                        } else {
+                            "double-arrow-down"
+                        },
                         12.,
                         muted,
                     ))
@@ -1117,6 +1506,8 @@ impl Observer {
                                 .flex_1()
                                 .min_w_0()
                                 .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
                                 .text_size(px(10.))
                                 .text_color(muted)
                                 .child(snapshot.preview.clone()),
@@ -1126,7 +1517,11 @@ impl Observer {
                         view.child(div().flex_1())
                     })
                     .child(font_icon(
-                        if open { "caret-down" } else { "caret-right" },
+                        if open {
+                            "double-arrow-up"
+                        } else {
+                            "double-arrow-down"
+                        },
                         14.,
                         muted,
                     ))
@@ -1147,14 +1542,17 @@ impl Observer {
         body.into_any_element()
     }
 
-    fn finish_task_row(&self, view: &FinishTaskView) -> AnyElement {
+    fn finish_task_row(&self, view: &FinishTaskView, cx: &mut Context<Self>) -> AnyElement {
         let (icon, color) = if view.failed {
             ("check-x", danger())
         } else {
             ("check-circle", success())
         };
-        h_flex()
+        let open = self.expanded.contains(&view.cost_key);
+        let mut label = h_flex()
+            .id(SharedString::from(view.key.clone()))
             .w_full()
+            .min_w_0()
             .items_center()
             .gap_2()
             .pl_2()
@@ -1165,8 +1563,29 @@ impl Observer {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(color)
                     .child(view.label.clone()),
-            )
-            .into_any_element()
+            );
+        if view.cost.is_some() {
+            let target = view.cost_key.clone();
+            label = label
+                .child(font_icon(
+                    if open {
+                        "double-arrow-up"
+                    } else {
+                        "double-arrow-down"
+                    },
+                    12.,
+                    cx.theme().muted_foreground,
+                ))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)));
+        }
+        let mut body = v_flex().w_full().min_w_0().gap_2().child(label);
+        if open {
+            if let Some(cost) = &view.cost {
+                body = body.child(self.cost_card(cost, cx));
+            }
+        }
+        body.into_any_element()
     }
 
     fn alert_row(&self, view: &AlertView, cx: &mut Context<Self>) -> AnyElement {
@@ -1241,7 +1660,7 @@ impl Observer {
             Row::Activity(group) => self.activity_row(group, cx),
             Row::Tool(tool) => self.tool_row(tool, cx),
             Row::SubAgent(card) => self.sub_agent_row(card, cx),
-            Row::FinishTask(view) => self.finish_task_row(view),
+            Row::FinishTask(view) => self.finish_task_row(view, cx),
             Row::Snapshot(snapshot) => self.snapshot_row(snapshot, cx),
             Row::Alert(alert) => self.alert_row(alert, cx),
             Row::Divider => self.divider_row(cx),

@@ -8,9 +8,13 @@ use crate::types::Message;
 /// with that glyph. A pure private-use-area icon font would therefore be
 /// silently replaced by a fallback face and every icon would render as an
 /// unrelated glyph. `assets/chatspeed-icons.ttf` is the iconfont.cn export plus
-/// one empty `m` glyph; regenerate it with `fontTools` when the export changes.
+/// one empty `m` glyph and one mirrored `double-arrow-up`; rebuild it with
+/// `scripts/build_gpui_icon_font.py` when the export changes.
 pub const FONT: &[u8] = include_bytes!("../assets/chatspeed-icons.ttf");
 pub const FAMILY: &str = "chatspeed";
+
+/// U+F101 in the native font: the iconfont export has no upward double chevron.
+const DOUBLE_ARROW_UP: &str = "\u{f101}";
 
 pub fn glyph(name: &str) -> &'static str {
     match name {
@@ -42,6 +46,7 @@ pub fn glyph(name: &str) -> &'static str {
         "loading" => "\u{e891}",
         "compress" => "\u{e752}",
         "double-arrow-down" => "\u{e642}",
+        "double-arrow-up" => DOUBLE_ARROW_UP,
         "copy" => "\u{e610}",
         "close" => "\u{e6a5}",
         "stop" => "\u{e6a2}",
@@ -185,7 +190,13 @@ mod tests {
             glyph_id_for_char(FONT, 'm').is_some(),
             "native icon font lost its Latin 'm' glyph"
         );
-        for name in ["talk", "assistant", "bash", "caret-right"] {
+        for name in [
+            "talk",
+            "assistant",
+            "bash",
+            "caret-right",
+            "double-arrow-up",
+        ] {
             let ch = glyph(name).chars().next().unwrap();
             assert!(glyph_id_for_char(FONT, ch).is_some(), "missing {name}");
         }
