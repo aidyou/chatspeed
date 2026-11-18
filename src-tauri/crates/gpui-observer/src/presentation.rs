@@ -358,6 +358,8 @@ impl ToolGroupKind {
 pub struct ToolView {
     pub key: String,
     pub detail_key: String,
+    /// Runtime tool-call id; the approval signal names this value.
+    pub tool_call_id: String,
     pub name: String,
     pub icon: &'static str,
     pub kind: Option<ToolGroupKind>,
@@ -431,6 +433,7 @@ impl ToolView {
         let summary = tool_summary(message, &name, status);
         Self {
             detail_key: format!("{key}:detail"),
+            tool_call_id: tool_call_id(message).unwrap_or_default().to_owned(),
             key,
             name,
             icon,
@@ -653,6 +656,8 @@ impl SubAgentStatus {
 #[derive(Clone, Debug)]
 pub struct SubAgentView {
     pub key: String,
+    /// Child session id whose transcript the expanded card loads.
+    pub task_id: Option<String>,
     pub status: SubAgentStatus,
     pub status_label: String,
     pub agent: String,
@@ -1698,6 +1703,7 @@ fn sub_agent_view(
     );
     let key = message_key(message);
     Some(SubAgentView {
+        task_id: direct_id.clone(),
         task_key: format!("{key}:task"),
         result_key: format!("{key}:result"),
         cost_key: format!("{key}:cost"),
@@ -1716,6 +1722,31 @@ fn sub_agent_view(
         cost,
         key,
     })
+}
+
+/// Builds the hidden `<ask_user_response>` payload the engine reads back.
+///
+/// The shape matches Vue's `buildAskUserResponse`: one entry per question with
+/// the resolved option text, so a partial draft produces no message at all.
+pub fn ask_user_response(groups: &[ChoiceGroupView], choices: &[Option<usize>]) -> Option<String> {
+    if groups.is_empty() || groups.len() != choices.len() {
+        return None;
+    }
+    let mut selections = Vec::new();
+    for (group, choice) in groups.iter().zip(choices) {
+        let index = (*choice)?;
+        let text = group.options.get(index)?;
+        selections.push(serde_json::json!({
+            "title": group.title,
+            "choice_index": index + 1,
+            "choice": text,
+            "source": "option",
+        }));
+    }
+    Some(format!(
+        "<ask_user_response>\n{}\n</ask_user_response>",
+        serde_json::to_string_pretty(&selections).ok()?
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -2433,6 +2464,37 @@ mod tests {
             metadata,
             ..Message::default()
         }
+    }
+
+    #[test]
+    fn ask_user_response_requires_every_answer() {
+        let groups = vec![
+            ChoiceGroupView {
+                title: "Scope".into(),
+                options: vec!["Narrow".into(), "Wide".into()],
+                ..ChoiceGroupView::default()
+            },
+            ChoiceGroupView {
+                title: "Style".into(),
+                options: vec!["Direct".into()],
+                ..ChoiceGroupView::default()
+            },
+        ];
+        assert_eq!(ask_user_response(&groups, &[Some(1)]), None);
+        assert_eq!(ask_user_response(&groups, &[None, Some(0)]), None);
+        assert_eq!(ask_user_response(&groups, &[Some(0), Some(4)]), None);
+
+        let payload = ask_user_response(&groups, &[Some(1), Some(0)]).expect("complete draft");
+        assert!(payload.starts_with("<ask_user_response>\n"));
+        assert!(payload.ends_with("\n</ask_user_response>"));
+        let body = payload
+            .trim_start_matches("<ask_user_response>\n")
+            .trim_end_matches("\n</ask_user_response>");
+        let parsed: Value = serde_json::from_str(body).expect("json body");
+        assert_eq!(parsed[0]["choice_index"], 2);
+        assert_eq!(parsed[0]["choice"], "Wide");
+        assert_eq!(parsed[0]["source"], "option");
+        assert_eq!(parsed[1]["title"], "Style");
     }
 
     #[test]

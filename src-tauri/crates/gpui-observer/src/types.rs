@@ -68,6 +68,9 @@ pub struct Page {
     pub message_window_before_id: Option<String>,
     #[serde(default, alias = "hiddenEarlierMessageCount")]
     pub hidden_earlier_message_count: usize,
+    /// Runtime execution context: wait reason, awaiting tool call, pending tools.
+    #[serde(default, alias = "executionContext")]
+    pub execution_context: Value,
 }
 
 /// UI requests use generations to invalidate all old-selection results.
@@ -81,6 +84,23 @@ pub enum Command {
         generation: u64,
         id: String,
         before: String,
+    },
+    /// A typed workflow signal (`user_message`, `approval`, `continue`, ...).
+    Signal {
+        id: String,
+        signal: Value,
+    },
+    Stop {
+        id: String,
+    },
+    /// Creates a session and starts it with the first prompt.
+    StartNew {
+        prompt: String,
+    },
+    /// Loads a child session for an expanded sub-agent card.
+    Child {
+        id: String,
+        session: String,
     },
 }
 
@@ -104,4 +124,10 @@ pub enum UpdateKind {
     Reconnect,
     Reset,
     DecodeUs(u64),
+    /// A session the runtime accepted and started for the first prompt.
+    Opened(String),
+    /// A child session snapshot for an expanded sub-agent card.
+    Child(String, Page),
+    /// A user-action failure worth showing above the composer.
+    Error(String),
 }

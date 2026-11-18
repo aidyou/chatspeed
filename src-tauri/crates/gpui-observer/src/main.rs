@@ -1,6 +1,7 @@
-//! Native read-only rendering of the formal workflow message projection.
+//! Native workflow window: titlebar, compact sidebar, composer and transcript.
 //!
-//! Visual rules mirror `src/components/workflow/WorkflowMessageList.vue` and
+//! Visual rules mirror `src/views/Workflow.vue`, `src/components/window/Titlebar.vue`,
+//! `src/components/workflow/WorkflowMessageList.vue` and
 //! `src/styles/workflow/messages.scss`: a CLI-style tool transcript, grouped
 //! tool activity, collapsible snapshots and delegated-task cards.
 
@@ -21,8 +22,8 @@ use clap::Parser;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     component::{
-        button::{Button, ButtonVariants},
         h_flex,
+        input::{InputEvent, TextareaState},
         text::{TextView, TextViewState},
         theme::{Theme, ThemeMode},
         v_flex, ActiveTheme,
@@ -42,6 +43,8 @@ use std::{
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod ui;
+
 /// ChatSpeed's default primary preset. `primary_color` in the runtime config
 /// replaces it through [`set_primary`].
 static PRIMARY: AtomicU32 = AtomicU32::new(DEFAULT_PRIMARY);
@@ -55,6 +58,9 @@ const MONO_FONT: &str = "Liberation Mono";
 /// Geometry of the workflow window in `tauri.conf.json`: the native window opens
 /// at the same size and is resized to the remembered size once settings arrive.
 const WORKFLOW_WINDOW_SIZE: Size<Pixels> = size(px(1024.), px(650.));
+/// Corner radius of the client-decorated window, matching
+/// `--cs-border-radius-lg` (16px) in `src/style/element/css-vars.css`.
+const WINDOW_RADIUS: f32 = 16.;
 const WORKFLOW_WINDOW_MIN_SIZE: Size<Pixels> = size(px(800.), px(400.));
 /// Vue's collapsed user bubble: four 1.6-line-height rows at 14px, plus room
 /// for the corner toggle.
@@ -248,6 +254,46 @@ fn choice_option(label: String, selected: bool, cx: &mut App) -> AnyElement {
         .into_any_element()
 }
 
+/// One numbered `ask_user` option the user can pick while the runtime waits.
+fn choice_option_live(
+    label: String,
+    selected: bool,
+    id: SharedString,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
+    let (icon, color) = if selected {
+        ("check-circle", Hsla::from(accent()))
+    } else {
+        ("uncheck", cx.theme().muted_foreground)
+    };
+    h_flex()
+        .id(id)
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .px(px(4.))
+        .py(px(2.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .hover(|style| style.bg(cx.theme().muted))
+        .child(font_icon(icon, 14., color))
+        .child(
+            div()
+                .min_w_0()
+                .text_size(px(12.))
+                .text_color(if selected {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .child(label),
+        )
+        .on_click(on_click)
+        .into_any_element()
+}
+
 struct Observer {
     worker: Worker,
     options: Options,
@@ -279,6 +325,22 @@ struct Observer {
     /// override a size the user picked in this window.
     applied_window_size: Option<Size<Pixels>>,
     copy_flash: Arc<Mutex<Option<CopyFlash>>>,
+    /// Sidebar collapse state, matching the Vue compact sidebar.
+    sidebar_collapsed: bool,
+    /// A titlebar press that became a window move on the first pointer motion.
+    title_drag: bool,
+    /// Multi-line composer state; sends read it and clear it.
+    composer: Entity<TextareaState>,
+    /// A new session is being created and started; further sends wait.
+    start_pending: bool,
+    /// Last action failure, shown above the composer until the next send.
+    notice: Option<String>,
+    /// Child transcripts loaded for expanded sub-agent cards, by task id.
+    child_rows: BTreeMap<String, Vec<Row>>,
+    /// Selected option per `ask_user` group, keyed by `tool_call_id:group`.
+    ask_user_choice: BTreeMap<String, usize>,
+    /// Child transcripts requested but not loaded yet.
+    child_pending: BTreeSet<String>,
     task: Task<()>,
 }
 
@@ -292,7 +354,24 @@ struct CopyFlash {
 const COPY_FLASH: Duration = Duration::from_secs(3);
 
 impl Observer {
-    fn new(worker: Worker, options: Options, cx: &mut Context<Self>) -> Self {
+    fn new(worker: Worker, options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let composer = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder(t!("composer_placeholder").to_string())
+                .auto_grow(1, 6)
+        });
+        // Enter sends, like the Vue input; Shift+Enter keeps the newline the
+        // textarea just inserted.
+        cx.subscribe_in(
+            &composer,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
+                    this.send_message(window, cx);
+                }
+            },
+        )
+        .detach();
         let executor = cx.background_executor().clone();
         let task = cx.spawn(async move |this, cx| loop {
             executor.timer(Duration::from_millis(50)).await;
@@ -329,6 +408,14 @@ impl Observer {
             pending_window_size: None,
             applied_window_size: None,
             copy_flash: Arc::new(Mutex::new(None)),
+            sidebar_collapsed: false,
+            title_drag: false,
+            composer,
+            start_pending: false,
+            notice: None,
+            child_rows: BTreeMap::new(),
+            ask_user_choice: BTreeMap::new(),
+            child_pending: BTreeSet::new(),
             task,
         }
     }
@@ -357,6 +444,200 @@ impl Observer {
         self.prepend_anchor = None;
         self.deferred_update = None;
         self.compression_started = None;
+        cx.notify();
+    }
+
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        cx.notify();
+    }
+
+    /// Titlebar title: the selected session, or the window name before one is picked.
+    fn window_title(&self) -> String {
+        self.selected
+            .as_deref()
+            .and_then(|id| self.sessions.iter().find(|session| session.id == id))
+            .map(|session| {
+                if session.title.trim().is_empty() {
+                    t!("untitled").to_string()
+                } else {
+                    session.title.clone()
+                }
+            })
+            .unwrap_or_else(|| t!("title").to_string())
+    }
+
+    /// Titlebar subtitle: connection state plus the workflow state the runtime reports.
+    fn status_line(&self) -> String {
+        if !self.connected {
+            return t!("connecting").to_string();
+        }
+        match self.model.state.as_str() {
+            "" => t!("connected").to_string(),
+            "executing" | "running" | "thinking" => t!("executing").to_string(),
+            "awaiting_approval" => t!("awaiting_approval").to_string(),
+            other => other.to_owned(),
+        }
+    }
+
+    fn resume_follow(&mut self, cx: &mut Context<Self>) {
+        self.model.resume_follow();
+        self.follow = true;
+        self.scroll_pending = true;
+        self.refresh_markdown(cx);
+        cx.notify();
+    }
+
+    /// Runtime states that accept a stop and show the running affordance.
+    fn workflow_running(&self) -> bool {
+        matches!(
+            self.model.state.as_str(),
+            "thinking" | "executing" | "auditing" | "running" | "stopping"
+        )
+    }
+
+    /// Clears the window back to an unsent session; the first message creates it.
+    fn start_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.select();
+        self.selected = None;
+        self.rows.clear();
+        self.markdown.clear();
+        self.expanded.clear();
+        self.child_rows.clear();
+        self.notice = None;
+        self.follow = true;
+        self.scroll_pending = true;
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+    }
+
+    /// Sends the composer text, creating the session first when none is selected.
+    fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.composer.read(cx).value().trim().to_string();
+        if text.is_empty() || self.start_pending {
+            return;
+        }
+        self.notice = None;
+        match self.selected.clone() {
+            Some(id) => {
+                let _ = self.worker.commands.try_send(Command::Signal {
+                    id,
+                    signal: serde_json::json!({"type": "user_message", "content": text}),
+                });
+                self.follow = true;
+                self.model.resume_follow();
+                self.scroll_pending = true;
+            }
+            None => {
+                self.start_pending = true;
+                let _ = self
+                    .worker
+                    .commands
+                    .try_send(Command::StartNew { prompt: text });
+            }
+        }
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        cx.notify();
+    }
+
+    fn stop_workflow(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected.clone() {
+            let _ = self.worker.commands.try_send(Command::Stop { id });
+            cx.notify();
+        }
+    }
+
+    /// Answers the approval the runtime is waiting on (`id` is the tool call).
+    fn submit_approval(
+        &mut self,
+        tool_call_id: String,
+        approved: bool,
+        approve_all: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.selected.clone() else {
+            return;
+        };
+        let _ = self.worker.commands.try_send(Command::Signal {
+            id: session,
+            signal: serde_json::json!({
+                "type": "approval",
+                "id": tool_call_id,
+                "approved": approved,
+                "approve_all": approve_all,
+            }),
+        });
+        cx.notify();
+    }
+
+    /// True while the runtime waits on this `ask_user` call for an answer.
+    fn ask_user_active(&self, tool: &ToolView) -> bool {
+        !tool.tool_call_id.is_empty()
+            && self.model.awaiting_user_tool_call_id.as_deref() == Some(tool.tool_call_id.as_str())
+    }
+
+    fn set_ask_user_choice(&mut self, key: String, option: usize, cx: &mut Context<Self>) {
+        self.ask_user_choice.insert(key, option);
+        cx.notify();
+    }
+
+    /// Submits the drafted answer as the hidden `user_message` the engine reads.
+    fn submit_ask_user(&mut self, tool: ToolView, cx: &mut Context<Self>) {
+        let Some(session) = self.selected.clone() else {
+            return;
+        };
+        if !self.ask_user_active(&tool) {
+            return;
+        }
+        let choices: Vec<Option<usize>> = tool
+            .choices
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                self.ask_user_choice
+                    .get(&format!("{}:{}", tool.tool_call_id, index))
+                    .copied()
+            })
+            .collect();
+        let Some(content) = presentation::ask_user_response(&tool.choices, &choices) else {
+            self.notice = Some(t!("ask_user_required").to_string());
+            cx.notify();
+            return;
+        };
+        let _ = self.worker.commands.try_send(Command::Signal {
+            id: session,
+            signal: serde_json::json!({
+                "type": "user_message",
+                "content": content,
+                "metadata": {
+                    "ui_visibility": "hide",
+                    "ask_user_response": true,
+                    "requested_tool_call_id": tool.tool_call_id,
+                },
+            }),
+        });
+        self.notice = None;
+        cx.notify();
+    }
+
+    /// Expands a sub-agent card and requests its child transcript once.
+    fn toggle_sub_agent(&mut self, card: SubAgentView, cx: &mut Context<Self>) {
+        if self.expanded.remove(&card.key) {
+            cx.notify();
+            return;
+        }
+        self.expanded.insert(card.key.clone());
+        if let Some(task_id) = card.task_id {
+            if !self.child_rows.contains_key(&task_id) && self.child_pending.insert(task_id.clone())
+            {
+                let _ = self.worker.commands.try_send(Command::Child {
+                    id: task_id.clone(),
+                    session: task_id,
+                });
+            }
+        }
         cx.notify();
     }
 
@@ -390,6 +671,19 @@ impl Observer {
                 UpdateKind::Sessions(sessions) => self.sessions = sessions,
                 UpdateKind::Connected(connected) => self.connected = connected,
                 UpdateKind::Config(config) => self.apply_config(&config, cx),
+                UpdateKind::Opened(id) => {
+                    self.start_pending = false;
+                    self.select(id, cx);
+                }
+                UpdateKind::Child(id, page) => {
+                    self.child_pending.remove(&id);
+                    self.child_rows
+                        .insert(id, presentation::project(page.messages, self.roots()));
+                }
+                UpdateKind::Error(message) => {
+                    self.start_pending = false;
+                    self.notice = Some(message);
+                }
                 UpdateKind::Reconnect => self.metrics.reconnects += 1,
                 UpdateKind::DecodeUs(us) => {
                     self.metrics.snapshot_decode_us += us;
@@ -536,6 +830,9 @@ impl Observer {
             )
         };
         Theme::update(cx, |theme| {
+            // The kit rounds client-decorated windows from `window_radius`; the
+            // default is square, which is what the frame looked like before.
+            theme.window_radius = px(WINDOW_RADIUS);
             theme.colors.primary = accent;
             theme.colors.primary_hover = accent.opacity(0.9);
             theme.colors.primary_active = accent.opacity(0.8);
@@ -918,7 +1215,13 @@ impl Observer {
     }
 
     fn tool_row(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
-        let open = self.expanded.contains(&tool.detail_key);
+        // A pending approval or an unanswered `ask_user` keeps its body open,
+        // exactly like Vue's `isApprovalPending || isMessageExpanded`.
+        let pending = !tool.tool_call_id.is_empty()
+            && (tool.status == presentation::ToolStatus::Pending
+                || self.model.pending_tool_ids.contains(&tool.tool_call_id));
+        let answering = self.ask_user_active(tool);
+        let open = pending || answering || self.expanded.contains(&tool.detail_key);
         let target_key = tool.detail_key.clone();
         let muted = cx.theme().muted_foreground;
         let foreground = cx.theme().foreground;
@@ -1039,6 +1342,17 @@ impl Observer {
                 }
                 body = body.child(summary);
             }
+        } else if pending {
+            // The approval card owns the diff/command/plan while pending, so the
+            // regular detail would only repeat it.
+            body = body.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .pl_6()
+                    .pb_2()
+                    .child(ui::approval::approval_card(tool, cx)),
+            );
         } else {
             body = body.child(self.tool_detail(tool, cx));
         }
@@ -1047,10 +1361,35 @@ impl Observer {
 
     fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
         let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
+        let answering = self.ask_user_active(tool);
         if !tool.choices.is_empty() {
             let mut choices = v_flex().w_full().min_w_0().gap_3();
-            for group in &tool.choices {
-                choices = choices.child(self.choice_group(group, cx));
+            for (index, group) in tool.choices.iter().enumerate() {
+                choices = choices.child(self.choice_group(tool, group, index, answering, cx));
+            }
+            if answering {
+                let submit = tool.clone();
+                choices = choices.child(
+                    h_flex().w_full().justify_end().child(
+                        h_flex()
+                            .id("ask-user-submit")
+                            .flex_none()
+                            .items_center()
+                            .gap_1()
+                            .px_3()
+                            .py(px(4.))
+                            .rounded(px(6.))
+                            .bg(accent())
+                            .cursor_pointer()
+                            .text_size(px(11.))
+                            .text_color(gpui_kit::white())
+                            .child(font_icon("send", 12., gpui_kit::white()))
+                            .child(t!("submit_answer").to_string())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.submit_ask_user(submit.clone(), cx)
+                            })),
+                    ),
+                );
             }
             detail = detail.child(choices);
         }
@@ -1237,8 +1576,9 @@ impl Observer {
     }
 
     fn sub_agent_row(&self, card: &SubAgentView, cx: &mut Context<Self>) -> AnyElement {
+        let card = card.clone();
+        let click_card = card.clone();
         let open = self.expanded.contains(&card.key);
-        let target = card.key.clone();
         let status_color = self.status_color(card.status);
         let muted = cx.theme().muted_foreground;
         let header = h_flex()
@@ -1271,7 +1611,9 @@ impl Observer {
                 14.,
                 muted,
             ))
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)));
+            .on_click(
+                cx.listener(move |this, _, _, cx| this.toggle_sub_agent(click_card.clone(), cx)),
+            );
         let mut body = v_flex().w_full().min_w_0().child(header);
         if open {
             let mut rows = h_flex().w_full().min_w_0().gap_3();
@@ -1357,24 +1699,82 @@ impl Observer {
                         view.child(self.cost_section(card.cost_key.clone(), cost, cx))
                     }),
             );
+            // The expanded card shows the delegated transcript with the same
+            // renderer as the main list, like Vue's child message pane.
+            if let Some(rows) = card.task_id.as_ref().and_then(|id| self.child_rows.get(id)) {
+                if !rows.is_empty() {
+                    let mut transcript = v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_3()
+                        .mt_2()
+                        .p_3()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().background);
+                    for row in rows {
+                        transcript =
+                            transcript.child(div().w_full().min_w_0().child(self.row(row, cx)));
+                    }
+                    body = body.child(transcript);
+                }
+            } else if card.task_id.is_some() {
+                body = body.child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .pl_2()
+                        .py_1()
+                        .text_size(px(11.))
+                        .text_color(muted)
+                        .child(font_icon("loading", 12., muted))
+                        .child(t!("sub_agent_loading").to_string()),
+                );
+            }
         }
         body.into_any_element()
     }
 
-    fn choice_group(&self, group: &ChoiceGroupView, cx: &mut Context<Self>) -> AnyElement {
+    fn choice_group(
+        &self,
+        tool: &ToolView,
+        group: &ChoiceGroupView,
+        index: usize,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut options = v_flex().w_full().min_w_0().gap_1();
-        for (index, option) in group.options.iter().enumerate() {
+        let base = format!("{}:{}", tool.tool_call_id, index);
+        for (option_index, option) in group.options.iter().enumerate() {
+            let label = format!("{}. {option}", option_index + 1);
+            if active {
+                let key = base.clone();
+                options = options.child(choice_option_live(
+                    label,
+                    self.ask_user_choice.get(&key).copied() == Some(option_index),
+                    SharedString::from(format!("{key}:{option_index}")),
+                    cx.listener(move |this, _, _, cx| {
+                        this.set_ask_user_choice(key.clone(), option_index, cx)
+                    }),
+                    cx,
+                ));
+            } else {
+                options = options.child(choice_option(
+                    label,
+                    group.selected == Some(option_index),
+                    cx,
+                ));
+            }
+        }
+        if !active {
             options = options.child(choice_option(
-                format!("{}. {option}", index + 1),
-                group.selected == Some(index),
+                format!("{}. {}", group.options.len() + 1, t!("ask_user_other")),
+                group.other_selected,
                 cx,
             ));
         }
-        options = options.child(choice_option(
-            format!("{}. {}", group.options.len() + 1, t!("ask_user_other")),
-            group.other_selected,
-            cx,
-        ));
         v_flex()
             .w_full()
             .min_w_0()
@@ -1930,6 +2330,56 @@ impl Observer {
         }
     }
 
+    /// Compact 50px rail item: an initial badge with the status dot.
+    fn rail_item(&self, index: usize, session: &Session, cx: &mut Context<Self>) -> AnyElement {
+        let active = self.selected.as_deref() == Some(session.id.as_str());
+        let id = session.id.clone();
+        let muted = cx.theme().muted_foreground;
+        let status: Hsla = self.status_color_for(&session.status).into();
+        let initial = session
+            .title
+            .chars()
+            .find(|ch| !ch.is_whitespace())
+            .map(|ch| ch.to_uppercase().to_string())
+            .unwrap_or_else(|| "#".into());
+        div()
+            .id(("rail", index))
+            .relative()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(34.))
+            .mb(px(2.))
+            .rounded(px(8.))
+            .cursor_pointer()
+            .when(active, |view| {
+                view.bg(accent().opacity(0.16)).text_color(accent())
+            })
+            .when(!active, |view| {
+                view.text_color(muted)
+                    .hover(|style| style.bg(cx.theme().muted))
+            })
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(initial),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom(px(3.))
+                    .right(px(3.))
+                    .w(px(6.))
+                    .h(px(6.))
+                    .rounded_full()
+                    .bg(status),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
+            .into_any_element()
+    }
+
     fn session_row(&self, index: usize, session: &Session, cx: &mut Context<Self>) -> AnyElement {
         let active = self.selected.as_deref() == Some(session.id.as_str());
         let id = session.id.clone();
@@ -2045,51 +2495,6 @@ impl Render for Observer {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
-
-        let mut sidebar = v_flex()
-            .id("sessions")
-            .w(px(260.))
-            .h_full()
-            .flex_none()
-            .overflow_y_scroll()
-            .gap_1()
-            .p_3()
-            .border_r_1()
-            .border_color(border)
-            .bg(surface)
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .gap_2()
-                    .pb_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(11.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(muted)
-                            .child(t!("sessions").to_string()),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(muted)
-                            .child(self.sessions.len().to_string()),
-                    ),
-            );
-        for (index, session) in self.sessions.iter().enumerate() {
-            sidebar = sidebar.child(self.session_row(index, session, cx));
-        }
-        if self.sessions.is_empty() {
-            sidebar = sidebar.child(
-                div()
-                    .pt_2()
-                    .text_size(px(11.))
-                    .text_color(muted)
-                    .child(t!("no_sessions").to_string()),
-            );
-        }
 
         let mut content = v_flex()
             .id("history")
@@ -2222,72 +2627,40 @@ impl Render for Observer {
             );
         }
 
-        let mut header = h_flex()
-            .w_full()
-            .items_center()
-            .gap_3()
-            .px_4()
-            .py_2()
-            .border_b_1()
-            .border_color(border);
-        header = header
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(6.))
-                    .h(px(6.))
-                    .rounded_full()
-                    .bg(if self.connected { success() } else { danger() }),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_size(px(11.))
-                    .text_color(muted)
-                    .child(format!(
-                        "{} · {}",
-                        if self.connected {
-                            t!("connected")
-                        } else {
-                            t!("connecting")
-                        },
-                        self.model.state
-                    )),
-            );
-        if !self.follow {
-            header = header.child(
-                Button::new("follow")
-                    .ghost()
-                    .compact()
-                    .label(t!("follow").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.model.resume_follow();
-                        this.follow = true;
-                        this.scroll_pending = true;
-                        this.refresh_markdown(cx);
-                        cx.notify();
-                    })),
-            );
-        }
-
-        h_flex()
-            .size_full()
-            .text_size(px(14.))
-            .text_color(foreground)
-            .rounded(px(12.))
-            .overflow_hidden()
-            .bg(background)
-            .child(sidebar)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .child(header)
-                    .child(content),
-            )
+        // The frame owns the rounded surface, the hairline outline and the
+        // resize bands, and leaves the toplevel shadow to the compositor.
+        let radii = ui::frame::inner_corner_radii(window, cx);
+        ui::frame::window_frame(
+            v_flex()
+                .size_full()
+                .text_size(px(14.))
+                .text_color(foreground)
+                .overflow_hidden()
+                .rounded_tl(radii.top_left)
+                .rounded_tr(radii.top_right)
+                .rounded_bl(radii.bottom_left)
+                .rounded_br(radii.bottom_right)
+                .bg(background)
+                .child(ui::titlebar::titlebar(self, window, cx))
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .child(ui::sidebar::sidebar(self, window, cx))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .h_full()
+                                .min_w_0()
+                                .min_h_0()
+                                .child(content)
+                                .child(ui::composer::composer(self, cx)),
+                        ),
+                ),
+            window,
+            cx,
+        )
     }
 }
 
@@ -2311,12 +2684,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let window_options = WindowOptions {
                 titlebar: Some(TitlebarOptions {
-                    title: Some(t!("title").to_string().into()),
-                    ..Default::default()
+                    title: None,
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(9.), px(9.))),
                 }),
-                // The root container draws the rounded frame, so the area
-                // outside its radius has to stay transparent.
+                // The rounded frame and its shadow live inside the window bounds,
+                // so everything outside that frame has to stay transparent.
                 window_background: WindowBackgroundAppearance::Transparent,
+                // The native titlebar draws itself, so the platform must not
+                // paint a second one (Tauri runs with `decorations: false`).
+                // macOS keeps its own decorations and only hands us the
+                // traffic lights, so the flag stays unset there.
+                window_decorations: if cfg!(target_os = "macos") {
+                    None
+                } else {
+                    Some(WindowDecorations::Client)
+                },
+                app_owns_titlebar_drag: true,
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                     None,
                     WORKFLOW_WINDOW_SIZE,
@@ -2325,8 +2709,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 window_min_size: Some(WORKFLOW_WINDOW_MIN_SIZE),
                 ..Default::default()
             };
-            if gpui_kit::open_window(window_options, cx, move |_, cx| {
-                cx.new(|cx| Observer::new(worker, options, cx))
+            if gpui_kit::open_window(window_options, cx, move |window, cx| {
+                cx.new(|cx| Observer::new(worker, options, window, cx))
             })
             .is_err()
             {

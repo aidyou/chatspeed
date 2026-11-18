@@ -53,6 +53,15 @@ pub fn glyph(name: &str) -> &'static str {
         "clock" => "\u{e819}",
         "list" => "\u{e661}",
         "add" => "\u{e673}",
+        "sidebar" => "\u{ef19}",
+        "send" => "\u{e705}",
+        "pin" => "\u{e755}",
+        "new-chat" => "\u{e6d1}",
+        "approval" => "\u{e696}",
+        "at" => "\u{e81e}",
+        "menu" => "\u{e678}",
+        "enter-square" => "\u{e65a}",
+        "shift-enter-square" => "\u{e655}",
         _ => "\u{e64b}",
     }
 }
@@ -240,6 +249,15 @@ mod tests {
             "clock",
             "list",
             "add",
+            "sidebar",
+            "send",
+            "pin",
+            "new-chat",
+            "approval",
+            "at",
+            "menu",
+            "enter-square",
+            "shift-enter-square",
             "tool",
         ] {
             let rule = css

@@ -1,4 +1,12 @@
 _version: 2
+approve:
+  en: Approve
+  zh-Hans: 批准
+  zh-Hant: 批准
+approve_all:
+  en: Approve all
+  zh-Hans: 全部批准
+  zh-Hant: 全部批准
 arguments_label:
   en: Arguments
   zh-Hans: 参数
@@ -7,6 +15,10 @@ ask_user_other:
   en: Other
   zh-Hans: 其他
   zh-Hant: 其他
+ask_user_required:
+  en: Pick an option for every question first
+  zh-Hans: 请先为每个问题选择一个选项
+  zh-Hant: 請先為每個問題選擇一個選項
 awaiting_approval:
   en: Awaiting approval
   zh-Hans: 等待用户审批
@@ -27,10 +39,14 @@ completed:
   en: Completed
   zh-Hans: 已完成
   zh-Hant: 已完成
+composer_placeholder:
+  en: Ask for the next step, Enter to send
+  zh-Hans: 输入下一步指令，Enter 发送
+  zh-Hant: 輸入下一步指令，Enter 傳送
 connected:
-  en: Connected (read-only)
-  zh-Hans: 已连接（只读）
-  zh-Hant: 已連接（只讀）
+  en: Connected
+  zh-Hans: 已连接
+  zh-Hant: 已連接
 connecting:
   en: Disconnected — retrying discovery
   zh-Hans: 未连接 — 正在重试发现
@@ -219,6 +235,10 @@ no_sessions:
   en: No workflow sessions yet
   zh-Hans: 暂无工作流会话
   zh-Hant: 暫無工作流會話
+reject:
+  en: Reject
+  zh-Hans: 拒绝
+  zh-Hant: 拒絕
 rejected_label:
   en: Rejected
   zh-Hans: 已拒绝
@@ -387,6 +407,10 @@ sub_agent_failed:
   en: Error
   zh-Hans: 出错
   zh-Hant: 出錯
+sub_agent_loading:
+  en: Loading the delegated transcript...
+  zh-Hans: 正在加载子代理会话...
+  zh-Hant: 正在載入子代理會話...
 sub_agent_mode:
   en: Mode
   zh-Hans: 模式
@@ -407,6 +431,10 @@ sub_agent_tools:
   en: Tools
   zh-Hans: 工具
   zh-Hant: 工具
+submit_answer:
+  en: Submit
+  zh-Hans: 提交
+  zh-Hant: 提交
 thought:
   en: Thought
   zh-Hans: 思考

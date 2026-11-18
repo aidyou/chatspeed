@@ -1,4 +1,7 @@
-//! Read-only observer model and transport, independent of the GUI backend.
+//! Workflow window model and transport, independent of the GUI backend.
+//!
+//! Reads snapshots and live events and carries the user's actions — messages,
+//! approvals and stops — back to the runtime.
 pub mod icons;
 pub mod metrics;
 pub mod model;

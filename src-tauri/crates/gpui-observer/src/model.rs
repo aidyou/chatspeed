@@ -1,7 +1,7 @@
 //! Durable-id reconciliation with explicitly loaded, prepended history pages.
 use crate::types::{Message, Page};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const PAGE_LIMIT: usize = 300;
 pub const LIVE_BYTES_LIMIT: usize = 1024 * 1024;
@@ -22,6 +22,12 @@ pub struct Model {
     /// Backend-owned compression hint, mirrored from `compression_status` events.
     pub compressing: bool,
     pub compression_message: String,
+    /// Runtime wait reason (`approval`, `user_input`, `confirmation`, `sub_agent`).
+    pub wait_reason: String,
+    /// Tool call the runtime waits on for an `ask_user` answer.
+    pub awaiting_user_tool_call_id: Option<String>,
+    /// Tool calls the runtime lists as awaiting a decision.
+    pub pending_tool_ids: BTreeSet<String>,
 }
 
 impl Model {
@@ -45,6 +51,33 @@ impl Model {
         if !page.status.is_empty() {
             self.state = page.status.clone();
         }
+        let context = &page.execution_context;
+        self.wait_reason = context["waitReason"]
+            .as_str()
+            .or_else(|| context["wait_reason"].as_str())
+            .unwrap_or("")
+            .to_owned();
+        self.awaiting_user_tool_call_id = context["awaitingUserToolCallId"]
+            .as_str()
+            .or_else(|| context["awaiting_user_tool_call_id"].as_str())
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned);
+        self.pending_tool_ids = context["pendingTools"]
+            .as_array()
+            .or_else(|| context["pending_tools"].as_array())
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter_map(|tool| {
+                        tool["toolCallId"]
+                            .as_str()
+                            .or_else(|| tool["tool_call_id"].as_str())
+                    })
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
         let initial = self.messages.is_empty();
         let finalized_live = page
             .messages
@@ -182,7 +215,12 @@ impl Model {
                     }
                 }
             }
-            "state" => self.state = event["state"].as_str().unwrap_or_default().to_owned(),
+            "state" => {
+                self.state = event["state"].as_str().unwrap_or_default().to_owned();
+                if let Some(reason) = event["wait_reason"].as_str() {
+                    self.wait_reason = reason.to_owned();
+                }
+            }
             "compression_status" => {
                 self.compressing = event["is_compressing"].as_bool().unwrap_or(false);
                 self.compression_message = event["message"].as_str().unwrap_or_default().to_owned();
@@ -229,6 +267,31 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_execution_context_tracks_the_waiting_tool() {
+        let mut model = Model::default();
+        model.page(
+            serde_json::from_value(serde_json::json!({
+                "status": "awaiting_user",
+                "executionContext": {
+                    "waitReason": "user_input",
+                    "awaitingUserToolCallId": "call-ask",
+                },
+                "messages": [],
+            }))
+            .expect("snapshot"),
+            false,
+        );
+        assert_eq!(model.wait_reason, "user_input");
+        assert_eq!(
+            model.awaiting_user_tool_call_id.as_deref(),
+            Some("call-ask")
+        );
+
+        model.event(json!({"type":"state","state":"executing","wait_reason":"approval"}));
+        assert_eq!(model.wait_reason, "approval");
+    }
 
     #[test]
     fn reading_keeps_accepting_messages_and_follow_returns_to_tail() {

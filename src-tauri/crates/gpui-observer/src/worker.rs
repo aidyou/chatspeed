@@ -158,6 +158,76 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     follow(options, tx, generation, id).await;
                 }));
             }
+            Command::Signal { id, signal } => {
+                if options.demo {
+                    continue;
+                }
+                if let Some(client) = connect(&options).await {
+                    if let Err(error) = client
+                        .post(&format!("/control/v1/workflows/{id}/signal"), &signal)
+                        .await
+                    {
+                        if !send(&tx, 0, UpdateKind::Error(error.to_string())).await {
+                            return;
+                        }
+                    }
+                }
+            }
+            Command::Stop { id } => {
+                if options.demo {
+                    continue;
+                }
+                if let Some(client) = connect(&options).await {
+                    if let Err(error) = client
+                        .post(&format!("/control/v1/workflows/{id}/stop"), &json!({}))
+                        .await
+                    {
+                        if !send(&tx, 0, UpdateKind::Error(error.to_string())).await {
+                            return;
+                        }
+                    }
+                }
+            }
+            Command::StartNew { prompt } => {
+                if options.demo {
+                    if !send(
+                        &tx,
+                        0,
+                        UpdateKind::Error("demo mode cannot start a session".into()),
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                match start_session(&options, &prompt).await {
+                    Ok(id) => {
+                        if !send(&tx, 0, UpdateKind::Opened(id)).await {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if !send(&tx, 0, UpdateKind::Error(error)).await {
+                            return;
+                        }
+                    }
+                }
+            }
+            Command::Child { id, session } => {
+                if let Some(client) = connect(&options).await {
+                    if let Ok(value) = client
+                        .get(&format!("/control/v1/workflows/{session}"))
+                        .await
+                    {
+                        if let Ok(page) = serde_json::from_value(value) {
+                            if !send(&tx, 0, UpdateKind::Child(id, page)).await {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
             Command::Older {
                 generation,
                 id,
@@ -197,6 +267,64 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
     if let Some(task) = selection {
         task.abort();
     }
+}
+
+/// Creates a workflow session on the primary agent and starts it with `prompt`.
+///
+/// Matches the Vue new-workflow flow: create carries the query the list shows,
+/// start carries the first prompt the engine runs.
+async fn start_session(options: &Options, prompt: &str) -> Result<String, String> {
+    let client = connect(options)
+        .await
+        .ok_or_else(|| "runtime unavailable".to_string())?;
+    let agents = client
+        .get("/control/v1/agents")
+        .await
+        .map_err(|error| error.to_string())?;
+    let agent_id = agents
+        .as_array()
+        .and_then(|agents| {
+            agents
+                .iter()
+                .find(|agent| agent["role"] == "primary")
+                .or_else(|| agents.first())
+        })
+        .and_then(|agent| agent["id"].as_str())
+        .ok_or_else(|| "no agent configured".to_string())?
+        .to_owned();
+    let created = client
+        .post(
+            "/control/v1/workflows",
+            &json!({
+                "user_query": prompt,
+                "agent_id": agent_id,
+                "allowed_paths": null,
+                "auto_approve_plan": null,
+                "final_audit": null,
+                "inherited_agent_config": null,
+            }),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let session_id = created["session_id"]
+        .as_str()
+        .ok_or_else(|| "runtime returned no session id".to_string())?
+        .to_owned();
+    client
+        .post(
+            &format!("/control/v1/workflows/{session_id}/start"),
+            &json!({
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "initial_prompt": prompt,
+                "initial_metadata": null,
+                "initial_attached_context": null,
+                "planning_mode": null,
+            }),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(session_id)
 }
 
 async fn snapshot(
