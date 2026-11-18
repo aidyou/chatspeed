@@ -105,6 +105,22 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     return;
                 }
             } else if let Some(client) = connect(&list_options).await {
+                // Locale and appearance follow the runtime configuration, so a
+                // setting change shows up on the next poll without a restart.
+                if let Ok(config) = client
+                    .post(
+                        &format!(
+                            "{}/get_all_config",
+                            chatspeed_runtime_client::DATA_COMMANDS_PATH
+                        ),
+                        &json!({}),
+                    )
+                    .await
+                {
+                    if !send(&list_tx, 0, UpdateKind::Config(config)).await {
+                        return;
+                    }
+                }
                 if let Ok(value) = client.get("/control/v1/workflows").await {
                     if let Ok(sessions) = serde_json::from_value(value) {
                         if !send(&list_tx, 0, UpdateKind::Sessions(sessions)).await

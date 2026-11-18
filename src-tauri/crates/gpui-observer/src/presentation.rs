@@ -28,6 +28,42 @@ const DURATION_EXCLUDED_TOOLS: &[&str] = &["ask_user", "submit_plan", "submit_re
 // Text helpers
 // ---------------------------------------------------------------------------
 
+/// Cost durations read `x h y m z s`, dropping leading zero units.
+pub fn format_duration(duration_ms: Option<u64>) -> String {
+    let Some(duration) = duration_ms else {
+        return "--".to_owned();
+    };
+    let seconds = duration / 1000;
+    let (hours, minutes, seconds) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+    let mut parts = Vec::new();
+    if hours > 0 {
+        parts.push(format!("{hours}{}", t!("unit_hour")));
+    }
+    if hours > 0 || minutes > 0 {
+        parts.push(format!("{minutes}{}", t!("unit_minute")));
+    }
+    parts.push(format!("{seconds}{}", t!("unit_second")));
+    parts.join(" ")
+}
+
+/// Groups digits the way `Intl.NumberFormat` does for token counts.
+pub fn grouped_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+/// Collapses whitespace runs so a value can occupy a single rendered line.
+pub fn single_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Hide internal reminders, including a partially streamed closing boundary.
 pub fn clean_text(text: &str) -> String {
     let mut result = text.to_owned();
@@ -345,6 +381,10 @@ impl ToolView {
         let args = tool_arguments(&message.metadata);
         let status = ToolStatus::from_message(message);
         let (action, target) = tool_title(&name, &args, &message.metadata, roots);
+        // The title is one ellipsized line, so multi-line arguments (bash
+        // scripts, heredocs) must not reach the layout.
+        let action = single_line(&action);
+        let target = single_line(&target);
         let mut badges = Vec::new();
         let route = route_label(&message.metadata);
         if !route.is_empty() {
@@ -1023,13 +1063,11 @@ fn tool_detail(
         .then(|| tool_arguments(&message.metadata))
         .filter(|args| args.as_object().is_some_and(|object| !object.is_empty()))
     {
-        sections.push(format!(
-            "**{}**\n\n{}",
-            t!("arguments_label"),
-            fence(
-                &serde_json::to_string_pretty(&arguments).unwrap_or_default(),
-                "json"
-            )
+        // The native row renders its own small "Arguments" label, so the
+        // detail must not repeat it as a bold markdown heading.
+        sections.push(fence(
+            &serde_json::to_string_pretty(&arguments).unwrap_or_default(),
+            "json",
         ));
     }
     let cleaned = clean_text(&message.message);
@@ -2876,6 +2914,60 @@ mod tests {
         assert!(cost.has_sub_agents);
         assert_eq!(cost.models.len(), 1);
         assert!((cost.models[0].cache_hit_rate.unwrap_or_default() - 100.0 / 12.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mcp_arguments_render_once_as_a_json_fence() {
+        let message = tool(
+            71,
+            "mcp__demo__search",
+            json!({
+                "tool_category": "mcp",
+                "tool_call": {"function": {"name": "mcp__demo__search", "arguments": "{\"query\":\"gpui\"}"}},
+                "execution_status": "completed",
+            }),
+        );
+        let view = ToolView::new(&message, &[]);
+        assert!(view.arguments.is_some());
+        assert!(
+            view.detail.starts_with("```json"),
+            "detail: {}",
+            view.detail
+        );
+        assert!(!view.detail.contains(&t!("arguments_label").to_string()));
+    }
+
+    #[test]
+    fn cost_durations_reach_hours() {
+        assert_eq!(format_duration(None), "--");
+        assert_eq!(format_duration(Some(0)), "0s");
+        assert_eq!(format_duration(Some(59_000)), "59s");
+        assert_eq!(format_duration(Some(61_000)), "1m 1s");
+        assert_eq!(format_duration(Some(3_661_000)), "1h 1m 1s");
+    }
+
+    #[test]
+    fn tool_titles_collapse_to_one_line() {
+        assert_eq!(single_line("Run\n  git   status"), "Run git status");
+        assert_eq!(single_line("   "), "");
+        assert_eq!(grouped_number(1_397_223), "1,397,223");
+        assert_eq!(grouped_number(999), "999");
+    }
+
+    #[test]
+    fn bash_targets_with_newlines_stay_on_one_line() {
+        let message = tool(
+            70,
+            "bash",
+            json!({
+                "tool_call": {"function": {"name": "bash", "arguments": "{\"command\":\"echo one\\necho two\"}"}},
+                "execution_status": "completed",
+                "duration_ms": 1200,
+            }),
+        );
+        let view = ToolView::new(&message, &[]);
+        assert!(!view.action.contains('\n'), "action stayed multiline");
+        assert!(!view.target.contains('\n'), "target stayed multiline");
     }
 
     #[test]

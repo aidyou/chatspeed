@@ -8,10 +8,11 @@ use chatspeed_gpui_observer::{
     icons,
     metrics::Metrics,
     model::Model,
+    prefs::{self, normalize_locale, primary_preset, DEFAULT_PRIMARY},
     presentation::{
-        self, ActivityItem, ActivityView, AlertKind, AlertView, AssistantView, ChoiceGroupView,
-        CostTotals, CostView, FinishTaskView, Row, SnapshotView, SubAgentStatus, SubAgentView,
-        ToolStatus, ToolView, UserView,
+        self, format_duration, grouped_number, ActivityItem, ActivityView, AlertKind, AlertView,
+        AssistantView, ChoiceGroupView, CostTotals, CostView, FinishTaskView, Row, SnapshotView,
+        SubAgentStatus, SubAgentView, ToolView, UserView,
     },
     types::*,
     worker::Worker,
@@ -23,21 +24,27 @@ use gpui_kit::{
         button::{Button, ButtonVariants},
         h_flex,
         text::{TextView, TextViewState},
+        theme::{Theme, ThemeMode},
         v_flex, ActiveTheme,
     },
     *,
 };
 use rust_i18n::t;
+use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
 rust_i18n::i18n!("locales", fallback = "en");
 
-/// ChatSpeed's default primary preset. The user-selected preset replaces this
-/// once the native window reads the application theme.
-const ACCENT: u32 = 0x41b555;
+/// ChatSpeed's default primary preset. `primary_color` in the runtime config
+/// replaces it through [`set_primary`].
+static PRIMARY: AtomicU32 = AtomicU32::new(DEFAULT_PRIMARY);
 const SUCCESS: u32 = 0x41b555;
 const DANGER: u32 = 0xf56c6c;
 const WARNING: u32 = 0xffc107;
@@ -45,13 +52,52 @@ const INFO: u32 = 0x46a2ed;
 const VIOLET: u32 = 0x8b5cf6;
 const MONO_FONT: &str = "Liberation Mono";
 
+/// Geometry of the workflow window in `tauri.conf.json`: the native window opens
+/// at the same size and is resized to the remembered size once settings arrive.
+const WORKFLOW_WINDOW_SIZE: Size<Pixels> = size(px(1024.), px(650.));
+const WORKFLOW_WINDOW_MIN_SIZE: Size<Pixels> = size(px(800.), px(400.));
 /// Vue's collapsed user bubble: four 1.6-line-height rows at 14px, plus room
 /// for the corner toggle.
 const USER_MESSAGE_LINES: usize = 4;
 const USER_MESSAGE_COLLAPSED_HEIGHT: f32 = 114.;
 
+/// Markdown bold is a per-run font weight, and GPUI has no synthetic bold: it
+/// only looks different when the family ships a bold face. Keep the themed
+/// family when it does, otherwise move to one that does so summaries and
+/// headings stay readable.
+fn ensure_bold_capable_font(cx: &mut App) {
+    let family = Theme::global(cx).font_family.clone();
+    if has_distinct_bold_face(cx, &family) {
+        return;
+    }
+    for candidate in [
+        "Noto Sans",
+        "DejaVu Sans",
+        "Liberation Sans",
+        "Source Han Sans SC",
+        "Noto Sans CJK SC",
+        "WenQuanYi Micro Hei",
+    ] {
+        if has_distinct_bold_face(cx, candidate) {
+            Theme::update(cx, |theme| theme.font_family = candidate.into());
+            eprintln!("{}: {family} -> {candidate}", t!("font_bold_fallback"));
+            return;
+        }
+    }
+}
+
+fn has_distinct_bold_face(cx: &App, family: &str) -> bool {
+    let regular = cx.text_system().resolve_font(&font(family));
+    let bold = cx.text_system().resolve_font(&font(family).bold());
+    regular != bold
+}
+
+fn set_primary(name: &str) {
+    PRIMARY.store(primary_preset(name), Ordering::Relaxed);
+}
+
 fn accent() -> Rgba {
-    rgb(ACCENT)
+    rgb(PRIMARY.load(Ordering::Relaxed))
 }
 
 fn success() -> Rgba {
@@ -119,19 +165,6 @@ fn plain_text(text: &str, color: impl Into<Hsla>) -> impl IntoElement {
     body
 }
 
-/// Groups digits the way `Intl.NumberFormat` does for token counts.
-fn grouped_number(value: u64) -> String {
-    let digits = value.to_string();
-    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
-}
-
 fn format_cost(value: Option<f64>) -> String {
     match value {
         Some(cost) => format!("${cost:.6}"),
@@ -150,14 +183,41 @@ fn format_percent(value: f64) -> String {
     format!("{value:.2}%")
 }
 
-fn format_cost_duration(duration_ms: Option<u64>) -> String {
-    match duration_ms {
-        Some(duration) => {
-            let seconds = duration / 1000;
-            format!("{}m {}s", seconds / 60, seconds % 60)
-        }
-        None => "--".to_owned(),
-    }
+/// A bordered summary value inside the cost card.
+fn cost_chip(label: String, accent: Hsla, cx: &mut App) -> AnyElement {
+    div()
+        .flex_none()
+        .min_h(px(26.))
+        .px_2()
+        .py(px(2.))
+        .rounded(px(8.))
+        .border_1()
+        .border_color(accent.opacity(0.22))
+        .bg(cx.theme().background.opacity(0.92))
+        .text_size(px(12.))
+        .text_color(cx.theme().foreground)
+        .child(label)
+        .into_any_element()
+}
+
+/// Money values use the accent color, monospace, and a heavier weight.
+fn cost_amount(value: Option<f64>, accent: Hsla) -> AnyElement {
+    div()
+        .flex_none()
+        .font_family(MONO_FONT)
+        .text_size(px(12.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(accent)
+        .child(format_cost(value))
+        .into_any_element()
+}
+
+/// Stable identity for a code block, used for the copy confirmation.
+fn code_key(code: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// One numbered `ask_user` option with its read-only selection marker.
@@ -207,8 +267,29 @@ struct Observer {
     metrics: Metrics,
     switched: Option<Instant>,
     last_metrics: Instant,
+    /// `theme` runtime setting: `system`, `light`, or `dark`.
+    theme_setting: String,
+    /// Last appearance the theme was resolved against, to catch system switches.
+    appearance_dark: bool,
+    applied_primary: u32,
+    palette_applied: bool,
+    /// Size to apply on the next frame, from the remembered workflow geometry.
+    pending_window_size: Option<Size<Pixels>>,
+    /// Remembered size already applied, so the periodic config poll cannot
+    /// override a size the user picked in this window.
+    applied_window_size: Option<Size<Pixels>>,
+    copy_flash: Arc<Mutex<Option<CopyFlash>>>,
     task: Task<()>,
 }
+
+/// A code block copied within the last few seconds, so its action can say so.
+#[derive(Clone, Copy)]
+struct CopyFlash {
+    key: u64,
+    at: Instant,
+}
+
+const COPY_FLASH: Duration = Duration::from_secs(3);
 
 impl Observer {
     fn new(worker: Worker, options: Options, cx: &mut Context<Self>) -> Self {
@@ -241,6 +322,13 @@ impl Observer {
             },
             switched: None,
             last_metrics: Instant::now(),
+            theme_setting: "system".into(),
+            appearance_dark: false,
+            applied_primary: DEFAULT_PRIMARY,
+            palette_applied: false,
+            pending_window_size: None,
+            applied_window_size: None,
+            copy_flash: Arc::new(Mutex::new(None)),
             task,
         }
     }
@@ -301,6 +389,7 @@ impl Observer {
             match update.kind {
                 UpdateKind::Sessions(sessions) => self.sessions = sessions,
                 UpdateKind::Connected(connected) => self.connected = connected,
+                UpdateKind::Config(config) => self.apply_config(&config, cx),
                 UpdateKind::Reconnect => self.metrics.reconnects += 1,
                 UpdateKind::DecodeUs(us) => {
                     self.metrics.snapshot_decode_us += us;
@@ -343,6 +432,9 @@ impl Observer {
         if !self.model.compressing {
             self.compression_started = None;
         }
+        if self.copy_flash_expired() {
+            cx.notify();
+        }
         if dirty {
             if self.follow {
                 self.scroll_pending = true;
@@ -366,6 +458,118 @@ impl Observer {
             }
             self.last_metrics = Instant::now();
         }
+    }
+
+    /// Mirrors `interface_language`, `primary_color` and `theme` from the
+    /// runtime configuration the desktop settings UI writes.
+    fn apply_config(&mut self, config: &Value, cx: &mut Context<Self>) {
+        let language = config["interface_language"]
+            .as_str()
+            .map(normalize_locale)
+            .unwrap_or_else(chatspeed_gpui_observer::prefs::system_locale);
+        if *rust_i18n::locale() != *language {
+            rust_i18n::set_locale(language);
+            self.rows = presentation::project(self.transcript(), self.roots());
+            self.refresh_markdown(cx);
+        }
+        set_primary(config["primary_color"].as_str().unwrap_or("green"));
+        self.adopt_window_size(config);
+        self.theme_setting = config["theme"].as_str().unwrap_or("system").to_owned();
+        self.refresh_palette(cx);
+        cx.notify();
+    }
+
+    /// Queues the remembered workflow geometry so the window stops at the size
+    /// the Tauri window was left at. The configuration poll repeats every few
+    /// seconds, so only the first value is adopted.
+    fn adopt_window_size(&mut self, config: &Value) {
+        if self.applied_window_size.is_some() {
+            return;
+        }
+        let Some((width, height)) = prefs::saved_window_size(config) else {
+            return;
+        };
+        let size = Size {
+            width: px(width.max(WORKFLOW_WINDOW_MIN_SIZE.width.as_f32())),
+            height: px(height.max(WORKFLOW_WINDOW_MIN_SIZE.height.as_f32())),
+        };
+        self.applied_window_size = Some(size);
+        self.pending_window_size = Some(size);
+    }
+
+    /// Applies the primary preset and the Vue light/dark surface colors.
+    fn refresh_palette(&mut self, cx: &mut Context<Self>) {
+        let dark = match self.theme_setting.as_str() {
+            "light" => false,
+            "dark" => true,
+            _ => ThemeMode::from(cx.window_appearance()).is_dark(),
+        };
+        let primary = PRIMARY.load(Ordering::Relaxed);
+        if self.palette_applied && dark == self.appearance_dark && primary == self.applied_primary {
+            return;
+        }
+        Theme::change(
+            if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            },
+            None,
+            cx,
+        );
+        let accent: Hsla = rgb(primary).into();
+        let (background, muted, border, foreground, muted_foreground) = if dark {
+            (
+                rgb(0x202122),
+                rgb(0x242426),
+                rgb(0xffffff).opacity(0.12),
+                rgb(0xffffff).opacity(0.87),
+                rgb(0x848586),
+            )
+        } else {
+            (
+                rgb(0xf1f2f1),
+                rgb(0xeaeaea),
+                rgb(0x000000).opacity(0.10),
+                rgb(0x000000).opacity(0.95),
+                rgb(0x000000).opacity(0.55),
+            )
+        };
+        Theme::update(cx, |theme| {
+            theme.colors.primary = accent;
+            theme.colors.primary_hover = accent.opacity(0.9);
+            theme.colors.primary_active = accent.opacity(0.8);
+            theme.colors.ring = accent.opacity(0.45);
+            theme.colors.background = background.into();
+            theme.colors.muted = muted.into();
+            theme.colors.border = border.into();
+            theme.colors.sidebar = muted.into();
+            theme.colors.sidebar_border = border.into();
+            theme.colors.foreground = foreground.into();
+            theme.colors.muted_foreground = muted_foreground.into();
+        });
+        self.appearance_dark = dark;
+        self.applied_primary = primary;
+        self.palette_applied = true;
+        cx.notify();
+    }
+
+    /// Vue resumes following once the reader is within 60px of the tail.
+    fn near_bottom(&self) -> bool {
+        let max = self.scroll.max_offset();
+        let offset = self.scroll.offset();
+        (max.y - offset.y) <= px(60.)
+    }
+
+    fn copy_flash_expired(&self) -> bool {
+        let Ok(mut flash) = self.copy_flash.lock() else {
+            return false;
+        };
+        if flash.is_some_and(|copy| copy.at.elapsed() >= COPY_FLASH) {
+            *flash = None;
+            return true;
+        }
+        false
     }
 
     fn roots(&self) -> &[String] {
@@ -493,12 +697,13 @@ impl Observer {
     }
 
     fn markdown_view(&self, key: &str) -> AnyElement {
+        let flash = self.copy_flash.clone();
         match self.markdown.get(key) {
             Some((_, state)) => div()
                 .w_full()
                 .min_w_0()
                 .child(TextView::new(state).selectable(true).code_block_actions(
-                    |code_block, _, cx| {
+                    move |code_block, _, cx| {
                         // GPUI renders these in the code block's top-right corner, where
                         // the language label would otherwise sit.
                         let code = code_block.code().to_string();
@@ -506,7 +711,16 @@ impl Observer {
                             .lang()
                             .map(|lang| lang.to_string())
                             .unwrap_or_default();
+                        let block = code_key(&code);
+                        let copied = flash
+                            .lock()
+                            .ok()
+                            .and_then(|slot| *slot)
+                            .is_some_and(|copy| {
+                                copy.key == block && copy.at.elapsed() < COPY_FLASH
+                            });
                         let muted = cx.theme().muted_foreground;
+                        let on_copy = flash.clone();
                         h_flex()
                             .id("code-actions")
                             .items_center()
@@ -524,12 +738,28 @@ impl Observer {
                                     .cursor_pointer()
                                     .hover(|style| style.bg(cx.theme().muted))
                                     .child(font_icon("copy", 12., muted))
-                                    .on_click(move |_, _, cx| {
+                                    .on_click(move |_, window, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
                                             code.clone(),
                                         ));
+                                        if let Ok(mut slot) = on_copy.lock() {
+                                            *slot = Some(CopyFlash {
+                                                key: block,
+                                                at: Instant::now(),
+                                            });
+                                        }
+                                        window.refresh();
                                     }),
                             )
+                            .when(copied, |row| {
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(px(10.))
+                                        .text_color(success())
+                                        .child(t!("copied").to_string()),
+                                )
+                            })
                             .into_any_element()
                     },
                 ))
@@ -617,7 +847,7 @@ impl Observer {
                     .min_w_0()
                     .items_center()
                     .gap_2()
-                    .py_1()
+                    .h(px(24.))
                     .cursor_pointer()
                     .hover(|style| style.bg(cx.theme().muted))
                     .child(font_icon("reasoning", 14., muted))
@@ -625,7 +855,10 @@ impl Observer {
                         div()
                             .min_w_0()
                             .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
                             .text_size(px(13.))
+                            .line_height(px(24.))
                             .text_color(muted)
                             .italic()
                             .child(title),
@@ -695,11 +928,6 @@ impl Observer {
         } else {
             muted
         };
-        let status_color: Hsla = match tool.status {
-            ToolStatus::Running | ToolStatus::Pending => accent().into(),
-            ToolStatus::Failed | ToolStatus::Rejected => danger().into(),
-            ToolStatus::Completed => border,
-        };
         let expandable = !tool.detail.is_empty()
             || !tool.choices.is_empty()
             || tool.diff.is_some()
@@ -713,32 +941,38 @@ impl Observer {
             .gap_2()
             .py_1()
             .pl_2()
-            .border_l_2()
-            .border_color(status_color)
             .cursor_pointer()
-            .child(font_icon(tool.icon, 15., self.tool_icon_color(tool)))
-            .child(
-                div()
-                    .flex_none()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(foreground)
-                    .child(truncate_text(&tool.action, 160)),
-            );
+            .child(font_icon(tool.icon, 15., self.tool_icon_color(tool)));
+        // The label is the only flexible child, so the right-hand badges keep
+        // their room and a long command truncates instead of pushing them out.
+        let mut label = h_flex().flex_1().min_w_0().overflow_hidden().gap_2();
+        label = label.child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(13.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(foreground)
+                // The action alone fills the row; otherwise it keeps its natural
+                // width and the target absorbs the truncation.
+                .when(tool.target.is_empty(), |action| action.flex_1())
+                .child(tool.action.clone()),
+        );
         if !tool.target.is_empty() {
-            title = title.child(
+            label = label.child(
                 div()
-                    .flex_none()
                     .min_w_0()
                     .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_size(px(13.))
                     .text_color(muted)
-                    .child(truncate_text(&tool.target, 120)),
+                    .child(tool.target.clone()),
             );
         }
-        title = title.child(div().flex_1());
+        title = title.child(label);
         for badge in &tool.badges {
             title = title.child(
                 div()
@@ -761,7 +995,13 @@ impl Observer {
         }
         let mut body = v_flex().w_full().min_w_0().cursor_pointer().child(title);
         if !open {
-            let mut summary = h_flex().w_full().min_w_0().items_start().gap_1().pl_6();
+            let mut summary = h_flex()
+                .id(SharedString::from(format!("{}:summary", tool.detail_key)))
+                .w_full()
+                .min_w_0()
+                .items_start()
+                .gap_1()
+                .pl_6();
             summary = summary
                 .child(
                     div()
@@ -791,6 +1031,12 @@ impl Observer {
                 );
             }
             if !tool.summary.is_empty() {
+                if expandable {
+                    let target = tool.detail_key.clone();
+                    summary = summary.on_click(
+                        cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)),
+                    );
+                }
                 body = body.child(summary);
             }
         } else {
@@ -873,28 +1119,15 @@ impl Observer {
                     ),
             );
         }
-        if let Some(arguments) = &tool.arguments {
-            detail = detail
-                .child(
-                    div()
-                        .text_size(px(10.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t!("arguments_label").to_string()),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .rounded(px(4.))
-                        .bg(cx.theme().muted)
-                        .px_2()
-                        .py_1()
-                        .text_size(px(12.))
-                        .font_family(MONO_FONT)
-                        .text_color(cx.theme().muted_foreground)
-                        .child(plain_text(arguments, cx.theme().muted_foreground)),
-                );
+        if tool.arguments.is_some() {
+            // The JSON body is the following fence; only the small label lives here.
+            detail = detail.child(
+                div()
+                    .text_size(px(10.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("arguments_label").to_string()),
+            );
         }
         if !tool.detail.is_empty() {
             detail = detail.child(self.markdown_view(&tool.detail_key));
@@ -912,7 +1145,7 @@ impl Observer {
             .min_w_0()
             .items_center()
             .gap_2()
-            .py_1()
+            .h(px(26.))
             .pl_2()
             .rounded(px(6.))
             .cursor_pointer()
@@ -943,9 +1176,13 @@ impl Observer {
         header = header
             .child(
                 div()
+                    .flex_1()
                     .min_w_0()
                     .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .text_size(px(13.))
+                    .line_height(px(26.))
                     .text_color(if group.ongoing {
                         cx.theme().foreground
                     } else {
@@ -1207,148 +1444,164 @@ impl Observer {
     }
 
     fn cost_card(&self, cost: &CostView, cx: &mut Context<Self>) -> AnyElement {
-        let muted = cx.theme().muted_foreground;
-        let mut card = v_flex()
-            .w_full()
+        // Mirrors `.workflow-cost-analysis`: an accent rail, a left-to-right
+        // accent wash over the muted surface, and chip-style summary values.
+        let accent: Hsla = accent().into();
+        let mut body = v_flex()
+            .flex_1()
             .min_w_0()
-            .gap_2()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
-            .px_3()
-            .py_2()
+            .gap_3()
+            .px(px(20.))
+            .py(px(16.))
+            .bg(linear_gradient(
+                90.,
+                linear_color_stop(accent.opacity(0.13), 0.),
+                linear_color_stop(accent.opacity(0.), 0.42),
+            ))
             .child(
                 h_flex()
                     .w_full()
-                    .gap_3()
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(10.))
-                            .text_color(muted)
-                            .child(format_cost_duration(cost.duration_ms)),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(10.))
-                            .text_color(muted)
-                            .child(format!(
-                                "{} {}",
-                                grouped_number(cost.with_sub_agents.total_tokens),
-                                t!("cost_tokens")
-                            )),
-                    ),
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(cost_chip(format_duration(cost.duration_ms), accent, cx))
+                    .child(cost_chip(
+                        format!(
+                            "{} {}",
+                            grouped_number(cost.with_sub_agents.total_tokens),
+                            t!("cost_tokens")
+                        ),
+                        accent,
+                        cx,
+                    )),
             )
             .child(self.cost_row(t!("cost_self").to_string(), &cost.self_usage, true, cx));
         if cost.has_sub_agents {
-            card = card.child(self.cost_row(
+            body = body.child(self.cost_row(
                 t!("cost_with_sub_agents").to_string(),
                 &cost.with_sub_agents,
                 false,
                 cx,
             ));
         }
-        for model in &cost.models {
-            let mut tokens = h_flex().w_full().gap_3();
-            for (label, value) in [
-                (t!("cost_input").to_string(), model.input_tokens),
-                (t!("cost_cache").to_string(), model.cache_tokens),
-                (t!("cost_output").to_string(), model.output_tokens),
-            ] {
-                tokens = tokens.child(
-                    div()
-                        .flex_none()
-                        .text_size(px(10.))
-                        .text_color(muted)
-                        .child(format!("{label} {}", grouped_number(value))),
-                );
-            }
-            if let Some(rate) = model.cache_hit_rate {
-                tokens = tokens.child(
-                    div()
-                        .flex_none()
-                        .text_size(px(10.))
-                        .text_color(muted)
-                        .child(format!(
-                            "{} {}",
-                            t!("cost_cache_hit_rate"),
-                            format_percent(rate)
-                        )),
-                );
-            }
-            let mut rates = h_flex().w_full().gap_3();
-            for (label, rate) in [
-                (t!("cost_input").to_string(), model.input_per_million),
-                (t!("cost_cache").to_string(), model.cache_per_million),
-                (t!("cost_output").to_string(), model.output_per_million),
-            ] {
-                rates = rates.child(
-                    div()
-                        .flex_none()
-                        .text_size(px(10.))
-                        .text_color(muted)
-                        .child(format!("{label} {}", format_rate(rate))),
-                );
-            }
-            if let Some(multiplier) = model.multiplier {
-                rates = rates.child(
-                    div()
-                        .flex_none()
-                        .text_size(px(10.))
-                        .text_color(muted)
-                        .child(format!("×{multiplier}")),
-                );
-            }
-            card = card.child(
-                v_flex()
+        if !cost.models.is_empty() {
+            let mut models = v_flex().w_full().min_w_0().gap_2().pt_2();
+            for model in &cost.models {
+                let mut tokens = h_flex().w_full().flex_wrap().gap_x_3().gap_y_1();
+                for (label, value) in [
+                    (t!("cost_input").to_string(), model.input_tokens),
+                    (t!("cost_cache").to_string(), model.cache_tokens),
+                    (t!("cost_output").to_string(), model.output_tokens),
+                ] {
+                    tokens = tokens.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(cx.theme().foreground)
+                            .child(format!("{label} {}", grouped_number(value))),
+                    );
+                }
+                if let Some(rate) = model.cache_hit_rate {
+                    tokens = tokens.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(cx.theme().foreground)
+                            .child(format!(
+                                "{} {}",
+                                t!("cost_cache_hit_rate"),
+                                format_percent(rate)
+                            )),
+                    );
+                }
+                let mut rates = h_flex()
                     .w_full()
-                    .min_w_0()
-                    .gap_1()
-                    .rounded(px(6.))
-                    .bg(cx.theme().muted)
-                    .px_2()
-                    .py_1()
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .min_w_0()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .text_size(px(11.))
-                                    .text_color(cx.theme().foreground)
-                                    .child(model.backend_model.clone()),
-                            )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_size(px(11.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(cx.theme().foreground)
-                                    .child(format_cost(model.estimated_cost)),
-                            ),
-                    )
-                    .child(tokens)
-                    .child(rates),
+                    .flex_wrap()
+                    .gap_x_3()
+                    .gap_y_1()
+                    .opacity(0.86);
+                for (label, rate) in [
+                    (t!("cost_input").to_string(), model.input_per_million),
+                    (t!("cost_cache").to_string(), model.cache_per_million),
+                    (t!("cost_output").to_string(), model.output_per_million),
+                ] {
+                    rates = rates.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(cx.theme().foreground)
+                            .child(format!("{label} {}", format_rate(rate))),
+                    );
+                }
+                if let Some(multiplier) = model.multiplier {
+                    rates = rates.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(cx.theme().foreground)
+                            .child(format!("×{multiplier}")),
+                    );
+                }
+                models = models.child(
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_2()
+                        .rounded(px(12.))
+                        .bg(cx.theme().background.opacity(0.92))
+                        .px(px(16.))
+                        .py_2()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .items_baseline()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .text_size(px(12.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(cx.theme().foreground)
+                                        .child(model.backend_model.clone()),
+                                )
+                                .child(cost_amount(model.estimated_cost, accent)),
+                        )
+                        .child(tokens)
+                        .child(rates),
+                );
+            }
+            body = body.child(
+                models
+                    .border_t_1()
+                    .border_dashed()
+                    .border_color(accent.opacity(0.28)),
             );
         }
         if cost.is_partial {
-            card = card.child(
+            body = body.child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(warning())
                     .child(t!("cost_partial").to_string()),
             );
         }
-        card.into_any_element()
+        h_flex()
+            .w_full()
+            .min_w_0()
+            .rounded(px(16.))
+            .border_1()
+            .border_color(accent.opacity(0.24))
+            .bg(cx.theme().muted)
+            .overflow_hidden()
+            .child(div().w(px(3.)).bg(accent))
+            .child(body)
+            .into_any_element()
     }
 
     fn cost_row(
@@ -1358,37 +1611,38 @@ impl Observer {
         primary: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let accent: Hsla = accent().into();
         let color = if primary {
             cx.theme().foreground
         } else {
             cx.theme().muted_foreground
         };
-        h_flex()
+        v_flex()
             .w_full()
             .min_w_0()
-            .items_center()
-            .gap_2()
+            .gap_1()
             .child(
-                div()
-                    .flex_1()
+                h_flex()
+                    .w_full()
                     .min_w_0()
-                    .text_size(px(11.))
-                    .text_color(color)
-                    .child(label),
+                    .items_baseline()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_size(px(12.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(color)
+                            .child(label),
+                    )
+                    .child(cost_amount(totals.estimated_cost, accent)),
             )
             .child(
                 div()
-                    .flex_none()
                     .text_size(px(11.))
-                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(color)
-                    .child(format_cost(totals.estimated_cost)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(10.))
-                    .text_color(cx.theme().muted_foreground)
+                    .opacity(0.86)
                     .child(format_rate(totals.effective_cost_per_million)),
             )
             .into_any_element()
@@ -1734,15 +1988,6 @@ impl Observer {
     }
 }
 
-fn truncate_text(text: &str, max: usize) -> String {
-    let mut chars = text.chars();
-    let mut result: String = chars.by_ref().take(max).collect();
-    if chars.next().is_some() {
-        result.push_str("...");
-    }
-    result
-}
-
 impl Render for Observer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some((offset, previous_max)) = self.prepend_anchor.take() {
@@ -1773,6 +2018,28 @@ impl Render for Observer {
         // Retain the polling task for the lifetime of this window only.
         let _ = &self.task;
 
+        // Adopt the remembered size before the frame that draws it, clamped to
+        // the display so a saved geometry cannot open a window off screen.
+        if let Some(target) = self.pending_window_size.take() {
+            let target = match cx.primary_display() {
+                Some(display) => target.min(&display.visible_bounds().size),
+                None => target,
+            };
+            if target != window.bounds().size {
+                // Resizing now would restart layout under the frame being built.
+                window.on_next_frame(move |window, _| window.resize(target));
+            }
+        }
+
+        // Apply the palette before the first frame, then follow OS light/dark
+        // switches while the setting is `system`.
+        if !self.palette_applied
+            || (self.theme_setting == "system"
+                && ThemeMode::from(window.appearance()).is_dark() != self.appearance_dark)
+        {
+            self.refresh_palette(cx);
+        }
+
         let border = cx.theme().border;
         let surface = cx.theme().muted;
         let background = cx.theme().background;
@@ -1789,7 +2056,7 @@ impl Render for Observer {
             .p_3()
             .border_r_1()
             .border_color(border)
-            .bg(background)
+            .bg(surface)
             .child(
                 h_flex()
                     .w_full()
@@ -1833,12 +2100,24 @@ impl Render for Observer {
             .track_scroll(&self.scroll)
             .overflow_y_scroll()
             .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+                if this.selected.is_none() {
+                    return;
+                }
+                // Landing near the tail resumes following, so reading history is a
+                // pause rather than a mode the user has to leave manually.
+                if this.near_bottom() {
+                    if !this.follow {
+                        this.follow = true;
+                        this.model.resume_follow();
+                        cx.notify();
+                    }
+                    return;
+                }
                 // Layout and scroll_to_bottom notifications are not reading intent.
                 // Only an upward user wheel gesture suspends tail following.
-                if this.selected.is_some()
-                    && this
-                        .model
-                        .pause_for_scroll(event.delta.pixel_delta(px(16.)).y.into())
+                if this
+                    .model
+                    .pause_for_scroll(event.delta.pixel_delta(px(16.)).y.into())
                 {
                     this.follow = false;
                     cx.notify();
@@ -1871,7 +2150,7 @@ impl Render for Observer {
                     .bg(background)
                     .cursor_pointer()
                     .hover(|style| style.bg(surface).border_color(accent().opacity(0.45)))
-                    .child(font_icon("double-arrow-down", 12., muted))
+                    .child(font_icon("double-arrow-up", 12., muted))
                     .child(
                         div()
                             .text_size(px(10.))
@@ -1996,8 +2275,10 @@ impl Render for Observer {
         h_flex()
             .size_full()
             .text_size(px(14.))
-            .bg(background)
             .text_color(foreground)
+            .rounded(px(12.))
+            .overflow_hidden()
+            .bg(background)
             .child(sidebar)
             .child(
                 v_flex()
@@ -2011,12 +2292,15 @@ impl Render for Observer {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Start in the system language; the runtime setting takes over on connect.
+    rust_i18n::set_locale(chatspeed_gpui_observer::prefs::system_locale());
     let options = Options::parse();
     let worker = Worker::start(options.clone())?;
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            ensure_bold_capable_font(cx);
             if let Err(error) = cx
                 .text_system()
                 .add_fonts(vec![std::borrow::Cow::Borrowed(icons::FONT)])
@@ -2030,6 +2314,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     title: Some(t!("title").to_string().into()),
                     ..Default::default()
                 }),
+                // The root container draws the rounded frame, so the area
+                // outside its radius has to stay transparent.
+                window_background: WindowBackgroundAppearance::Transparent,
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    WORKFLOW_WINDOW_SIZE,
+                    cx,
+                ))),
+                window_min_size: Some(WORKFLOW_WINDOW_MIN_SIZE),
                 ..Default::default()
             };
             if gpui_kit::open_window(window_options, cx, move |_, cx| {

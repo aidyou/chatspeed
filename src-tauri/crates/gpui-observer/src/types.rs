@@ -99,6 +99,8 @@ pub enum UpdateKind {
     Older(Page),
     Event(Value),
     Connected(bool),
+    /// Runtime configuration (`get_all_config`) for locale and appearance.
+    Config(Value),
     Reconnect,
     Reset,
     DecodeUs(u64),

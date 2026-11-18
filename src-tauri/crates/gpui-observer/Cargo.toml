@@ -15,9 +15,10 @@ required-features = ["gui"]
 
 [dependencies]
 chatspeed-runtime-client = { path = "../client" }
-gpui-kit = { version = "=0.10.0", optional = true }
+gpui-kit = { version = "=0.10.0", features = ["syntect"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rust-i18n = "4"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 clap = { version = "4", features = ["derive"] }
+locale_config = "0.3.0"

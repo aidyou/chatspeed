@@ -1,346 +1,481 @@
 _version: 2
 arguments_label:
   en: Arguments
-  zh-CN: 参数
+  zh-Hans: 参数
+  zh-Hant: 參數
 ask_user_other:
   en: Other
-  zh-CN: 其他
+  zh-Hans: 其他
+  zh-Hant: 其他
 awaiting_approval:
   en: Awaiting approval
-  zh-CN: 等待用户审批
+  zh-Hans: 等待用户审批
+  zh-Hant: 等待用戶審批
 clear_context_divider:
   en: Start new session
-  zh-CN: 开始新会话
+  zh-Hans: 开始新会话
+  zh-Hant: 開始新會話
 click_to_expand:
   en: (click to expand)
-  zh-CN: （点击展开）
+  zh-Hans: （点击展开）
+  zh-Hant: （點擊展開）
+copied:
+  en: Copied
+  zh-Hans: 已复制
+  zh-Hant: 已複製
 completed:
   en: Completed
-  zh-CN: 已完成
+  zh-Hans: 已完成
+  zh-Hant: 已完成
 connected:
   en: Connected (read-only)
-  zh-CN: 已连接（只读）
+  zh-Hans: 已连接（只读）
+  zh-Hant: 已連接（只讀）
 connecting:
   en: Disconnected — retrying discovery
-  zh-CN: 未连接 — 正在重试发现
+  zh-Hans: 未连接 — 正在重试发现
+  zh-Hant: 未連接 — 正在重試發現
 cost_cache:
   en: Cache
-  zh-CN: 缓存
+  zh-Hans: 缓存
+  zh-Hant: 快取
 cost_cache_hit_rate:
   en: Cache hit rate
-  zh-CN: 缓存命中率
+  zh-Hans: 缓存命中率
+  zh-Hant: 快取命中率
 cost_input:
   en: Input
-  zh-CN: 输入
+  zh-Hans: 输入
+  zh-Hant: 輸入
 cost_label:
   en: Cost
-  zh-CN: 成本
+  zh-Hans: 成本
+  zh-Hant: 成本
 cost_output:
   en: Output
-  zh-CN: 输出
+  zh-Hans: 输出
+  zh-Hant: 輸出
 cost_partial:
   en: Pricing or attribution is incomplete.
-  zh-CN: 计价或归属信息不完整。
+  zh-Hans: 定价或归属信息不完整。
+  zh-Hant: 定價或歸屬資訊不完整。
 cost_self:
   en: Self
-  zh-CN: 自身
+  zh-Hans: 主任务
+  zh-Hant: 主任務
 cost_tokens:
   en: tokens
-  zh-CN: tokens
+  zh-Hans: Tokens
+  zh-Hant: Tokens
+unit_hour:
+  en: h
+  zh-Hans: 小时
+  zh-Hant: 小時
+unit_minute:
+  en: m
+  zh-Hans: 分
+  zh-Hant: 分
+unit_second:
+  en: s
+  zh-Hans: 秒
+  zh-Hant: 秒
 cost_unpriced:
   en: Unpriced
-  zh-CN: 未定价
+  zh-Hans: 未定价
+  zh-Hant: 未定價
 cost_unpriced_rate:
   en: -- / M
-  zh-CN: -- / M
+  zh-Hans: -- / 百万 Tokens
+  zh-Hant: -- / 百萬 Tokens
 cost_with_sub_agents:
   en: With sub-agents
-  zh-CN: 含子代理
+  zh-Hans: 含子代理
+  zh-Hant: 含子代理
 critical_error:
   en: Critical Error
-  zh-CN: 严重错误
+  zh-Hans: 严重错误
+  zh-Hant: 嚴重錯誤
 demo:
   en: Deterministic local replay
-  zh-CN: 确定性本地回放
+  zh-Hans: 确定性本地回放
+  zh-Hant: 確定性本地回放
 earlier:
   en: Show earlier messages
-  zh-CN: 显示更早消息
+  zh-Hans: 显示更早消息
+  zh-Hant: 顯示更早消息
 edited:
   en: Edited
-  zh-CN: 已编辑
+  zh-Hans: 已编辑
+  zh-Hant: 已編輯
 error:
   en: Error
-  zh-CN: 错误
+  zh-Hans: 错误
+  zh-Hant: 錯誤
 error_context_window:
   en: Context limit exceeded
-  zh-CN: 上下文长度超限
+  zh-Hans: 上下文长度超限
+  zh-Hant: 上下文長度超限
 error_llm_authentication:
   en: Model authentication failed
-  zh-CN: 模型认证失败
+  zh-Hans: 模型认证失败
+  zh-Hant: 模型認證失敗
 error_llm_billing:
   en: Insufficient model balance or billing issue
-  zh-CN: 模型余额不足或计费异常
+  zh-Hans: 模型余额不足或计费异常
+  zh-Hant: 模型餘額不足或計費異常
 error_llm_retry_exhausted:
   en: Model retry limit reached
-  zh-CN: 模型重试次数已达上限
+  zh-Hans: 模型重试次数已达上限
+  zh-Hant: 模型重試次數已達上限
 exec_backend_docker:
   en: Docker
-  zh-CN: Docker
+  zh-Hans: Docker
+  zh-Hant: Docker
 exec_backend_host:
   en: Host
-  zh-CN: 本机
+  zh-Hans: 本机
+  zh-Hant: 本機
 exec_backend_msb:
   en: macOS Sandbox
-  zh-CN: macOS 沙箱
+  zh-Hans: macOS 沙箱
+  zh-Hant: macOS 沙箱
 exec_route_explicit_host:
   en: Explicit Host rule
-  zh-CN: 显式宿主机规则
+  zh-Hans: 显式宿主机规则
+  zh-Hant: 顯式宿主機規則
 exec_route_host_only:
   en: Host only
-  zh-CN: 仅宿主机
+  zh-Hans: 仅宿主机
+  zh-Hant: 僅宿主機
 exec_route_sandbox:
   en: Sandbox profile
-  zh-CN: 沙箱 Profile
+  zh-Hans: 沙箱 Profile
+  zh-Hant: 沙箱 Profile
 executing:
   en: Executing...
-  zh-CN: 执行中...
+  zh-Hans: 执行中...
+  zh-Hant: 執行中...
 failed:
   en: Failed
-  zh-CN: 失败
+  zh-Hans: 失败
+  zh-Hant: 失敗
 finish_task:
   en: Task finished
-  zh-CN: 任务完成
+  zh-Hans: 任务完成
+  zh-Hant: 任務完成
 follow:
   en: Follow latest
-  zh-CN: 跟随最新
+  zh-Hans: 跟随最新
+  zh-Hant: 跟隨最新
+font_bold_fallback:
+  en: Theme font has no bold face, switching to
+  zh-Hans: 主题字体缺少粗体，改用
+  zh-Hant: 主題字體缺少粗體，改用
 font_error:
   en: Cannot load ChatSpeed icon font
-  zh-CN: 无法加载 ChatSpeed 图标字体
+  zh-Hans: 无法加载 ChatSpeed 图标字体
+  zh-Hant: 無法加載 ChatSpeed 圖標字體
 group_call_mcp:
   en: Call MCP
-  zh-CN: 调用 MCP
+  zh-Hans: 调用 MCP
+  zh-Hant: 調用 MCP
 group_edit_file:
   en: Edit file
-  zh-CN: 编辑文件
+  zh-Hans: 编辑文件
+  zh-Hant: 編輯文件
 group_fetch_result:
   en: Fetch execution result
-  zh-CN: 获取执行结果
+  zh-Hans: 获取执行结果
+  zh-Hant: 獲取執行結果
 group_file_search:
   en: Search files
-  zh-CN: 搜索文件
+  zh-Hans: 搜索文件
+  zh-Hant: 搜索文件
 group_read_file:
   en: Read file
-  zh-CN: 读取文件
+  zh-Hans: 读取文件
+  zh-Hant: 讀取文件
 group_run_command:
   en: Run command
-  zh-CN: 执行命令
+  zh-Hans: 执行命令
+  zh-Hant: 執行命令
 group_task_changes:
   en: Update tasks
-  zh-CN: 更新任务
+  zh-Hans: 更新任务
+  zh-Hant: 更新任務
 group_use_tool:
   en: Use tool
-  zh-CN: 调用工具
+  zh-Hans: 调用工具
+  zh-Hant: 調用工具
 live_overflow:
   en: Live preview limit reached — awaiting durable final
-  zh-CN: 实时预览已达上限 — 等待耐久正文
+  zh-Hans: 实时预览已达上限 — 等待耐久正文
+  zh-Hant: 實時預覽已達上限 — 等待耐久正文
 metrics_error:
   en: Metrics output unavailable
-  zh-CN: 无法写入性能指标
+  zh-Hans: 无法写入性能指标
+  zh-Hant: 無法寫入性能指標
 no_sessions:
   en: No workflow sessions yet
-  zh-CN: 暂无工作流会话
+  zh-Hans: 暂无工作流会话
+  zh-Hant: 暫無工作流會話
 rejected_label:
   en: Rejected
-  zh-CN: 已拒绝
+  zh-Hans: 已拒绝
+  zh-Hant: 已拒絕
 select:
   en: Select a workflow session
-  zh-CN: 请选择工作流会话
+  zh-Hans: 请选择工作流会话
+  zh-Hant: 請選擇工作流會話
 sessions:
   en: Workflow sessions
-  zh-CN: 工作流会话
+  zh-Hans: 工作流会话
+  zh-Hant: 工作流會話
 snapshot_boundary_open_items:
   en: Open items at boundary
-  zh-CN: 边界处未决事项
+  zh-Hans: 边界处未决事项
+  zh-Hant: 邊界處未決事項
 snapshot_completed_rollup:
   en: Completed-task archive
-  zh-CN: 已完成任务归档
+  zh-Hans: 已完成任务归档
+  zh-Hant: 已完成任務歸檔
 snapshot_completed_work:
   en: Completed work
-  zh-CN: 已完成工作
+  zh-Hans: 已完成工作
+  zh-Hant: 已完成工作
 snapshot_confirmed_facts:
   en: Confirmed facts
-  zh-CN: 已确认事实
+  zh-Hans: 已确认事实
+  zh-Hant: 已確認事實
 snapshot_constraints:
   en: Constraints and guards
-  zh-CN: 约束与保护条件
+  zh-Hans: 约束与保护条件
+  zh-Hant: 約束與保護條件
 snapshot_context_handoff:
   en: Context handoff
-  zh-CN: 上下文交接
+  zh-Hans: 上下文交接
+  zh-Hant: 上下文交接
 snapshot_context_title:
   en: Context Snapshot
-  zh-CN: 上下文快照
+  zh-Hans: 上下文快照
+  zh-Hant: 上下文快照
 snapshot_error_log:
   en: Error Log
-  zh-CN: 错误记录
+  zh-Hans: 错误记录
+  zh-Hant: 錯誤記錄
 snapshot_evidence:
   en: Evidence
-  zh-CN: 证据
+  zh-Hans: 证据
+  zh-Hant: 證據
 snapshot_file_changes:
   en: File changes
-  zh-CN: 文件变更
+  zh-Hans: 文件变更
+  zh-Hant: 文件變更
 snapshot_file_system_state:
   en: File System State
-  zh-CN: 文件系统状态
+  zh-Hans: 文件系统状态
+  zh-Hant: 文件系統狀態
 snapshot_findings:
   en: Findings
-  zh-CN: 审查发现
+  zh-Hans: 审查发现
+  zh-Hant: 審查發現
 snapshot_key_knowledge:
   en: Key Knowledge
-  zh-CN: 关键知识
+  zh-Hans: 关键知识
+  zh-Hant: 關鍵知識
 snapshot_open_decision:
   en: Decision
-  zh-CN: 决策
+  zh-Hans: 决策
+  zh-Hant: 決策
 snapshot_open_remediation:
   en: Remediation
-  zh-CN: 修复
+  zh-Hans: 修复
+  zh-Hant: 修復
 snapshot_open_verification:
   en: Verification
-  zh-CN: 验证
+  zh-Hans: 验证
+  zh-Hant: 驗證
 snapshot_overall_goal:
   en: Overall Goal
-  zh-CN: 总体目标
+  zh-Hans: 总体目标
+  zh-Hant: 總體目標
 snapshot_previous:
   en: Previous Context Snapshot
-  zh-CN: 上一次上下文快照
+  zh-Hans: 上一次上下文快照
+  zh-Hant: 上一次上下文快照
 snapshot_previous_tasks:
   en: Previous Tasks
-  zh-CN: 之前的任务
+  zh-Hans: 之前的任务
+  zh-Hant: 之前的任務
 snapshot_recent_actions:
   en: Recent Actions
-  zh-CN: 最近操作
+  zh-Hans: 最近操作
+  zh-Hant: 最近操作
 snapshot_required_fixes:
   en: Required fixes
-  zh-CN: 必需修复
+  zh-Hans: 必需修复
+  zh-Hant: 必需修復
 snapshot_review_approved:
   en: Approved
-  zh-CN: 已批准
+  zh-Hans: 已批准
+  zh-Hant: 已批準
 snapshot_review_open:
   en: Open
-  zh-CN: 未解决
+  zh-Hans: 未解决
+  zh-Hant: 未解決
 snapshot_review_round:
   en: Review
-  zh-CN: 审查
+  zh-Hans: 审查
+  zh-Hant: 審查
 snapshot_review_rounds:
   en: Review rounds
-  zh-CN: 审查记录
+  zh-Hans: 审查记录
+  zh-Hant: 審查記錄
 snapshot_review_verified:
   en: Verified after re-review
-  zh-CN: 已通过复审验证
+  zh-Hans: 已通过复审验证
+  zh-Hant: 已通過復審驗證
 snapshot_task_state:
   en: Task State
-  zh-CN: 任务状态
+  zh-Hans: 任务状态
+  zh-Hant: 任務狀態
 snapshot_unresolved_carryovers:
   en: Unresolved carryovers
-  zh-CN: 未决交接事项
+  zh-Hans: 未决交接事项
+  zh-Hant: 未決交接事項
 snapshot_user_directives:
   en: User directives
-  zh-CN: 用户指示
+  zh-Hans: 用户指示
+  zh-Hant: 用戶指示
 sub_agent_agent:
   en: Agent
-  zh-CN: 代理
+  zh-Hans: 代理
+  zh-Hant: 代理
 sub_agent_approved:
   en: Approved
-  zh-CN: 通过
+  zh-Hans: 通过
+  zh-Hant: 通過
 sub_agent_cancelled:
   en: Cancelled
-  zh-CN: 已取消
+  zh-Hans: 已取消
+  zh-Hant: 已取消
 sub_agent_changes_required:
   en: Changes Required
-  zh-CN: 需要修改
+  zh-Hans: 需要修改
+  zh-Hant: 需要修改
 sub_agent_completed:
   en: Completed
-  zh-CN: 已完成
+  zh-Hans: 已完成
+  zh-Hant: 已完成
 sub_agent_context:
   en: Context
-  zh-CN: 上下文
+  zh-Hans: 上下文
+  zh-Hant: 上下文
 sub_agent_default_agent:
   en: Sub-agent
-  zh-CN: 子代理
+  zh-Hans: 子代理
+  zh-Hant: 子代理
 sub_agent_default_task:
   en: Delegated task
-  zh-CN: 委派任务
+  zh-Hans: 委派任务
+  zh-Hant: 委派任務
 sub_agent_delegated_task:
   en: Delegated Task
-  zh-CN: 委派任务
+  zh-Hans: 委派任务
+  zh-Hant: 委派任務
 sub_agent_failed:
   en: Error
-  zh-CN: 出错
+  zh-Hans: 出错
+  zh-Hant: 出錯
 sub_agent_mode:
   en: Mode
-  zh-CN: 模式
+  zh-Hans: 模式
+  zh-Hant: 模式
 sub_agent_result_section:
   en: Result
-  zh-CN: 结果
+  zh-Hans: 结果
+  zh-Hant: 結果
 sub_agent_running:
   en: Running
-  zh-CN: 执行中
+  zh-Hans: 执行中
+  zh-Hant: 執行中
 sub_agent_task_section:
   en: Task
-  zh-CN: 任务
+  zh-Hans: 任务
+  zh-Hant: 任務
 sub_agent_tools:
   en: Tools
-  zh-CN: 工具
+  zh-Hans: 工具
+  zh-Hant: 工具
 thought:
   en: Thought
-  zh-CN: 思考
+  zh-Hans: 思考
+  zh-Hant: 思考
 thought_completed:
   en: Thought completed
-  zh-CN: 已思考
+  zh-Hans: 已思考
+  zh-Hant: 已思考
 thinking:
   en: Thinking...
-  zh-CN: 思考中...
+  zh-Hans: 思考中...
+  zh-Hant: 思考中...
 title:
   en: ChatSpeed GPUI observer
-  zh-CN: ChatSpeed GPUI 观察器
+  zh-Hans: ChatSpeed GPUI 观察器
+  zh-Hant: ChatSpeed GPUI 觀察器
 todo_create:
   en: Create todo
-  zh-CN: 创建待办
+  zh-Hans: 创建待办
+  zh-Hant: 創建待辦
 todo_create_batch:
   en: Create batch todos
-  zh-CN: 批量创建待办
+  zh-Hans: 批量创建待办
+  zh-Hant: 批量創建待辦
 todo_items:
   en: items
-  zh-CN: 项
+  zh-Hans: 项
+  zh-Hant: 項
 todo_list:
   en: List todos
-  zh-CN: 查看待办列表
+  zh-Hans: 查看待办列表
+  zh-Hant: 查看待辦列表
 todo_plan_note:
   en: Planning note
-  zh-CN: 规划笔记
+  zh-Hans: 规划笔记
+  zh-Hant: 規劃筆記
 todo_status_completed:
   en: completed
-  zh-CN: 已完成
+  zh-Hans: 已完成
+  zh-Hant: 已完成
 todo_status_in_progress:
   en: in progress
-  zh-CN: 进行中
+  zh-Hans: 进行中
+  zh-Hant: 進行中
 todo_status_pending:
   en: pending
-  zh-CN: 待处理
+  zh-Hans: 待处理
+  zh-Hant: 待處理
 todo_update:
   en: Update todo
-  zh-CN: 更新待办
+  zh-Hans: 更新待办
+  zh-Hant: 更新待辦
 todo_view:
   en: View todo
-  zh-CN: 查看待办
+  zh-Hans: 查看待办
+  zh-Hant: 查看待辦
 untitled:
   en: Untitled workflow
-  zh-CN: 未命名工作流
+  zh-Hans: 未命名工作流
+  zh-Hant: 未命名工作流
 window_error:
   en: Cannot open GPUI window
-  zh-CN: 无法打开 GPUI 窗口
+  zh-Hans: 无法打开 GPUI 窗口
+  zh-Hant: 無法打開 GPUI 窗口
 worker_error:
   en: Cannot start observer worker
-  zh-CN: 无法启动观察器后台线程
+  zh-Hans: 无法启动观察器后台线程
+  zh-Hant: 無法啟動觀察器後臺線程
 written:
   en: Written
-  zh-CN: 已写入
+  zh-Hans: 已写入
+  zh-Hant: 已寫入
