@@ -1,0 +1,23 @@
+--- a/src/root.rs
++++ b/src/root.rs
+@@ -13,7 +13,7 @@
+     App, AppContext, Bounds, Context, DefiniteLength, DispatchPhase, ElementId, Entity,
+     FocusHandle, GlobalElementId, InteractiveElement, IntoElement, MouseMoveEvent,
+     ParentElement as _, Pixels, Render, RenderOnce, Styled, WeakFocusHandle, Window, canvas, div,
+-    prelude::FluentBuilder as _,
++    prelude::FluentBuilder as _, px,
+ };
+ use gpui_base::{TextSelection, TextSelectionScopeId, motion::Presence};
+ use std::{any::TypeId, cell::Cell, rc::Rc};
+@@ -754,7 +754,10 @@
+         _window: &mut Window,
+         _cx: &mut App,
+     ) -> impl IntoElement {
+-        window_border().child(surface)
++        // ChatSpeed: the window draws its own frame flush with the toplevel, so the
++        // library's shadow gutter would only leave a transparent ring and clip the
++        // content inside it. Keep the border itself, drop the gutter.
++        window_border().shadow_size(px(0.0)).child(surface)
+     }
+ }
+ 
