@@ -1977,16 +1977,27 @@ impl AiChatTrait for OpenAIChat {
             merged_metadata.extra.as_ref(),
             &chat_id,
         );
+        if let (Some(headers), Some(session_id)) = (headers_json.as_object_mut(), &prompt_cache_key)
+        {
+            headers.insert("x-cs-conversation-id".to_string(), json!(session_id));
+        }
         if use_responses_api {
-            // Codex-compatible headers so the upstream sees the same client
-            // surface as the official Codex CLI. Inserted as defaults only:
-            // user-configured custom headers always take precedence (ccproxy
-            // re-injects provider metadata headers after forwarding these).
+            // Keep the original Codex-compatible defaults for Responses requests.
             let codex_identity = prompt_cache_key.as_deref().unwrap_or(&chat_id);
             for (key, value) in codex_header_helper::codex_responses_headers(codex_identity) {
                 if let Some(headers_obj) = headers_json.as_object_mut() {
                     headers_obj.entry(key).or_insert(json!(value));
                 }
+            }
+        } else if let Some(headers_obj) = headers_json.as_object_mut() {
+            if !headers_obj
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("cs-user-agent"))
+            {
+                headers_obj.insert(
+                    "user-agent".to_string(),
+                    json!(concat!("chatspeed V", env!("CARGO_PKG_VERSION"))),
+                );
             }
         }
 

@@ -914,7 +914,18 @@ impl ModelResolver {
         mut metadata: Option<serde_json::Value>,
         key_index: Option<usize>,
     ) -> ProxyResult<Client> {
-        let mut client_builder = Client::builder();
+        let default_redirect = reqwest::redirect::Policy::default();
+        let mut client_builder =
+            Client::builder().redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                // Reqwest can carry custom headers through redirects. Keep the
+                // OpenCode session header within the original provider boundary.
+                if attempt.previous().first().is_some_and(is_opencode_url)
+                    && !is_opencode_url(attempt.url())
+                {
+                    return attempt.stop();
+                }
+                default_redirect.redirect(attempt)
+            }));
         let _ = setup_chat_proxy(main_store_arc.clone(), &mut metadata);
         let proxy_type = get_proxy_type_for_key(metadata, key_index);
 
@@ -1019,6 +1030,61 @@ impl ModelResolver {
             ChatProtocol::Gemini => {} // API key is in URL
             ChatProtocol::Ollama => {} // No auth
         }
+
+        inject_opencode_session(final_headers, client_headers, &proxy_model.base_url);
+    }
+}
+
+const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
+
+fn is_opencode_url(url: &reqwest::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.domain().is_some_and(|domain| {
+            let domain = domain.trim_end_matches('.');
+            domain == "opencode.ai" || domain.ends_with(".opencode.ai")
+        })
+}
+
+fn inject_opencode_session(
+    final_headers: &mut reqwest::header::HeaderMap,
+    client_headers: &http::HeaderMap,
+    base_url: &str,
+) {
+    use reqwest::header::HeaderValue;
+
+    if !reqwest::Url::parse(base_url).is_ok_and(|url| is_opencode_url(&url)) {
+        final_headers.remove(OPENCODE_SESSION_HEADER);
+        return;
+    }
+
+    let is_usable = |value: &HeaderValue| value.to_str().is_ok_and(|id| !id.trim().is_empty());
+    if final_headers
+        .get(OPENCODE_SESSION_HEADER)
+        .is_some_and(is_usable)
+    {
+        return;
+    }
+
+    let session = [
+        "x-cs-conversation-id",
+        "conversation-id",
+        "thread-id",
+        "session-id",
+    ]
+    .into_iter()
+    .filter(|&name| {
+        name != "x-cs-conversation-id"
+            || crate::ccproxy::auth::is_trusted_internal_request(client_headers)
+    })
+    .filter_map(|name| client_headers.get(name))
+    .find(|value| is_usable(value))
+    .cloned()
+    // A stateless caller without any conversation identity can only be
+    // assigned a request-local ID, which the retry path reuses unchanged.
+    .or_else(|| HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).ok());
+
+    if let Some(session) = session {
+        final_headers.insert(OPENCODE_SESSION_HEADER, session);
     }
 }
 
@@ -1196,7 +1262,7 @@ pub fn get_msg_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        api_key_suffix, find_matching_backend_target, resolve_catalog_adapter,
+        api_key_suffix, find_matching_backend_target, get_msg_id, resolve_catalog_adapter,
         should_forward_header, ModelResolver,
     };
     use crate::ccproxy::types::{BackendModelTarget, ChatProtocol, ProxyModel};
@@ -1363,6 +1429,88 @@ mod tests {
         ] {
             assert!(!upstream_headers.contains_key(name));
         }
+    }
+
+    fn opencode_session_for_request(
+        url: &str,
+        headers: &http::HeaderMap,
+    ) -> reqwest::header::HeaderMap {
+        let mut model = proxy_model();
+        model.base_url = url.to_string();
+        let mut upstream = reqwest::header::HeaderMap::new();
+        ModelResolver::inject_proxy_headers(&mut upstream, headers, &model, &get_msg_id());
+        upstream
+    }
+
+    #[test]
+    fn opencode_session_matches_the_actual_hostname_and_preserves_user_agent() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-opencode-session", "explicit-session".parse().unwrap());
+        headers.insert("user-agent", "my-coding-agent/1.0".parse().unwrap());
+        for url in [
+            "https://OPENCODE.AI/zen/go/v1",
+            "https://api.opencode.ai:443/v1",
+        ] {
+            let upstream = opencode_session_for_request(url, &headers);
+            assert_eq!(upstream["x-opencode-session"], "explicit-session");
+            assert_eq!(upstream["user-agent"], "my-coding-agent/1.0");
+        }
+        for url in [
+            "https://notopencode.ai/v1",
+            "https://opencode.ai.example.com/v1",
+            "https://example.com/opencode.ai",
+            "https://opencode.ai@example.com/v1",
+            "invalid opencode.ai",
+        ] {
+            let upstream = opencode_session_for_request(url, &headers);
+            assert!(!upstream.contains_key("x-opencode-session"), "{url}");
+            assert_eq!(upstream["user-agent"], "my-coding-agent/1.0");
+        }
+    }
+
+    #[test]
+    fn opencode_session_reuses_conversation_id_and_ignores_untrusted_internal_id() {
+        let url = "https://opencode.ai/zen/go/v1";
+        let mut headers = http::HeaderMap::new();
+        headers.insert("x-opencode-session", "".parse().unwrap());
+        headers.insert("conversation-id", "first-conversation".parse().unwrap());
+        headers.insert(
+            "x-cs-conversation-id",
+            "internal-conversation".parse().unwrap(),
+        );
+        headers.insert("x-cs-internal-request", "true".parse().unwrap());
+        for _ in 0..2 {
+            let upstream = opencode_session_for_request(url, &headers);
+            assert_eq!(upstream["x-opencode-session"], "first-conversation");
+            assert!(!upstream.contains_key("x-cs-conversation-id"));
+        }
+        headers.insert("conversation-id", "second-conversation".parse().unwrap());
+        let upstream = opencode_session_for_request(url, &headers);
+        assert_eq!(upstream["x-opencode-session"], "second-conversation");
+
+        headers.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+        let upstream = opencode_session_for_request(url, &headers);
+        assert_eq!(upstream["x-opencode-session"], "internal-conversation");
+        assert!(!upstream.contains_key("x-cs-conversation-id"));
+    }
+
+    #[test]
+    fn opencode_session_without_identity_uses_a_request_local_uuid() {
+        let url = "https://opencode.ai/zen/go/v1";
+        let headers = http::HeaderMap::new();
+        let first = opencode_session_for_request(url, &headers);
+        let second = opencode_session_for_request(url, &headers);
+        let header = &first["x-opencode-session"];
+        assert!(uuid::Uuid::parse_str(header.to_str().unwrap()).is_ok());
+        assert_ne!(header, &second["x-opencode-session"]);
     }
 
     #[test]
