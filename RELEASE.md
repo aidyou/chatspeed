@@ -2,6 +2,33 @@
 
 # Release Notes
 
+## [2.1.4]
+
+### New Features
+
+- **OpenCode support**: Requests to `opencode.ai` now send a stable `x-opencode-session` conversation id for better routing and prompt caching.
+
+---
+
+## [2.1.3]
+
+### New Features
+
+- **Runtime-ready startup gate**: The app now shows an "Initializing ChatSpeed…" screen until the runtime reports ready, then mounts the main view. This avoids a blank window and stray interactions while startup permission prompts are still pending.
+- **Persisted approved plans**: Workflow now saves approved plans under TSID-based filenames and feeds the plan file into the execution context, so a plan survives across follow-up turns and session recovery.
+- **Readable ignore policy files**: `.gitignore` and `.csignore` can now be read, listed, searched, mentioned, diffed and staged, so your edits stay committable. Writes, edits, deletes, renames, output redirections and symlink aliases remain blocked, and Planning Mode still denies `git add`.
+
+### Bug Fixes
+
+- **Error alert sizing**: The workflow error alert now grows with its content. The fixed minimum height and the stray blank line under single-line errors are removed, so a one-line error no longer leaves a large empty gap at the bottom.
+
+### Maintenance
+
+- Ignore rules now match directory contents instead of the directories themselves, and `.pnpm-store` is ignored.
+- Removed obsolete temporary work artifacts and added model and SystemOne reference docs.
+
+---
+
 ## [2.1.2]
 
 ### Bug Fixes
