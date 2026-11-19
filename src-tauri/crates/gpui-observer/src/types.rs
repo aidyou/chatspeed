@@ -158,6 +158,8 @@ pub struct Page {
 
 /// UI requests use generations to invalidate all old-selection results.
 pub enum Command {
+    DesktopMenu(chatspeed_runtime_client::desktop_menu::Action),
+    SetSound { chime: crate::chimes::Chime, muted: bool },
     Metrics(crate::metrics::Metrics, Option<PathBuf>),
     Select {
         generation: u64,
@@ -205,9 +207,12 @@ pub enum UpdateKind {
     Snapshot(Page),
     Older(Page),
     Event(Value),
+    Chime(crate::chimes::Chime),
     Connected(bool),
     /// Runtime configuration (`get_all_config`) for locale and appearance.
-    Config(Value),
+    Config(Value, Instant),
+    SoundSaved { chime: crate::chimes::Chime, muted: bool, saved: bool },
+    DesktopMenuUnavailable,
     Reconnect,
     Reset,
     DecodeUs(u64),

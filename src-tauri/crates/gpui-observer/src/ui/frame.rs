@@ -31,11 +31,7 @@ const RESIZE_HIT_SIZE: Pixels = px(4.);
 /// each frame, and the window manager answers that by nudging the toplevel —
 /// the jitter this frame used to cause while dragging. So the inset stays with
 /// the library, and this frame lives inside the gutter it reserves.
-pub fn window_frame(
-    content: impl IntoElement,
-    window: &mut Window,
-    cx: &mut App,
-) -> AnyElement {
+pub fn window_frame(content: impl IntoElement, window: &mut Window, cx: &mut App) -> AnyElement {
     let content = content.into_any_element();
     let Decorations::Client { tiling } = window.window_decorations() else {
         return div()
@@ -174,7 +170,11 @@ fn resize_hit_zones(size: Size<Pixels>, tiling: &Tiling) -> Vec<AnyElement> {
 
     // Corners are pushed after the edge strips so hit-testing prefers them.
     let corners = [
-        (ResizeEdge::TopLeft, !tiling.top && !tiling.left, point(px(0.), px(0.))),
+        (
+            ResizeEdge::TopLeft,
+            !tiling.top && !tiling.left,
+            point(px(0.), px(0.)),
+        ),
         (
             ResizeEdge::TopRight,
             !tiling.top && !tiling.right,
@@ -253,10 +253,7 @@ mod tests {
             resize_edge(point(px(2.), px(50.)), size, &untiled()),
             Some(ResizeEdge::Left)
         );
-        assert_eq!(
-            resize_edge(point(px(50.), px(50.)), size, &untiled()),
-            None
-        );
+        assert_eq!(resize_edge(point(px(50.), px(50.)), size, &untiled()), None);
         assert_eq!(
             resize_edge(point(px(99.), px(99.)), size, &untiled()),
             Some(ResizeEdge::BottomRight)

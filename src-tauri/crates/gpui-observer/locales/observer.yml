@@ -127,6 +127,10 @@ demo:
   en: Deterministic local replay
   zh-Hans: 确定性本地回放
   zh-Hant: 確定性本地回放
+desktop_menu_unavailable:
+  en: The desktop menu is unavailable. Open an up-to-date ChatSpeed desktop for this profile.
+  zh-Hans: 桌面菜单不可用。请打开此配置对应的新版 ChatSpeed 桌面端。
+  zh-Hant: 桌面選單無法使用。請開啟此設定檔對應的新版 ChatSpeed 桌面版。
 earlier:
   en: Show earlier messages
   zh-Hans: 显示更早消息
@@ -243,6 +247,66 @@ live_overflow:
   en: Live preview limit reached — awaiting durable final
   zh-Hans: 实时预览已达上限 — 等待耐久正文
   zh-Hant: 實時預覽已達上限 — 等待耐久正文
+menu_about:
+  en: About
+  zh-Hans: 关于
+  zh-Hant: 關於
+menu_agent:
+  en: Agent
+  zh-Hans: 智能体
+  zh-Hant: 智能體
+menu_assistant:
+  en: Assistant
+  zh-Hans: 助手
+  zh-Hant: 助手
+menu_chat:
+  en: Chat
+  zh-Hans: 聊天
+  zh-Hant: 聊天
+menu_chat_hub:
+  en: Chat Hub
+  zh-Hans: 聊天入口
+  zh-Hant: 聊天入口
+menu_mcp:
+  en: MCP
+  zh-Hans: MCP
+  zh-Hant: MCP
+menu_model:
+  en: AI Provider
+  zh-Hans: AI供应商
+  zh-Hant: AI供應商
+menu_note:
+  en: Note
+  zh-Hans: 智记
+  zh-Hant: 智記
+menu_proxy:
+  en: Proxy
+  zh-Hans: 代理
+  zh-Hant: 代理
+menu_proxy_switcher:
+  en: Proxy Switcher
+  zh-Hans: 代理切换
+  zh-Hant: 代理切換
+menu_quit:
+  en: Quit
+  zh-Hans: 退出
+  zh-Hant: 退出
+menu_scraper:
+  en: Scraper Test
+  zh-Hans: 爬虫测试
+  zh-Hant: 爬蟲測試
+menu_settings:
+  en: Settings
+  zh-Hans: 设置
+  zh-Hant: 設定
+menu_skill:
+  en: Skill
+  zh-Hans: 技能
+  zh-Hant: 技能
+menu_workflow:
+  en: Task
+  zh-Hans: 任务
+  zh-Hant: 任務
 metrics_error:
   en: Metrics output unavailable
   zh-Hans: 无法写入性能指标
@@ -415,6 +479,14 @@ sound_completion:
   en: Completion sound
   zh-Hans: 完成提示音
   zh-Hant: 完成提示音
+sound_playback_unavailable:
+  en: Unable to play the workflow sound on the default audio device.
+  zh-Hans: 无法在默认音频设备上播放工作流提示音。
+  zh-Hant: 無法在預設音訊裝置上播放工作流提示音。
+sound_save_failed:
+  en: Unable to save the workflow sound setting.
+  zh-Hans: 无法保存工作流声音设置。
+  zh-Hant: 無法儲存工作流聲音設定。
 status_auditing:
   en: Auditing
   zh-Hans: 审查中

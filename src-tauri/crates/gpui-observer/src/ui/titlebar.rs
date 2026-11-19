@@ -11,6 +11,8 @@
 //! rectangle the full height of the bar, which paints over the frame's rounded
 //! top-right corner.
 
+use chatspeed_gpui_observer::chimes::Chime;
+use chatspeed_runtime_client::desktop_menu::Action;
 use gpui_kit::base::InteractiveElementExt;
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon as KitIcon, IconName, Sizable};
@@ -48,15 +50,17 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
     let mut left = h_flex()
         .flex_none()
         .items_center()
-        .gap(px(8.))
-        .child(menu(observer, secondary, cx))
-        .child(icon_button(
-            "toggle-sidebar",
-            "sidebar",
-            if collapsed { secondary } else { accent },
-            skin.hover,
-            cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
-        ));
+        .gap(px(8.));
+    if observer.show_menu_button {
+        left = left.child(menu(observer, secondary, cx));
+    }
+    left = left.child(icon_button(
+        "toggle-sidebar",
+        "sidebar",
+        if collapsed { secondary } else { accent },
+        skin.hover,
+        cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
+    ));
     let pending = observer.pending_approvals();
     if !pending.is_empty() {
         left = left.child(approval_queue(pending, secondary, accent, skin.hover, cx));
@@ -190,55 +194,35 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
         .into_any_element()
 }
 
-/// One command in the native menu.
-#[derive(Clone, Copy)]
-enum Action {
-    NewSession,
-    ToggleSidebar,
-    TogglePin,
-    Close,
-}
-
-/// Vue's menu button, limited to the commands the native window can perform.
+/// Menu groups and order match `src/components/window/Titlebar.vue`.
 fn menu(observer: &Observer, secondary: Hsla, cx: &mut Context<Observer>) -> AnyElement {
     let skin = surfaces(observer.appearance_dark);
     let hover = skin.hover;
+    let border = cx.theme().border;
+    let foreground = cx.theme().foreground;
     let weak = cx.entity().downgrade();
-    let entries: Vec<(&'static str, &'static str, String, Action)> = vec![
-        (
-            "menu-new",
-            "new-chat",
-            t!("new_task").to_string(),
-            Action::NewSession,
-        ),
-        (
-            "menu-sidebar",
-            "sidebar",
-            if observer.sidebar_collapsed {
-                t!("expand_sidebar")
-            } else {
-                t!("collapse_sidebar")
-            }
-            .to_string(),
-            Action::ToggleSidebar,
-        ),
-        (
-            "menu-pin",
-            "pin",
-            if observer.pinned {
-                t!("unpin")
-            } else {
-                t!("pin")
-            }
-            .to_string(),
-            Action::TogglePin,
-        ),
-        (
-            "menu-close",
-            "close",
-            t!("close_window").to_string(),
-            Action::Close,
-        ),
+    let groups: [&[(&str, &str, &str, Action)]; 4] = [
+        &[
+            ("menu-chat", "skill-chat-square", "menu_chat", Action::Chat),
+            ("menu-assistant", "assistant", "menu_assistant", Action::Assistant),
+            ("menu-workflow", "skill-plan3", "menu_workflow", Action::Workflow),
+            ("menu-note", "note", "menu_note", Action::Note),
+            ("menu-proxy-switcher", "switch", "menu_proxy_switcher", Action::ProxySwitcher),
+        ],
+        &[
+            ("menu-settings", "setting", "menu_settings", Action::Settings),
+            ("menu-model", "model", "menu_model", Action::Model),
+            ("menu-agent", "agent", "menu_agent", Action::Agent),
+            ("menu-proxy", "proxy", "menu_proxy", Action::Proxy),
+            ("menu-chat-hub", "connected", "menu_chat_hub", Action::ChatHub),
+            ("menu-mcp", "mcp", "menu_mcp", Action::Mcp),
+            ("menu-skill", "skill", "menu_skill", Action::Skill),
+        ],
+        &[("menu-scraper", "extract", "menu_scraper", Action::ScraperTest)],
+        &[
+            ("menu-about", "about", "menu_about", Action::About),
+            ("menu-quit", "quit", "menu_quit", Action::Quit),
+        ],
     ];
 
     Popover::new("titlebar-menu")
@@ -250,28 +234,28 @@ fn menu(observer: &Observer, secondary: Hsla, cx: &mut Context<Observer>) -> Any
             secondary,
             hover,
         )))
-        .content(move |_, _, cx| {
+        .content(move |_, window, cx| {
             let popover = cx.entity();
-            let mut list = v_flex().w(px(196.)).gap(px(2.));
-            for (id, icon, label, action) in entries.clone() {
-                let popover = popover.clone();
-                let weak = weak.clone();
-                list = list.child(menu_row(
-                    id,
-                    icon,
-                    label,
-                    secondary,
-                    hover,
-                    move |_, window, cx| {
-                        let _ = popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        let _ = weak.update(cx, |this, cx| match action {
-                            Action::NewSession => this.start_new_session(window, cx),
-                            Action::ToggleSidebar => this.toggle_sidebar(cx),
-                            Action::TogglePin => this.toggle_pin(cx),
-                            Action::Close => window.remove_window(),
-                        });
-                    },
-                ));
+            let mut list = v_flex()
+                .id("titlebar-menu-list")
+                .w(px(196.))
+                .max_h((window.viewport_size().height - px(TITLEBAR_HEIGHT + 28.)).max(px(40.)))
+                .overflow_y_scroll()
+                .gap(px(2.));
+            for (index, group) in groups.iter().enumerate() {
+                if index > 0 {
+                    list = list.child(div().flex_none().mx_2().my_1().h(px(1.)).bg(border));
+                }
+                for &(id, icon, label, action) in *group {
+                    let popover = popover.clone();
+                    let weak = weak.clone();
+                    list = list.child(menu_row(id, icon, t!(label).to_string(), foreground, hover,
+                        move |_, window, cx| {
+                            let _ = popover.update(cx, |state, cx| state.dismiss(window, cx));
+                            let _ = weak.update(cx, |this, cx| this.desktop_menu_action(action, cx));
+                        },
+                    ));
+                }
             }
             list
         })
@@ -387,10 +371,9 @@ fn sound_menu(
     hover: Hsla,
     cx: &mut Context<Observer>,
 ) -> AnyElement {
-    let muted = observer.approval_sound_muted && observer.completion_sound_muted;
-    let icon = if muted { "mute" } else { "unmute" };
-    let approval_on = !observer.approval_sound_muted;
-    let completion_on = !observer.completion_sound_muted;
+    let approval_on = observer.sound_is_enabled(Chime::Approval);
+    let completion_on = observer.sound_is_enabled(Chime::Completion);
+    let icon = if approval_on || completion_on { "unmute" } else { "mute" };
     let accent = cx.theme().primary;
     let foreground = cx.theme().foreground;
     let weak = cx.entity().downgrade();
@@ -415,8 +398,7 @@ fn sound_menu(
                     move |window, cx| {
                         let _ = popover.update(cx, |state, cx| state.dismiss(window, cx));
                         let _ = weak.update(cx, |this, cx| {
-                            this.approval_sound_muted = !this.approval_sound_muted;
-                            cx.notify();
+                            this.toggle_sound(Chime::Approval, cx);
                         });
                     },
                 )
@@ -435,8 +417,7 @@ fn sound_menu(
                     move |window, cx| {
                         let _ = popover.update(cx, |state, cx| state.dismiss(window, cx));
                         let _ = weak.update(cx, |this, cx| {
-                            this.completion_sound_muted = !this.completion_sound_muted;
-                            cx.notify();
+                            this.toggle_sound(Chime::Completion, cx);
                         });
                     },
                 )

@@ -37,6 +37,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
+pub mod desktop_menu;
 pub mod paths;
 
 pub use paths::{

@@ -2,6 +2,7 @@
 //!
 //! Reads snapshots and live events and carries the user's actions — messages,
 //! approvals and stops — back to the runtime.
+pub mod chimes;
 pub mod icons;
 pub mod metrics;
 pub mod model;

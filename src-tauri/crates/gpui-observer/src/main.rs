@@ -7,6 +7,7 @@
 
 use crate::ui::Icon;
 use chatspeed_gpui_observer::{
+    chimes::Chime,
     icons,
     metrics::Metrics,
     model::Model,
@@ -44,6 +45,7 @@ use std::{
 
 rust_i18n::i18n!("locales", fallback = "en");
 
+mod sound_player;
 mod ui;
 
 /// ChatSpeed's default primary preset. `primary_color` in the runtime config
@@ -313,9 +315,11 @@ struct Observer {
     /// Tab shown in the expanded sidebar, and the rail entry that selects it.
     sidebar_tab: ui::sidebar::SidebarTab,
     rail_tab: ui::sidebar::RailTab,
-    /// Vue's two sound switches; the native window has no chime to gate yet.
-    approval_sound_muted: bool,
-    completion_sound_muted: bool,
+    show_menu_button: bool,
+    sound_enabled: BTreeSet<Chime>,
+    sound_pending: BTreeMap<Chime, bool>,
+    sound_saved_at: Option<Instant>,
+    sound_player: Option<sound_player::SoundPlayer>,
     /// Always-on-top request from the titlebar.
     pinned: bool,
     /// Expanded folders of the authorized-path tree, with the children the
@@ -411,8 +415,11 @@ impl Observer {
             sidebar_collapsed: false,
             sidebar_tab: ui::sidebar::SidebarTab::Tasks,
             rail_tab: ui::sidebar::RailTab::Tasks,
-            approval_sound_muted: false,
-            completion_sound_muted: false,
+            show_menu_button: true,
+            sound_enabled: BTreeSet::new(),
+            sound_pending: BTreeMap::new(),
+            sound_saved_at: None,
+            sound_player: sound_player::SoundPlayer::start().ok(),
             pinned: false,
             expanded_dirs: BTreeSet::new(),
             dir_entries: BTreeMap::new(),
@@ -567,6 +574,41 @@ impl Observer {
                 Some((id.clone(), presentation::tool_name(tool).to_owned()))
             })
             .collect()
+    }
+
+    fn desktop_menu_action(
+        &mut self,
+        action: chatspeed_runtime_client::desktop_menu::Action,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice = self.worker.commands.try_send(Command::DesktopMenu(action)).err()
+            .map(|_| t!("desktop_menu_unavailable").to_string());
+        cx.notify();
+    }
+
+    fn sound_is_enabled(&self, chime: Chime) -> bool {
+        self.sound_pending.get(&chime).map_or_else(|| self.sound_enabled.contains(&chime), |muted| !muted)
+    }
+
+    fn set_sound_enabled(&mut self, chime: Chime, enabled: bool) {
+        if enabled {
+            self.sound_enabled.insert(chime);
+        } else {
+            self.sound_enabled.remove(&chime);
+        }
+    }
+
+    fn toggle_sound(&mut self, chime: Chime, cx: &mut Context<Self>) {
+        if self.sound_pending.contains_key(&chime) {
+            return;
+        }
+        let muted = self.sound_is_enabled(chime);
+        if self.worker.commands.try_send(Command::SetSound { chime, muted }).is_ok() {
+            self.sound_pending.insert(chime, muted);
+        } else {
+            self.notice = Some(t!("sound_save_failed").to_string());
+        }
+        cx.notify();
     }
 
     fn toggle_pin(&mut self, cx: &mut Context<Self>) {
@@ -788,7 +830,32 @@ impl Observer {
             match update.kind {
                 UpdateKind::Sessions(sessions) => self.sessions = sessions,
                 UpdateKind::Connected(connected) => self.connected = connected,
-                UpdateKind::Config(config) => self.apply_config(&config, cx),
+                UpdateKind::Config(config, fetched_at) => {
+                    self.apply_config(&config, fetched_at, cx);
+                }
+                UpdateKind::DesktopMenuUnavailable => {
+                    self.notice = Some(t!("desktop_menu_unavailable").to_string());
+                }
+                UpdateKind::SoundSaved { chime, muted, saved } => {
+                    self.sound_pending.remove(&chime);
+                    if saved {
+                        self.sound_saved_at = Some(Instant::now());
+                        self.set_sound_enabled(chime, !muted);
+                    } else {
+                        self.notice = Some(t!("sound_save_failed").to_string());
+                    }
+                }
+                UpdateKind::Chime(chime) => {
+                    if self.sound_is_enabled(chime) {
+                        if let Some(player) = &self.sound_player {
+                            player.play(chime);
+                        } else {
+                            self.notice = Some(t!("sound_playback_unavailable").to_string());
+                            cx.notify();
+                        }
+                    }
+                    continue;
+                }
                 UpdateKind::Opened(id) => {
                     self.start_pending = false;
                     self.select(id, cx);
@@ -861,6 +928,10 @@ impl Observer {
         if !self.model.compressing {
             self.compression_started = None;
         }
+        if self.sound_player.as_ref().is_some_and(|player| player.playback_failed()) {
+            self.notice = Some(t!("sound_playback_unavailable").to_string());
+            cx.notify();
+        }
         if self.copy_flash_expired() {
             cx.notify();
         }
@@ -889,9 +960,15 @@ impl Observer {
         }
     }
 
-    /// Mirrors `interface_language`, `primary_color` and `theme` from the
-    /// runtime configuration the desktop settings UI writes.
-    fn apply_config(&mut self, config: &Value, cx: &mut Context<Self>) {
+    /// Mirrors the runtime preferences shared with the Vue titlebar.
+    fn apply_config(&mut self, config: &Value, fetched_at: Instant, cx: &mut Context<Self>) {
+        self.show_menu_button = config["show_menu_button"].as_bool().unwrap_or(true);
+        // A poll already in flight when a save completed may contain old values.
+        if self.sound_saved_at.is_none_or(|saved_at| fetched_at > saved_at) {
+            for chime in Chime::ALL {
+                self.set_sound_enabled(chime, !chime.muted(config));
+            }
+        }
         let language = config["interface_language"]
             .as_str()
             .map(normalize_locale)

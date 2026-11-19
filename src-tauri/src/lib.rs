@@ -76,6 +76,7 @@ mod terminal;
 // `tools` re-exports the runtime backend tool contracts and adds the
 // WebView-backed `web_fetch`/`web_search` implementations.
 mod tools;
+mod desktop_menu;
 mod tray;
 mod updater;
 mod window;
@@ -971,6 +972,7 @@ pub async fn run() -> crate::error::Result<()> {
                                     apply_runtime_startup_config(&app_handle, supervisor.clone(), &snapshot)
                                         .await;
                                     restore_initial_windows(&app_handle, &snapshot);
+                                    crate::desktop_menu::start(app_handle.clone(), runtime_dir.clone());
                                     startup_applied = true;
                                 } else {
                                     // Recovery mirrors refreshed runtime settings

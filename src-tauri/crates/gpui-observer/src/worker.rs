@@ -103,8 +103,9 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
             } else {
                 // Locale and appearance follow the runtime configuration, so a
                 // setting change shows up on the next poll without a restart.
+                let fetched_at = Instant::now();
                 if let Ok(config) = native::config(&list_options).await {
-                    if !send(&list_tx, 0, UpdateKind::Config(config)).await {
+                    if !send(&list_tx, 0, UpdateKind::Config(config, fetched_at)).await {
                         return;
                     }
                 }
@@ -133,6 +134,30 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
     let mut selection: Option<tokio::task::JoinHandle<()>> = None;
     while let Some(command) = rx.recv().await {
         match command {
+            Command::DesktopMenu(action) => {
+                use chatspeed_runtime_client::{desktop_menu, try_discovery_path};
+                let accepted = if options.demo {
+                    false
+                } else if let Ok(discovery) = try_discovery_path(options.discovery.as_deref()) {
+                    let dir = discovery.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+                    desktop_menu::request(dir, action).await.is_ok()
+                } else {
+                    false
+                };
+                if !accepted && !send(&tx, 0, UpdateKind::DesktopMenuUnavailable).await {
+                    return;
+                }
+            }
+            Command::SetSound { chime, muted } => {
+                let saved = options.demo || native::data_command(
+                    &options,
+                    "set_config",
+                    json!({"key": chime.config_key(), "value": muted}),
+                ).await.is_ok();
+                if !send(&tx, 0, UpdateKind::SoundSaved { chime, muted, saved }).await {
+                    return;
+                }
+            }
             Command::Metrics(mut metrics, path) => {
                 // Low-frequency proc sampling and append-only writes stay off the UI thread.
                 let _ = tokio::task::spawn_blocking(move || {
@@ -397,6 +422,7 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
         }
     }
     let mut cursor: Option<String> = None;
+    let mut chimes = crate::chimes::ChimeTracker::default();
     let mut needs_snapshot = true;
     loop {
         if !send(&tx, generation, UpdateKind::Reconnect).await {
@@ -426,6 +452,9 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                                         .is_some_and(|(instance, sequence)| instance == envelope.server_instance_id
                                             && sequence.parse::<u64>().is_ok_and(|last| envelope.sequence <= last)) { continue; }
                                     cursor = Some(next_cursor);
+                                    if let Some(chime) = chimes.event(&envelope.payload) {
+                                        if !send(&tx, generation, UpdateKind::Chime(chime)).await { return; }
+                                    }
                                     if !send(&tx, generation, UpdateKind::Event(envelope.payload)).await { return; }
                                 }
                                 Ok(None) => break,
@@ -434,6 +463,7 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                                     // Treat every invalid envelope as a resync; never inspect error text.
                                     if matches!(error, chatspeed_runtime_client::ClientError::Serialization(_)) {
                                         cursor = None;
+                                        chimes = crate::chimes::ChimeTracker::default();
                                         needs_snapshot = true;
                                         if !send(&tx, generation, UpdateKind::Reset).await { return; }
                                     }

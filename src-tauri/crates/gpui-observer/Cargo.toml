@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["gui"]
-gui = ["dep:gpui-kit"]
+gui = ["dep:gpui-kit", "dep:rodio"]
 
 [[bin]]
 name = "chatspeed-gpui-observer"
@@ -19,6 +19,7 @@ gpui-kit = { version = "=0.10.0", features = ["syntect"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rust-i18n = "4"
+rodio = { version = "0.21.1", default-features = false, features = ["mp3", "playback"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 clap = { version = "4", features = ["derive"] }
 locale_config = "0.3.0"
