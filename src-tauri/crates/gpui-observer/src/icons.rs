@@ -16,6 +16,9 @@ pub const FAMILY: &str = "chatspeed";
 /// U+F101 in the native font: the iconfont export has no upward double chevron.
 const DOUBLE_ARROW_UP: &str = "\u{f101}";
 
+/// `cs-mute` lives outside the BMP and needs the font's format 12 cmap.
+const MUTE: &str = "\u{13f7c}";
+
 pub fn glyph(name: &str) -> &'static str {
     match name {
         "talk" => "\u{e649}",
@@ -62,7 +65,111 @@ pub fn glyph(name: &str) -> &'static str {
         "menu" => "\u{e678}",
         "enter-square" => "\u{e65a}",
         "shift-enter-square" => "\u{e655}",
+        "undo" => "\u{e7f2}",
+        "skill-plan3" => "\u{e711}",
+        "plugin" => "\u{e92d}",
+        "connected" => "\u{e64a}",
+        "ext-folder" => "\u{e7d1}",
+        "money" => "\u{e6d3}",
+        "restart" => "\u{e652}",
+        "delete" => "\u{e651}",
+        "unmute" => "\u{e862}",
+        "mute" => MUTE,
+        "zip" => "\u{e683}",
+        "refresh" => "\u{e71e}",
+        "trash" => "\u{e61a}",
+        "ext-folder-open" => "\u{e85e}",
+        "ext-pic" => "\u{e663}",
+        "ext-file" => "\u{e662}",
+        "ext-docx" => "\u{e666}",
+        "ext-pptx" => "\u{e790}",
+        "ext-xlsx" => "\u{ea45}",
+        "ext-pdf" => "\u{e66b}",
+        "ext-csv" => "\u{e848}",
+        "ext-html" => "\u{e679}",
+        "ext-css" => "\u{e676}",
+        "ext-js" => "\u{e688}",
+        "ext-ts" => "\u{e66f}",
+        "ext-jsx" => "\u{e66d}",
+        "ext-tsx" => "\u{e670}",
+        "ext-vue" => "\u{e69d}",
+        "ext-c" => "\u{e69a}",
+        "ext-cpp" => "\u{e66a}",
+        "ext-java" => "\u{e66c}",
+        "ext-rs" => "\u{e687}",
+        "ext-go" => "\u{e62d}",
+        "ext-swift" => "\u{e69e}",
+        "ext-rb" => "\u{e691}",
+        "ext-php" => "\u{e67e}",
+        "ext-py" => "\u{e67a}",
+        "ext-shell" => "\u{e6e5}",
+        "ext-exe" => "\u{e681}",
+        "ext-yaml" => "\u{e690}",
+        "ext-json" => "\u{e67c}",
+        "ext-xml" => "\u{e945}",
+        "ext-toml" => "\u{e75d}",
+        "ext-setting" => "\u{e87e}",
+        "ext-git" => "\u{f1b4}",
+        "ext-md" => "\u{e671}",
+        "ext-txt" => "\u{e680}",
+        "ext-log" => "\u{e67f}",
         _ => "\u{e64b}",
+    }
+}
+
+/// File-type icon for a tree row, mirroring `getFileIcon` in `TreeNode.vue`.
+///
+/// `ext-zip` has no glyph in the web font, so archives use the standalone `zip`
+/// icon instead of rendering an empty box.
+pub fn file_icon(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or_default();
+    match ext {
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "tgz" => "zip",
+        "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico" | "tiff" | "raw" => {
+            "ext-pic"
+        }
+        "mp3" | "wav" | "ogg" | "m4a" | "aac" | "flac" | "opus" | "mp4" | "webm" | "mov"
+        | "m4v" | "ogv" | "mkv" => "ext-file",
+        "doc" | "docx" => "ext-docx",
+        "ppt" | "pptx" => "ext-pptx",
+        "xls" | "xlsx" => "ext-xlsx",
+        "pdf" => "ext-pdf",
+        "csv" => "ext-csv",
+        "html" | "htm" | "xhtml" => "ext-html",
+        "css" | "scss" | "sass" | "less" | "styl" => "ext-css",
+        "js" | "mjs" | "cjs" => "ext-js",
+        "ts" | "mts" | "cts" => "ext-ts",
+        "jsx" => "ext-jsx",
+        "tsx" => "ext-tsx",
+        "vue" => "ext-vue",
+        "c" | "h" | "hpp" => "ext-c",
+        "cpp" | "cc" | "cxx" | "hxx" => "ext-cpp",
+        "java" | "kt" | "kts" | "jsp" | "scala" => "ext-java",
+        "rs" => "ext-rs",
+        "go" => "ext-go",
+        "swift" => "ext-swift",
+        "rb" => "ext-rb",
+        "php" | "php4" | "php5" => "ext-php",
+        "py" | "pyw" | "pyc" | "pyd" | "pyi" => "ext-py",
+        "sh" | "bash" | "zsh" | "fish" | "ps1" | "psm1" | "bat" | "cmd" => "ext-shell",
+        "exe" | "msi" | "dmg" | "app" | "bin" | "pkg" | "deb" | "rpm" | "apk" => "ext-exe",
+        "yaml" | "yml" => "ext-yaml",
+        "json" => "ext-json",
+        "xml" => "ext-xml",
+        "toml" => "ext-toml",
+        "ini" | "conf" | "cfg" | "properties" | "env" => "ext-setting",
+        "md" | "markdown" => "ext-md",
+        "txt" => "ext-txt",
+        "log" => "ext-log",
+        _ if matches!(
+            name,
+            ".git" | ".gitignore" | ".gitattributes" | ".gitmodules"
+        ) =>
+        {
+            "ext-git"
+        }
+        _ => "ext-file",
     }
 }
 
@@ -258,6 +365,54 @@ mod tests {
             "menu",
             "enter-square",
             "shift-enter-square",
+            "undo",
+            "skill-plan3",
+            "plugin",
+            "connected",
+            "ext-folder",
+            "money",
+            "restart",
+            "delete",
+            "unmute",
+            "mute",
+            "zip",
+            "refresh",
+            "trash",
+            "ext-folder-open",
+            "ext-pic",
+            "ext-file",
+            "ext-docx",
+            "ext-pptx",
+            "ext-xlsx",
+            "ext-pdf",
+            "ext-csv",
+            "ext-html",
+            "ext-css",
+            "ext-js",
+            "ext-ts",
+            "ext-jsx",
+            "ext-tsx",
+            "ext-vue",
+            "ext-c",
+            "ext-cpp",
+            "ext-java",
+            "ext-rs",
+            "ext-go",
+            "ext-swift",
+            "ext-rb",
+            "ext-php",
+            "ext-py",
+            "ext-shell",
+            "ext-exe",
+            "ext-yaml",
+            "ext-json",
+            "ext-xml",
+            "ext-toml",
+            "ext-setting",
+            "ext-git",
+            "ext-md",
+            "ext-txt",
+            "ext-log",
             "tool",
         ] {
             let rule = css
@@ -302,5 +457,16 @@ mod tests {
             "skill-relation-chart"
         );
         assert_eq!(activity_icon(&[item("read_file")]), "search");
+    }
+
+    #[test]
+    fn file_icons_follow_tree_node_extensions() {
+        assert_eq!(file_icon("main.rs"), "ext-rs");
+        assert_eq!(file_icon("App.VUE"), "ext-vue");
+        assert_eq!(file_icon("Cargo.toml"), "ext-toml");
+        assert_eq!(file_icon("README.md"), "ext-md");
+        assert_eq!(file_icon("bundle.tar.gz"), "zip");
+        assert_eq!(file_icon(".gitignore"), "ext-git");
+        assert_eq!(file_icon("LICENSE"), "ext-file");
     }
 }

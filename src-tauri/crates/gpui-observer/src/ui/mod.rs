@@ -1,8 +1,8 @@
 //! Window chrome for the native workflow window.
 //!
 //! The transcript stays in the crate root; these modules own the titlebar,
-//! the compact session sidebar, the composer, and the approval card so the
-//! native window can mirror the Vue shell without growing one file further.
+//! the session sidebar, the composer, and the approval card so the native
+//! window can mirror the Vue shell without growing one file further.
 
 use gpui_kit::*;
 
@@ -13,11 +13,51 @@ pub const TITLEBAR_HEIGHT: f32 = 40.;
 /// collapses into.
 pub const SIDEBAR_WIDTH: f32 = 300.;
 pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 50.;
+/// Vue pins the navigation rail to the same 50px column.
+pub const RAIL_WIDTH: f32 = 50.;
+
+/// Vue surfaces the theme does not carry as named tokens.
+///
+/// The values are the light and dark entries of `--cs-bg-color-deep`,
+/// `--cs-titlebar-bg-color`, `--cs-titlebar-border-color`,
+/// `--cs-hover-bg-color` and `--cs-active-bg-color`, so the chrome matches the
+/// web window instead of the component library's approximations.
+pub struct Surfaces {
+    /// Rail and compact sidebar background.
+    pub deep: Hsla,
+    /// Titlebar strip, one step lighter than the body it sits on.
+    pub titlebar: Hsla,
+    pub titlebar_border: Hsla,
+    pub hover: Hsla,
+    /// Selected row, tab and rail item background.
+    pub active: Hsla,
+}
+
+pub fn surfaces(dark: bool) -> Surfaces {
+    if dark {
+        Surfaces {
+            deep: rgb(0x232629).into(),
+            titlebar: rgb(0x21221e).into(),
+            titlebar_border: rgb(0x111111).into(),
+            hover: rgb(0x2e2f2c).into(),
+            active: rgb(0x2f3234).into(),
+        }
+    } else {
+        Surfaces {
+            deep: rgb(0xe7e7e6).into(),
+            titlebar: rgb(0xfcfcfc).into(),
+            titlebar_border: rgb(0xe2e2e0).into(),
+            hover: rgb(0xefefef).into(),
+            active: rgb(0xd2d3d1).into(),
+        }
+    }
+}
 
 /// A flat icon button used by the titlebar and the composer footer.
 ///
 /// Titlebar buttons must be focusable children of the bar rather than window
-/// controls, so the drag area keeps the rest of the bar.
+/// controls, so the drag area keeps the rest of the bar. The 18px glyph in a
+/// 26x22 box is Vue's `.icon-btn` at `--cs-font-size-lg`.
 pub fn icon_button(
     id: &'static str,
     icon: &'static str,
@@ -31,11 +71,12 @@ pub fn icon_button(
         .flex()
         .items_center()
         .justify_center()
-        .size(px(26.))
-        .rounded(px(6.))
+        .w(px(26.))
+        .h(px(22.))
+        .rounded(px(8.))
         .cursor_pointer()
         .hover(|style| style.bg(hover))
-        .child(crate::font_icon(icon, 16., color))
+        .child(crate::font_icon(icon, 18., color))
         // A control that takes the press must not also start the window move.
         .on_mouse_down(MouseButton::Left, |_, window, cx| {
             window.prevent_default();
@@ -45,8 +86,52 @@ pub fn icon_button(
         .into_any_element()
 }
 
+/// Wraps a control so `Popover` can own its open state.
+///
+/// `Popover::trigger` needs `Selectable`, which only the component library's own
+/// controls implement; the chrome uses flat hand-drawn buttons instead.
+pub struct Trigger {
+    element: AnyElement,
+    open: bool,
+}
+
+impl Trigger {
+    pub fn new(element: impl IntoElement) -> Self {
+        Self {
+            element: element.into_any_element(),
+            open: false,
+        }
+    }
+}
+
+impl gpui_kit::component::Selectable for Trigger {
+    fn selected(mut self, selected: bool) -> Self {
+        self.open = selected;
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        self.open
+    }
+}
+
+impl IntoElement for Trigger {
+    type Element = AnyElement;
+
+    fn into_element(self) -> Self::Element {
+        self.element
+    }
+}
+
+/// A flat popover trigger: the inner element stays a plain, unstyled surface so
+/// `Popover` receives the press and the titlebar drag area keeps the rest.
+pub fn trigger(element: impl IntoElement) -> Trigger {
+    Trigger::new(element)
+}
+
 pub mod approval;
 pub mod composer;
+pub mod file_tree;
 pub mod frame;
 pub mod sidebar;
 pub mod titlebar;

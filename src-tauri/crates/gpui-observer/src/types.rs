@@ -21,7 +21,90 @@ pub struct Session {
     #[serde(default)]
     pub title: String,
     #[serde(default)]
+    pub user_query: String,
+    #[serde(default)]
     pub status: String,
+    /// Agent configuration: the list route serializes it as a JSON string, the
+    /// snapshot route as an object once it has been normalized in memory.
+    #[serde(default)]
+    pub agent_config: Value,
+    #[serde(default)]
+    pub is_automation_run: bool,
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+impl Session {
+    /// Vue shows the title, then the user query, then the untitled placeholder.
+    pub fn heading(&self) -> String {
+        match self.title.trim() {
+            "" => self.user_query.trim().to_owned(),
+            title => title.to_owned(),
+        }
+    }
+
+    /// The primary authorized root, used for the badge and the row subtitle.
+    pub fn primary_root(&self) -> Option<String> {
+        roots_from(Some(&self.agent_config)).into_iter().next()
+    }
+}
+
+/// Authorized roots of a workflow payload.
+///
+/// The workflow row and its snapshot both carry `agent_config`; it arrives as a
+/// JSON string from the list route and as an object from the snapshot route.
+pub fn workflow_roots(workflow: &Value) -> Vec<String> {
+    let direct = workflow
+        .get("allowedPaths")
+        .or_else(|| workflow.get("allowed_paths"))
+        .or_else(|| workflow.get("agentConfig"))
+        .or_else(|| workflow.get("agent_config"));
+    roots_from(direct)
+}
+
+fn roots_from(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(roots)) => roots
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|root| root.trim_end_matches(['/', '\\']).to_owned())
+            .filter(|root| !root.is_empty())
+            .collect(),
+        // `agent_config` is a serialized agent config, so its roots are nested.
+        Some(Value::String(config)) => serde_json::from_str::<Value>(config)
+            .ok()
+            .and_then(|config| {
+                config
+                    .get("allowedPaths")
+                    .or_else(|| config.get("allowed_paths"))
+                    .cloned()
+            })
+            .map(|roots| roots_from(Some(&roots)))
+            .unwrap_or_default(),
+        Some(config @ Value::Object(_)) => config
+            .get("allowedPaths")
+            .or_else(|| config.get("allowed_paths"))
+            .map(|roots| roots_from(Some(roots)))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Folder name of a root path, as Vue renders it in the badge and the selector.
+pub fn root_name(path: &str) -> &str {
+    path.rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(path)
+}
+
+/// One child of a directory in the authorized-path tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
 }
 
 /// Durable transcript row; aliases exist only at the HTTP compatibility boundary.
@@ -102,6 +185,10 @@ pub enum Command {
         id: String,
         session: String,
     },
+    /// Lists one directory for the authorized-path tree.
+    ListDir {
+        path: String,
+    },
 }
 
 /// Ordered, bounded background-to-UI handoff; payloads are never logged.
@@ -130,4 +217,52 @@ pub enum UpdateKind {
     Child(String, Page),
     /// A user-action failure worth showing above the composer.
     Error(String),
+    /// Children of a directory the authorized-path tree expanded.
+    Dir {
+        path: String,
+        entries: Vec<DirEntry>,
+        error: Option<String>,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn roots_come_from_the_serialized_agent_config() {
+        let session: Session = serde_json::from_value(json!({
+            "id": "s1",
+            "title": "",
+            "user_query": "Fix the build",
+            "status": "executing",
+            "agent_config": "{\"allowedPaths\":[\"/work/app/\",\"/work/docs\"]}",
+        }))
+        .expect("session");
+        assert_eq!(session.primary_root().as_deref(), Some("/work/app"));
+        assert_eq!(session.heading(), "Fix the build");
+        assert_eq!(root_name("/work/app"), "app");
+
+        // The snapshot route hands the config over as an object.
+        assert_eq!(
+            workflow_roots(&json!({"agent_config": {"allowedPaths": ["/work/lib"]}})),
+            vec!["/work/lib".to_owned()]
+        );
+        assert_eq!(
+            workflow_roots(&json!({"allowedPaths": ["/work/top"]})),
+            vec!["/work/top".to_owned()]
+        );
+        assert!(workflow_roots(&json!({"status": "completed"})).is_empty());
+    }
+
+    #[test]
+    fn untitled_sessions_have_no_heading() {
+        let session = Session {
+            id: "s2".into(),
+            ..Session::default()
+        };
+        assert_eq!(session.heading(), "");
+        assert!(session.primary_root().is_none());
+    }
 }

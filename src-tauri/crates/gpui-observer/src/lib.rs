@@ -5,6 +5,7 @@
 pub mod icons;
 pub mod metrics;
 pub mod model;
+pub mod native;
 pub mod prefs;
 pub mod presentation;
 pub mod types;

@@ -28,6 +28,9 @@ pub struct Model {
     pub awaiting_user_tool_call_id: Option<String>,
     /// Tool calls the runtime lists as awaiting a decision.
     pub pending_tool_ids: BTreeSet<String>,
+    /// Authorized roots of the selected workflow, used to shorten tool paths
+    /// and to fill the authorized-paths tab.
+    pub roots: Vec<String>,
 }
 
 impl Model {
@@ -50,6 +53,12 @@ impl Model {
         }
         if !page.status.is_empty() {
             self.state = page.status.clone();
+        }
+        // Older-message pages may omit the workflow payload; keep the roots the
+        // snapshot established instead of clearing them on every page.
+        if page.workflow.get("agent_config").is_some() || page.workflow.get("agentConfig").is_some()
+        {
+            self.roots = crate::types::workflow_roots(&page.workflow);
         }
         let context = &page.execution_context;
         self.wait_reason = context["waitReason"]

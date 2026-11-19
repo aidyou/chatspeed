@@ -127,6 +127,10 @@ fn violet() -> Rgba {
 }
 
 /// Iconfont glyph inside a square box so glyph metrics never shift baselines.
+///
+/// A text child fills the box, so the glyph has to be centered explicitly:
+/// otherwise a narrow glyph such as `pin` (567/1024 em) sits at the box's left
+/// edge and reads as if the button were misaligned.
 fn font_icon(name: &str, size: f32, color: impl Into<Hsla>) -> impl IntoElement {
     div()
         .flex_none()
@@ -140,6 +144,7 @@ fn font_icon(name: &str, size: f32, color: impl Into<Hsla>) -> impl IntoElement 
         // The square line box keeps the glyph's own ascent/descent from pushing
         // the icon below the text it sits next to.
         .line_height(px(size))
+        .text_align(TextAlign::Center)
         .text_color(color)
         .child(icons::glyph(name))
 }
@@ -327,6 +332,23 @@ struct Observer {
     copy_flash: Arc<Mutex<Option<CopyFlash>>>,
     /// Sidebar collapse state, matching the Vue compact sidebar.
     sidebar_collapsed: bool,
+    /// Tab shown in the expanded sidebar, and the rail entry that selects it.
+    sidebar_tab: ui::sidebar::SidebarTab,
+    rail_tab: ui::sidebar::RailTab,
+    /// Vue's two sound switches; the native window has no chime to gate yet.
+    approval_sound_muted: bool,
+    completion_sound_muted: bool,
+    /// Always-on-top request from the titlebar.
+    pinned: bool,
+    /// Expanded folders of the authorized-path tree, with the children the
+    /// native window listed for them and any failure worth showing.
+    expanded_dirs: BTreeSet<String>,
+    dir_entries: BTreeMap<String, Vec<DirEntry>>,
+    dir_errors: BTreeMap<String, String>,
+    dir_pending: BTreeSet<String>,
+    /// The first authorized root opens once per selected workflow, matching
+    /// `FileTree.vue`'s mount behaviour.
+    files_auto_expanded: bool,
     /// A titlebar press that became a window move on the first pointer motion.
     title_drag: bool,
     /// Multi-line composer state; sends read it and clear it.
@@ -409,6 +431,16 @@ impl Observer {
             applied_window_size: None,
             copy_flash: Arc::new(Mutex::new(None)),
             sidebar_collapsed: false,
+            sidebar_tab: ui::sidebar::SidebarTab::Tasks,
+            rail_tab: ui::sidebar::RailTab::Tasks,
+            approval_sound_muted: false,
+            completion_sound_muted: false,
+            pinned: false,
+            expanded_dirs: BTreeSet::new(),
+            dir_entries: BTreeMap::new(),
+            dir_errors: BTreeMap::new(),
+            dir_pending: BTreeSet::new(),
+            files_auto_expanded: false,
             title_drag: false,
             composer,
             start_pending: false,
@@ -444,7 +476,17 @@ impl Observer {
         self.prepend_anchor = None;
         self.deferred_update = None;
         self.compression_started = None;
+        self.clear_dir_state();
         cx.notify();
+    }
+
+    /// Directory listings belong to the selected workflow's roots.
+    fn clear_dir_state(&mut self) {
+        self.expanded_dirs.clear();
+        self.dir_entries.clear();
+        self.dir_errors.clear();
+        self.dir_pending.clear();
+        self.files_auto_expanded = false;
     }
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -452,22 +494,123 @@ impl Observer {
         cx.notify();
     }
 
-    /// Titlebar title: the selected session, or the window name before one is picked.
-    fn window_title(&self) -> String {
-        self.selected
-            .as_deref()
-            .and_then(|id| self.sessions.iter().find(|session| session.id == id))
-            .map(|session| {
-                if session.title.trim().is_empty() {
-                    t!("untitled").to_string()
-                } else {
-                    session.title.clone()
-                }
-            })
-            .unwrap_or_else(|| t!("title").to_string())
+    /// Rail selection also picks the list tab Vue shows next to it.
+    fn select_rail_tab(&mut self, tab: ui::sidebar::RailTab, cx: &mut Context<Self>) {
+        self.rail_tab = tab;
+        self.sidebar_tab = match tab {
+            ui::sidebar::RailTab::Tasks => ui::sidebar::SidebarTab::Tasks,
+            ui::sidebar::RailTab::Automation => ui::sidebar::SidebarTab::Automation,
+        };
+        cx.notify();
     }
 
-    /// Titlebar subtitle: connection state plus the workflow state the runtime reports.
+    fn select_sidebar_tab(&mut self, tab: ui::sidebar::SidebarTab, cx: &mut Context<Self>) {
+        self.sidebar_tab = tab;
+        cx.notify();
+    }
+
+    /// The tab strip hides the list tab the rail did not select, so the panel
+    /// never shows a tab that is not on screen.
+    fn visible_sidebar_tab(&self) -> ui::sidebar::SidebarTab {
+        match (self.sidebar_tab, self.rail_tab) {
+            (ui::sidebar::SidebarTab::Automation, ui::sidebar::RailTab::Tasks) => {
+                ui::sidebar::SidebarTab::Tasks
+            }
+            (ui::sidebar::SidebarTab::Tasks, ui::sidebar::RailTab::Automation) => {
+                ui::sidebar::SidebarTab::Automation
+            }
+            (tab, _) => tab,
+        }
+    }
+
+    /// Vue's titlebar path opens the authorized-paths tab, expanding first.
+    fn open_files_tab(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_collapsed = false;
+        self.sidebar_tab = ui::sidebar::SidebarTab::Files;
+        cx.notify();
+    }
+
+    /// Expands or collapses one authorized folder, loading its children the
+    /// first time it opens.
+    fn toggle_dir(&mut self, path: String, cx: &mut Context<Self>) {
+        if self.expanded_dirs.remove(&path) {
+            cx.notify();
+            return;
+        }
+        self.expanded_dirs.insert(path.clone());
+        if !self.dir_entries.contains_key(&path) {
+            self.load_dir(path, cx);
+        }
+        cx.notify();
+    }
+
+    fn load_dir(&mut self, path: String, cx: &mut Context<Self>) {
+        if !self.dir_pending.insert(path.clone()) {
+            return;
+        }
+        self.dir_errors.remove(&path);
+        if self
+            .worker
+            .commands
+            .try_send(Command::ListDir { path: path.clone() })
+            .is_err()
+        {
+            self.dir_pending.remove(&path);
+        }
+        cx.notify();
+    }
+
+    /// Vue's FileTree opens the first authorized root when it mounts.
+    fn auto_expand_first_root(&mut self, cx: &mut Context<Self>) {
+        if self.files_auto_expanded {
+            return;
+        }
+        let Some(root) = self.model.roots.first().cloned() else {
+            return;
+        };
+        self.files_auto_expanded = true;
+        self.expanded_dirs.insert(root.clone());
+        self.load_dir(root, cx);
+    }
+
+    /// Pending decisions of the selected workflow: (tool call, tool name).
+    fn pending_approvals(&self) -> Vec<(String, String)> {
+        self.model
+            .pending_tool_ids
+            .iter()
+            .chain(
+                self.model
+                    .awaiting_user_tool_call_id
+                    .as_ref()
+                    .filter(|id| !self.model.pending_tool_ids.contains(*id)),
+            )
+            .filter_map(|id| {
+                let tool = self.model.tools.get(id)?;
+                Some((id.clone(), presentation::tool_name(tool).to_owned()))
+            })
+            .collect()
+    }
+
+    fn toggle_pin(&mut self, cx: &mut Context<Self>) {
+        self.pinned = !self.pinned;
+        // GPUI exposes no always-on-top request, so the switch only reports the
+        // state the titlebar is asked for.
+        self.notice = self
+            .pinned
+            .then(|| format!("{} · {}", t!("pin"), t!("not_supported_native")));
+        cx.notify();
+    }
+
+    fn not_implemented(&mut self, feature: impl Into<String>, cx: &mut Context<Self>) {
+        self.notice = Some(format!(
+            "{} · {}",
+            feature.into(),
+            t!("not_supported_native")
+        ));
+        cx.notify();
+    }
+
+    /// Composer footer: connection state plus the workflow state the runtime reports.
     fn status_line(&self) -> String {
         if !self.connected {
             return t!("connecting").to_string();
@@ -478,14 +621,6 @@ impl Observer {
             "awaiting_approval" => t!("awaiting_approval").to_string(),
             other => other.to_owned(),
         }
-    }
-
-    fn resume_follow(&mut self, cx: &mut Context<Self>) {
-        self.model.resume_follow();
-        self.follow = true;
-        self.scroll_pending = true;
-        self.refresh_markdown(cx);
-        cx.notify();
     }
 
     /// Runtime states that accept a stop and show the running affordance.
@@ -507,8 +642,13 @@ impl Observer {
         self.notice = None;
         self.follow = true;
         self.scroll_pending = true;
-        self.composer
-            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.clear_dir_state();
+        self.composer.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+            // Typing the first message is the next step, so take the focus there.
+            let focus = state.focus_handle(cx);
+            focus.focus(window, cx);
+        });
         cx.notify();
     }
 
@@ -684,6 +824,22 @@ impl Observer {
                     self.start_pending = false;
                     self.notice = Some(message);
                 }
+                UpdateKind::Dir {
+                    path,
+                    entries,
+                    error,
+                } => {
+                    self.dir_pending.remove(&path);
+                    if let Some(error) = error {
+                        self.dir_errors.insert(path, error);
+                    } else {
+                        self.dir_errors.remove(&path);
+                        self.dir_entries.insert(path, entries);
+                    }
+                    // Directory updates do not change the transcript, so skip
+                    // the projection pass a dirty batch would trigger.
+                    cx.notify();
+                }
                 UpdateKind::Reconnect => self.metrics.reconnects += 1,
                 UpdateKind::DecodeUs(us) => {
                     self.metrics.snapshot_decode_us += us;
@@ -695,6 +851,7 @@ impl Observer {
                 }
                 UpdateKind::Snapshot(page) => {
                     self.model.page(page, false);
+                    self.auto_expand_first_root(cx);
                     if let Some(start) = self.switched.take() {
                         self.metrics.switch_samples += 1;
                         self.metrics.switch_ui_applied_us = start.elapsed().as_micros() as u64;
@@ -870,7 +1027,7 @@ impl Observer {
     }
 
     fn roots(&self) -> &[String] {
-        &[]
+        &self.model.roots
     }
 
     /// Durable rows plus the transient live message and live tool lifecycle state.
@@ -2320,122 +2477,6 @@ impl Observer {
             Row::Divider => self.divider_row(cx),
         }
     }
-
-    fn status_color_for(&self, status: &str) -> Rgba {
-        match status.to_lowercase().as_str() {
-            "executing" | "running" | "pending" | "waiting" => accent(),
-            "completed" => success(),
-            "failed" | "error" => danger(),
-            _ => rgb(0x848586),
-        }
-    }
-
-    /// Compact 50px rail item: an initial badge with the status dot.
-    fn rail_item(&self, index: usize, session: &Session, cx: &mut Context<Self>) -> AnyElement {
-        let active = self.selected.as_deref() == Some(session.id.as_str());
-        let id = session.id.clone();
-        let muted = cx.theme().muted_foreground;
-        let status: Hsla = self.status_color_for(&session.status).into();
-        let initial = session
-            .title
-            .chars()
-            .find(|ch| !ch.is_whitespace())
-            .map(|ch| ch.to_uppercase().to_string())
-            .unwrap_or_else(|| "#".into());
-        div()
-            .id(("rail", index))
-            .relative()
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(34.))
-            .mb(px(2.))
-            .rounded(px(8.))
-            .cursor_pointer()
-            .when(active, |view| {
-                view.bg(accent().opacity(0.16)).text_color(accent())
-            })
-            .when(!active, |view| {
-                view.text_color(muted)
-                    .hover(|style| style.bg(cx.theme().muted))
-            })
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(initial),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .bottom(px(3.))
-                    .right(px(3.))
-                    .w(px(6.))
-                    .h(px(6.))
-                    .rounded_full()
-                    .bg(status),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
-            .into_any_element()
-    }
-
-    fn session_row(&self, index: usize, session: &Session, cx: &mut Context<Self>) -> AnyElement {
-        let active = self.selected.as_deref() == Some(session.id.as_str());
-        let id = session.id.clone();
-        let status_color = self.status_color_for(&session.status);
-        let title = if session.title.trim().is_empty() {
-            t!("untitled").to_string()
-        } else {
-            session.title.clone()
-        };
-        h_flex()
-            .id(("session", index))
-            .w_full()
-            .min_w_0()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_2()
-            .rounded(px(6.))
-            .cursor_pointer()
-            .when(active, |view| view.bg(accent().opacity(0.14)))
-            .when(!active, |view| {
-                view.hover(|style| style.bg(cx.theme().muted))
-            })
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(6.))
-                    .h(px(6.))
-                    .rounded_full()
-                    .bg(status_color),
-            )
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_size(px(13.))
-                            .when(active, |view| {
-                                view.text_color(accent()).font_weight(FontWeight::SEMIBOLD)
-                            })
-                            .when(!active, |view| view.text_color(cx.theme().foreground))
-                            .child(title),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(session.status.clone()),
-                    ),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
-            .into_any_element()
-    }
 }
 
 impl Render for Observer {
@@ -2627,9 +2668,14 @@ impl Render for Observer {
             );
         }
 
-        // The frame owns the rounded surface, the hairline outline and the
-        // resize bands, and leaves the toplevel shadow to the compositor.
+        // The kit's root plugin owns the hairline outline, the gutter shadow and
+        // the compositor corner radii; this frame owns the rounded surface and
+        // the resize bands inside that outline.
         let radii = ui::frame::inner_corner_radii(window, cx);
+        // Vue's titlebar is a lighter strip with `box-shadow: 0 0 2px`; GPUI
+        // paints later siblings over earlier ones, so the shadow is a gradient
+        // strip drawn after the body instead of a shadow on the bar itself.
+        let shadow = ui::surfaces(self.appearance_dark).titlebar_border;
         ui::frame::window_frame(
             v_flex()
                 .size_full()
@@ -2657,6 +2703,20 @@ impl Render for Observer {
                                 .child(content)
                                 .child(ui::composer::composer(self, cx)),
                         ),
+                )
+                .child(
+                    div()
+                        .id("titlebar-shadow")
+                        .absolute()
+                        .top(px(ui::TITLEBAR_HEIGHT - 1.))
+                        .left(px(1.))
+                        .right(px(1.))
+                        .h(px(3.))
+                        .bg(linear_gradient(
+                            180.,
+                            linear_color_stop(shadow.opacity(0.55), 0.),
+                            linear_color_stop(shadow.opacity(0.), 1.),
+                        )),
                 ),
             window,
             cx,

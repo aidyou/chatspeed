@@ -1,14 +1,20 @@
 //! Client-side window frame for the workflow window.
 //!
-//! Adapted from `gpui_component::window_border`. The rounded surface, the
-//! hairline outline and the resize hit bands stay; the inner box shadows go.
+//! The kit's root plugin already wraps every window in its own border: a 20px
+//! transparent gutter, the 1px outline and the outer shadow. This frame lives
+//! inside that outline, so it draws the surface only. A second 1px border here
+//! would sit one pixel inside the kit's, and at the corners the two offset arcs
+//! plus the transparent sliver between them read as a jagged gray double
+//! corner. Rounding the surface with the outline's inner arc instead keeps
+//! every corner a single antialiased edge that meets the border exactly.
+//!
+//! Adapted from `gpui_component::window_border`. The rounded surface and the
+//! resize hit bands stay; the kit owns the outline, the shadow and the corner
+//! radii handed to the compositor, and the inner box shadows are gone anyway —
 //! GPUI evaluates a shadow blur with four samples per fragment, so a 10px blur
-//! reads as banded rings — and the four corner cut-outs are the only place where
-//! such a shadow is visible, because the opaque surface covers it everywhere
-//! else. That is what made the rounded corners look soft and stepped.
+//! reads as banded rings.
 
 use gpui_kit::component::{window_corner_radii, ActiveTheme};
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 const BORDER_SIZE: Pixels = px(1.);
@@ -39,11 +45,8 @@ pub fn window_frame(
             .into_any_element();
     };
 
-    let radii = window_corner_radii(window, cx);
-    // Lets the compositor treat the rounded corners as transparent.
-    window.set_client_corner_radii(radii);
+    let radii = inner_corner_radii(window, cx);
     let size = window.window_bounds().get_bounds().size;
-    let border = cx.theme().window_border;
 
     let mut frame = div()
         .id("window-backdrop")
@@ -53,7 +56,6 @@ pub fn window_frame(
         .rounded_tr(radii.top_right)
         .rounded_bl(radii.bottom_left)
         .rounded_br(radii.bottom_right)
-        .border_color(border)
         .bg(cx.theme().background)
         // A press within the frame's edge band starts a native resize. Controls
         // that take the press stop propagation, so their click never resizes.
@@ -75,10 +77,6 @@ pub fn window_frame(
             cx.stop_propagation();
             window.start_window_resize(edge);
         })
-        .when(!tiling.top, |frame| frame.border_t(BORDER_SIZE))
-        .when(!tiling.bottom, |frame| frame.border_b(BORDER_SIZE))
-        .when(!tiling.left, |frame| frame.border_l(BORDER_SIZE))
-        .when(!tiling.right, |frame| frame.border_r(BORDER_SIZE))
         .child(content);
 
     if window.is_resizable() {
@@ -94,9 +92,12 @@ pub fn window_frame(
 
 /// Corner radii for surfaces inside the frame.
 ///
-/// The frame's border insets its content by one pixel, so a child that rounded
-/// with the window radius would place its own arc outside the frame's arc and
-/// paint into the transparent corner.
+/// The kit's outline is one pixel outside this frame's bounds, and its inner
+/// arc is the window radius minus that border. A child that rounded with the
+/// full window radius would place its own arc outside the outline's inner arc
+/// and paint into the border; a child that rounded smaller would leave a
+/// transparent sliver between itself and the border. This radius is
+/// concentric with the outline, so the surface meets the border exactly.
 pub fn inner_corner_radii(window: &Window, cx: &App) -> Corners<Pixels> {
     inset_radii(window_corner_radii(window, cx))
 }

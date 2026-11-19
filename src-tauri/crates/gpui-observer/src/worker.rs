@@ -1,6 +1,6 @@
 //! Isolated Tokio thread. Only list, snapshot, history-query and authenticated SSE are used.
-use crate::{model::Model, types::*};
-use chatspeed_runtime_client::{load_discovery, RuntimeClient};
+use crate::{model::Model, native, types::*};
+use chatspeed_runtime_client::RuntimeClient;
 use serde_json::json;
 use std::{
     thread::JoinHandle,
@@ -76,11 +76,6 @@ async fn send(tx: &mpsc::Sender<Update>, generation: u64, kind: UpdateKind) -> b
     true
 }
 
-async fn connect(options: &Options) -> Option<RuntimeClient> {
-    let discovery = load_discovery(options.discovery.as_deref()).ok()?;
-    RuntimeClient::connect(&discovery).await.ok()
-}
-
 async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc::Sender<Update>) {
     let list_options = options.clone();
     let list_tx = tx.clone();
@@ -96,6 +91,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                                 id: format!("demo-{n}"),
                                 title: format!("{} {n}", rust_i18n::t!("demo")),
                                 status: "executing".into(),
+                                ..Session::default()
                             })
                             .collect(),
                     ),
@@ -104,34 +100,32 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 {
                     return;
                 }
-            } else if let Some(client) = connect(&list_options).await {
+            } else {
                 // Locale and appearance follow the runtime configuration, so a
                 // setting change shows up on the next poll without a restart.
-                if let Ok(config) = client
-                    .post(
-                        &format!(
-                            "{}/get_all_config",
-                            chatspeed_runtime_client::DATA_COMMANDS_PATH
-                        ),
-                        &json!({}),
-                    )
-                    .await
-                {
+                if let Ok(config) = native::config(&list_options).await {
                     if !send(&list_tx, 0, UpdateKind::Config(config)).await {
                         return;
                     }
                 }
-                if let Ok(value) = client.get("/control/v1/workflows").await {
-                    if let Ok(sessions) = serde_json::from_value(value) {
-                        if !send(&list_tx, 0, UpdateKind::Sessions(sessions)).await
-                            || !send(&list_tx, 0, UpdateKind::Connected(true)).await
-                        {
+                match native::connect(&list_options).await {
+                    Some(client) => {
+                        if let Ok(value) = client.get("/control/v1/workflows").await {
+                            if let Ok(sessions) = serde_json::from_value(value) {
+                                if !send(&list_tx, 0, UpdateKind::Sessions(sessions)).await
+                                    || !send(&list_tx, 0, UpdateKind::Connected(true)).await
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        if !send(&list_tx, 0, UpdateKind::Connected(false)).await {
                             return;
                         }
                     }
                 }
-            } else if !send(&list_tx, 0, UpdateKind::Connected(false)).await {
-                return;
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
@@ -162,14 +156,10 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 if options.demo {
                     continue;
                 }
-                if let Some(client) = connect(&options).await {
-                    if let Err(error) = client
-                        .post(&format!("/control/v1/workflows/{id}/signal"), &signal)
-                        .await
-                    {
-                        if !send(&tx, 0, UpdateKind::Error(error.to_string())).await {
-                            return;
-                        }
+                let path = format!("/control/v1/workflows/{id}/signal");
+                if let Err(error) = native::control_post(&options, &path, signal).await {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
                     }
                 }
             }
@@ -177,14 +167,10 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 if options.demo {
                     continue;
                 }
-                if let Some(client) = connect(&options).await {
-                    if let Err(error) = client
-                        .post(&format!("/control/v1/workflows/{id}/stop"), &json!({}))
-                        .await
-                    {
-                        if !send(&tx, 0, UpdateKind::Error(error.to_string())).await {
-                            return;
-                        }
+                let path = format!("/control/v1/workflows/{id}/stop");
+                if let Err(error) = native::control_post(&options, &path, json!({})).await {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
                     }
                 }
             }
@@ -215,18 +201,40 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 }
             }
             Command::Child { id, session } => {
-                if let Some(client) = connect(&options).await {
-                    if let Ok(value) = client
-                        .get(&format!("/control/v1/workflows/{session}"))
-                        .await
-                    {
-                        if let Ok(page) = serde_json::from_value(value) {
-                            if !send(&tx, 0, UpdateKind::Child(id, page)).await {
-                                return;
-                            }
+                let path = format!("/control/v1/workflows/{session}");
+                if let Ok(value) = native::control_get(&options, &path).await {
+                    if let Ok(page) = serde_json::from_value(value) {
+                        if !send(&tx, 0, UpdateKind::Child(id, page)).await {
+                            return;
                         }
                     }
                 }
+            }
+            Command::ListDir { path } => {
+                let tx = tx.clone();
+                tokio::task::spawn(async move {
+                    let listing = tokio::task::spawn_blocking({
+                        let path = path.clone();
+                        move || crate::native::list_dir(&path)
+                    })
+                    .await;
+                    let (entries, error) = match listing {
+                        Ok(Ok(entries)) => (entries, None),
+                        Ok(Err(error)) => (Vec::new(), Some(error)),
+                        Err(error) => (Vec::new(), Some(error.to_string())),
+                    };
+                    // Directory listings are not tied to a selected session.
+                    let _ = send(
+                        &tx,
+                        0,
+                        UpdateKind::Dir {
+                            path,
+                            entries,
+                            error,
+                        },
+                    )
+                    .await;
+                });
             }
             Command::Older {
                 generation,
@@ -246,7 +254,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     continue;
                 }
                 // This query cannot mutate runtime state. The compatibility route retains camelCase rows.
-                if let Some(client) = connect(&options).await {
+                if let Some(client) = native::connect(&options).await {
                     if let Ok(value) = client
                         .post(
                             "/control/v1/workflow-commands/get_earlier_workflow_message_page",
@@ -274,7 +282,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
 /// Matches the Vue new-workflow flow: create carries the query the list shows,
 /// start carries the first prompt the engine runs.
 async fn start_session(options: &Options, prompt: &str) -> Result<String, String> {
-    let client = connect(options)
+    let client = native::connect(options)
         .await
         .ok_or_else(|| "runtime unavailable".to_string())?;
     let agents = client
@@ -394,7 +402,7 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
         if !send(&tx, generation, UpdateKind::Reconnect).await {
             return;
         }
-        if let Some(client) = connect(&options).await {
+        if let Some(client) = native::connect(&options).await {
             // Resume ordinary transport drops without mixing snapshots and old replay.
             if needs_snapshot && !snapshot(&client, &id, &tx, generation).await {
                 let _ = send(&tx, generation, UpdateKind::Connected(false)).await;

@@ -19,10 +19,18 @@ ask_user_required:
   en: Pick an option for every question first
   zh-Hans: 请先为每个问题选择一个选项
   zh-Hant: 請先為每個問題選擇一個選項
+automation_empty:
+  en: No automations yet
+  zh-Hans: 暂无自动化
+  zh-Hant: 暫無自動化
 awaiting_approval:
   en: Awaiting approval
   zh-Hans: 等待用户审批
   zh-Hant: 等待用戶審批
+chat_hub:
+  en: ChatHub
+  zh-Hans: ChatHub
+  zh-Hant: ChatHub
 clear_context_divider:
   en: Start new session
   zh-Hans: 开始新会话
@@ -31,10 +39,14 @@ click_to_expand:
   en: (click to expand)
   zh-Hans: （点击展开）
   zh-Hant: （點擊展開）
-copied:
-  en: Copied
-  zh-Hans: 已复制
-  zh-Hant: 已複製
+close_window:
+  en: Close window
+  zh-Hans: 关闭窗口
+  zh-Hant: 關閉窗口
+collapse_sidebar:
+  en: Collapse sidebar
+  zh-Hans: 折叠侧栏
+  zh-Hant: 摺疊側欄
 completed:
   en: Completed
   zh-Hans: 已完成
@@ -51,6 +63,10 @@ connecting:
   en: Disconnected — retrying discovery
   zh-Hans: 未连接 — 正在重试发现
   zh-Hant: 未連接 — 正在重試發現
+copied:
+  en: Copied
+  zh-Hans: 已复制
+  zh-Hant: 已複製
 cost_cache:
   en: Cache
   zh-Hans: 缓存
@@ -83,18 +99,6 @@ cost_tokens:
   en: tokens
   zh-Hans: Tokens
   zh-Hant: Tokens
-unit_hour:
-  en: h
-  zh-Hans: 小时
-  zh-Hant: 小時
-unit_minute:
-  en: m
-  zh-Hans: 分
-  zh-Hant: 分
-unit_second:
-  en: s
-  zh-Hans: 秒
-  zh-Hant: 秒
 cost_unpriced:
   en: Unpriced
   zh-Hans: 未定价
@@ -107,10 +111,18 @@ cost_with_sub_agents:
   en: With sub-agents
   zh-Hans: 含子代理
   zh-Hant: 含子代理
+create_automation:
+  en: Create automation
+  zh-Hans: 创建自动化
+  zh-Hant: 建立自動化
 critical_error:
   en: Critical Error
   zh-Hans: 严重错误
   zh-Hant: 嚴重錯誤
+delete_last_message:
+  en: Delete the last message
+  zh-Hans: 回退最后一条消息
+  zh-Hant: 回退最後一則訊息
 demo:
   en: Deterministic local replay
   zh-Hans: 确定性本地回放
@@ -171,6 +183,10 @@ executing:
   en: Executing...
   zh-Hans: 执行中...
   zh-Hant: 執行中...
+expand_sidebar:
+  en: Expand sidebar
+  zh-Hans: 展开侧栏
+  zh-Hant: 展開側欄
 failed:
   en: Failed
   zh-Hans: 失败
@@ -231,10 +247,34 @@ metrics_error:
   en: Metrics output unavailable
   zh-Hans: 无法写入性能指标
   zh-Hant: 無法寫入性能指標
+new_task:
+  en: New task
+  zh-Hans: 新建任务
+  zh-Hant: 新建任務
 no_sessions:
   en: No workflow sessions yet
   zh-Hans: 暂无工作流会话
   zh-Hant: 暫無工作流會話
+not_supported_native:
+  en: Not available in the native window yet
+  zh-Hans: 原生窗口暂未支持
+  zh-Hant: 原生視窗暫未支援
+open_file:
+  en: Open file
+  zh-Hans: 打开文件
+  zh-Hant: 開啟檔案
+paths_empty:
+  en: No authorized paths
+  zh-Hans: 暂无授权目录
+  zh-Hant: 暫無授權目錄
+pin:
+  en: Pin
+  zh-Hans: 置顶
+  zh-Hant: 置頂
+plugin_panel:
+  en: Plugins
+  zh-Hans: 插件
+  zh-Hant: 外掛
 reject:
   en: Reject
   zh-Hans: 拒绝
@@ -367,6 +407,74 @@ snapshot_user_directives:
   en: User directives
   zh-Hans: 用户指示
   zh-Hant: 用戶指示
+sound_approval:
+  en: Approval sound
+  zh-Hans: 审批提示音
+  zh-Hant: 審批提示音
+sound_completion:
+  en: Completion sound
+  zh-Hans: 完成提示音
+  zh-Hant: 完成提示音
+status_auditing:
+  en: Auditing
+  zh-Hans: 审查中
+  zh-Hant: 審查中
+status_awaiting_approval:
+  en: Awaiting approval
+  zh-Hans: 等待审批
+  zh-Hant: 等待審批
+status_awaiting_sub_agent:
+  en: Awaiting sub-agent
+  zh-Hans: 等待子代理
+  zh-Hant: 等待子代理
+status_awaiting_user:
+  en: Awaiting answer
+  zh-Hans: 等待回答
+  zh-Hant: 等待回答
+status_cancelled:
+  en: Cancelled
+  zh-Hans: 已取消
+  zh-Hant: 已取消
+status_completed:
+  en: Completed
+  zh-Hans: 已完成
+  zh-Hant: 已完成
+status_error:
+  en: Error
+  zh-Hans: 出错
+  zh-Hant: 出錯
+status_executing:
+  en: Executing
+  zh-Hans: 执行中
+  zh-Hant: 執行中
+status_failed:
+  en: Failed
+  zh-Hans: 失败
+  zh-Hant: 失敗
+status_interrupted:
+  en: Interrupted
+  zh-Hans: 已中断
+  zh-Hant: 已中斷
+status_paused:
+  en: Paused
+  zh-Hans: 已暂停
+  zh-Hant: 已暫停
+status_pending:
+  en: Pending
+  zh-Hans: 等待中
+  zh-Hant: 等待中
+status_running:
+  en: Running
+  zh-Hans: 运行中
+  zh-Hant: 運行中
+status_stopping:
+  en: Stopping
+  zh-Hans: 停止中
+  zh-Hant: 停止中
+status_thinking:
+  en: Thinking
+  zh-Hans: 思考中
+  zh-Hant: 思考中
 sub_agent_agent:
   en: Agent
   zh-Hans: 代理
@@ -435,6 +543,26 @@ submit_answer:
   en: Submit
   zh-Hans: 提交
   zh-Hant: 提交
+tab_automation:
+  en: Automation
+  zh-Hans: 自动化
+  zh-Hant: 自動化
+tab_paths:
+  en: Authorized paths
+  zh-Hans: 授权目录
+  zh-Hant: 授權目錄
+tab_tasks:
+  en: Tasks
+  zh-Hans: 任务
+  zh-Hant: 任務
+terminal:
+  en: Terminal
+  zh-Hans: 终端
+  zh-Hant: 終端
+thinking:
+  en: Thinking...
+  zh-Hans: 思考中...
+  zh-Hant: 思考中...
 thought:
   en: Thought
   zh-Hans: 思考
@@ -443,10 +571,6 @@ thought_completed:
   en: Thought completed
   zh-Hans: 已思考
   zh-Hant: 已思考
-thinking:
-  en: Thinking...
-  zh-Hans: 思考中...
-  zh-Hant: 思考中...
 title:
   en: ChatSpeed GPUI observer
   zh-Hans: ChatSpeed GPUI 观察器
@@ -491,6 +615,26 @@ todo_view:
   en: View todo
   zh-Hans: 查看待办
   zh-Hant: 查看待辦
+tree_loading:
+  en: Loading
+  zh-Hans: 加载中
+  zh-Hant: 載入中
+unit_hour:
+  en: h
+  zh-Hans: 小时
+  zh-Hant: 小時
+unit_minute:
+  en: m
+  zh-Hans: 分
+  zh-Hant: 分
+unit_second:
+  en: s
+  zh-Hans: 秒
+  zh-Hant: 秒
+unpin:
+  en: Unpin
+  zh-Hans: 取消置顶
+  zh-Hant: 取消置頂
 untitled:
   en: Untitled workflow
   zh-Hans: 未命名工作流
