@@ -9,7 +9,8 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::{danger, font_icon, Observer};
+use crate::ui::Icon;
+use crate::{danger, Observer};
 
 /// Renders the notice line and the prompt box under the transcript.
 pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
@@ -44,7 +45,7 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 .bg(danger().opacity(0.12))
                 .text_size(px(11.))
                 .text_color(danger())
-                .child(font_icon("approval", 12., danger()))
+                .child(Icon::new("approval").size(12.).color(danger()))
                 .child(div().flex_1().min_w_0().child(notice.clone())),
         );
     }
@@ -92,7 +93,7 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                                     .rounded(px(6.))
                                     .cursor_pointer()
                                     .hover(|style| style.bg(hover))
-                                    .child(font_icon("stop", 14., danger()))
+                                    .child(Icon::new("stop").size(14.).color(danger()))
                                     .on_click(cx.listener(|this, _, _, cx| this.stop_workflow(cx))),
                             )
                         })
@@ -107,11 +108,11 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                                 .when(can_send, |view| {
                                     view.cursor_pointer().hover(|style| style.bg(hover))
                                 })
-                                .child(font_icon(
-                                    "send",
-                                    16.,
-                                    if can_send { accent } else { muted },
-                                ))
+                                .child(Icon::new("send").size(16.).color(if can_send {
+                                    accent
+                                } else {
+                                    muted
+                                }))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.send_message(window, cx);
                                 })),

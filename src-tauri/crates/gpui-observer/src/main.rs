@@ -5,6 +5,7 @@
 //! `src/styles/workflow/messages.scss`: a CLI-style tool transcript, grouped
 //! tool activity, collapsible snapshots and delegated-task cards.
 
+use crate::ui::Icon;
 use chatspeed_gpui_observer::{
     icons,
     metrics::Metrics,
@@ -126,29 +127,6 @@ fn violet() -> Rgba {
     rgb(VIOLET)
 }
 
-/// Iconfont glyph inside a square box so glyph metrics never shift baselines.
-///
-/// A text child fills the box, so the glyph has to be centered explicitly:
-/// otherwise a narrow glyph such as `pin` (567/1024 em) sits at the box's left
-/// edge and reads as if the button were misaligned.
-fn font_icon(name: &str, size: f32, color: impl Into<Hsla>) -> impl IntoElement {
-    div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .w(px(size))
-        .h(px(size))
-        .font_family(icons::FAMILY)
-        .text_size(px(size))
-        // The square line box keeps the glyph's own ascent/descent from pushing
-        // the icon below the text it sits next to.
-        .line_height(px(size))
-        .text_align(TextAlign::Center)
-        .text_color(color)
-        .child(icons::glyph(name))
-}
-
 fn pill(label: String, color: Rgba, background: Option<Rgba>) -> impl IntoElement {
     div()
         .flex_none()
@@ -244,7 +222,7 @@ fn choice_option(label: String, selected: bool, cx: &mut App) -> AnyElement {
         .items_center()
         .gap_2()
         .py(px(1.))
-        .child(font_icon(icon, 14., color))
+        .child(Icon::new(icon).size(14.).color(color))
         .child(
             div()
                 .min_w_0()
@@ -283,7 +261,7 @@ fn choice_option_live(
         .rounded(px(4.))
         .cursor_pointer()
         .hover(|style| style.bg(cx.theme().muted))
-        .child(font_icon(icon, 14., color))
+        .child(Icon::new(icon).size(14.).color(color))
         .child(
             div()
                 .min_w_0()
@@ -1191,7 +1169,7 @@ impl Observer {
                                     .p(px(2.))
                                     .cursor_pointer()
                                     .hover(|style| style.bg(cx.theme().muted))
-                                    .child(font_icon("copy", 12., muted))
+                                    .child(Icon::new("copy").size(12.).color(muted))
                                     .on_click(move |_, window, cx| {
                                         cx.write_to_clipboard(ClipboardItem::new_string(
                                             code.clone(),
@@ -1240,15 +1218,15 @@ impl Observer {
             .rounded(px(4.))
             .bg(cx.theme().muted)
             .cursor_pointer()
-            .child(font_icon(
-                if expanded {
+            .child(
+                Icon::new(if expanded {
                     "double-arrow-up"
                 } else {
                     "double-arrow-down"
-                },
-                12.,
-                cx.theme().muted_foreground,
-            ))
+                })
+                .size(12.)
+                .color(cx.theme().muted_foreground),
+            )
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)));
         h_flex()
             .w_full()
@@ -1304,7 +1282,7 @@ impl Observer {
                     .h(px(24.))
                     .cursor_pointer()
                     .hover(|style| style.bg(cx.theme().muted))
-                    .child(font_icon("reasoning", 14., muted))
+                    .child(Icon::new("reasoning").size(14.).color(muted))
                     .child(
                         div()
                             .min_w_0()
@@ -1317,11 +1295,11 @@ impl Observer {
                             .italic()
                             .child(title),
                     )
-                    .child(font_icon(
-                        if open { "caret-down" } else { "caret-right" },
-                        12.,
-                        muted,
-                    ))
+                    .child(
+                        Icon::new(if open { "caret-down" } else { "caret-right" })
+                            .size(12.)
+                            .color(muted),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
             )
             .when(open, |view| {
@@ -1402,7 +1380,11 @@ impl Observer {
             .py_1()
             .pl_2()
             .cursor_pointer()
-            .child(font_icon(tool.icon, 15., self.tool_icon_color(tool)));
+            .child(
+                Icon::new(tool.icon)
+                    .size(15.)
+                    .color(self.tool_icon_color(tool)),
+            );
         // The label is the only flexible child, so the right-hand badges keep
         // their room and a long command truncates instead of pushing them out.
         let mut label = h_flex().flex_1().min_w_0().overflow_hidden().gap_2();
@@ -1447,7 +1429,7 @@ impl Observer {
             );
         }
         if tool.approved {
-            title = title.child(font_icon("check", 12., success()));
+            title = title.child(Icon::new("check").size(12.).color(success()));
         }
         if expandable {
             title = title
@@ -1540,7 +1522,7 @@ impl Observer {
                             .cursor_pointer()
                             .text_size(px(11.))
                             .text_color(gpui_kit::white())
-                            .child(font_icon("send", 12., gpui_kit::white()))
+                            .child(Icon::new("send").size(12.).color(gpui_kit::white()))
                             .child(t!("submit_answer").to_string())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.submit_ask_user(submit.clone(), cx)
@@ -1646,7 +1628,7 @@ impl Observer {
             .rounded(px(6.))
             .cursor_pointer()
             .hover(|style| style.bg(cx.theme().muted))
-            .child(font_icon(group.icon, 15., muted));
+            .child(Icon::new(group.icon).size(15.).color(muted));
         if group.thought_count > 0 {
             header = header.child(pill(
                 format!("{} x{}", t!("thought"), group.thought_count),
@@ -1686,11 +1668,11 @@ impl Observer {
                     })
                     .child(group.summary.clone()),
             )
-            .child(font_icon(
-                if open { "caret-down" } else { "caret-right" },
-                14.,
-                muted,
-            ))
+            .child(
+                Icon::new(if open { "caret-down" } else { "caret-right" })
+                    .size(14.)
+                    .color(muted),
+            )
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)));
         let mut body = v_flex().w_full().min_w_0().child(header);
         if open {
@@ -1748,7 +1730,7 @@ impl Observer {
             .pl_2()
             .cursor_pointer()
             .hover(|style| style.bg(cx.theme().muted))
-            .child(font_icon("skill-relation-chart", 15., muted))
+            .child(Icon::new("skill-relation-chart").size(15.).color(muted))
             .child(pill(
                 card.status_label.clone(),
                 status_color,
@@ -1763,11 +1745,11 @@ impl Observer {
                     .text_color(cx.theme().foreground)
                     .child(card.agent.clone()),
             )
-            .child(font_icon(
-                if open { "caret-down" } else { "caret-right" },
-                14.,
-                muted,
-            ))
+            .child(
+                Icon::new(if open { "caret-down" } else { "caret-right" })
+                    .size(14.)
+                    .color(muted),
+            )
             .on_click(
                 cx.listener(move |this, _, _, cx| this.toggle_sub_agent(click_card.clone(), cx)),
             );
@@ -1816,7 +1798,7 @@ impl Observer {
                             .w_full()
                             .items_center()
                             .gap_2()
-                            .child(font_icon("task", 15., warning()))
+                            .child(Icon::new("task").size(15.).color(warning()))
                             .child(
                                 div()
                                     .text_size(px(13.))
@@ -1886,7 +1868,7 @@ impl Observer {
                         .py_1()
                         .text_size(px(11.))
                         .text_color(muted)
-                        .child(font_icon("loading", 12., muted))
+                        .child(Icon::new("loading").size(12.).color(muted))
                         .child(t!("sub_agent_loading").to_string()),
                 );
             }
@@ -1985,15 +1967,15 @@ impl Observer {
                             .text_color(muted)
                             .child(t!("cost_label").to_string().to_uppercase()),
                     )
-                    .child(font_icon(
-                        if open {
+                    .child(
+                        Icon::new(if open {
                             "double-arrow-up"
                         } else {
                             "double-arrow-down"
-                        },
-                        12.,
-                        muted,
-                    ))
+                        })
+                        .size(12.)
+                        .color(muted),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
             )
             .when(open, |view| view.child(self.cost_card(cost, cx)))
@@ -2252,15 +2234,15 @@ impl Observer {
                     .when(open || preview.is_empty(), |view| {
                         view.child(div().flex_1())
                     })
-                    .child(font_icon(
-                        if open {
+                    .child(
+                        Icon::new(if open {
                             "double-arrow-up"
                         } else {
                             "double-arrow-down"
-                        },
-                        12.,
-                        muted,
-                    ))
+                        })
+                        .size(12.)
+                        .color(muted),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
             )
             .when(open, |view| {
@@ -2302,7 +2284,7 @@ impl Observer {
                     .py_2()
                     .cursor_pointer()
                     .hover(|style| style.bg(cx.theme().background))
-                    .child(font_icon("compress", 14., accent()))
+                    .child(Icon::new("compress").size(14.).color(accent()))
                     .child(
                         div()
                             .flex_none()
@@ -2327,15 +2309,15 @@ impl Observer {
                     .when(snapshot.preview.is_empty(), |view| {
                         view.child(div().flex_1())
                     })
-                    .child(font_icon(
-                        if open {
+                    .child(
+                        Icon::new(if open {
                             "double-arrow-up"
                         } else {
                             "double-arrow-down"
-                        },
-                        14.,
-                        muted,
-                    ))
+                        })
+                        .size(14.)
+                        .color(muted),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
             );
         if open {
@@ -2367,7 +2349,7 @@ impl Observer {
             .items_center()
             .gap_2()
             .pl_2()
-            .child(font_icon(icon, 15., color))
+            .child(Icon::new(icon).size(15.).color(color))
             .child(
                 div()
                     .text_size(px(13.))
@@ -2378,15 +2360,15 @@ impl Observer {
         if view.cost.is_some() {
             let target = view.cost_key.clone();
             label = label
-                .child(font_icon(
-                    if open {
+                .child(
+                    Icon::new(if open {
                         "double-arrow-up"
                     } else {
                         "double-arrow-down"
-                    },
-                    12.,
-                    cx.theme().muted_foreground,
-                ))
+                    })
+                    .size(12.)
+                    .color(cx.theme().muted_foreground),
+                )
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)));
         }
@@ -2422,7 +2404,7 @@ impl Observer {
                     .min_w_0()
                     .items_center()
                     .gap_2()
-                    .child(font_icon(icon, 18., color))
+                    .child(Icon::new(icon).size(18.).color(color))
                     .child(
                         div()
                             .flex_1()
@@ -2596,7 +2578,7 @@ impl Render for Observer {
                     .bg(background)
                     .cursor_pointer()
                     .hover(|style| style.bg(surface).border_color(accent().opacity(0.45)))
-                    .child(font_icon("double-arrow-up", 12., muted))
+                    .child(Icon::new("double-arrow-up").size(12.).color(muted))
                     .child(
                         div()
                             .text_size(px(10.))
@@ -2657,7 +2639,7 @@ impl Render for Observer {
                         .border_1()
                         .border_color(border)
                         .bg(surface)
-                        .child(font_icon("loading", 14., accent()))
+                        .child(Icon::new("loading").size(14.).color(accent()))
                         .child(
                             div()
                                 .text_size(px(12.))

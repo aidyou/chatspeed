@@ -12,8 +12,9 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 
+use crate::ui::Icon;
 use crate::ui::{surfaces, Surfaces, RAIL_WIDTH, SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH};
-use crate::{accent, danger, font_icon, info, success, violet, warning, Observer};
+use crate::{accent, danger, info, success, violet, warning, Observer};
 use chatspeed_gpui_observer::types::{root_name, Session};
 
 /// Which list the rail selects; Vue also hides the other tab while it is active.
@@ -231,11 +232,11 @@ fn rail_tab_button(
         .cursor_pointer()
         .when(active, |view| view.bg(active_bg))
         .when(!active, |view| view.hover(move |style| style.bg(hover)))
-        .child(font_icon(
-            icon,
-            18.,
-            if active { primary } else { secondary },
-        ))
+        .child(
+            Icon::new(icon)
+                .size(18.)
+                .color(if active { primary } else { secondary }),
+        )
         // Vue draws the selection bar on the rail's leading edge.
         .when(active && bar, |view| {
             view.child(
@@ -271,7 +272,7 @@ fn rail_action(
         .rounded(px(8.))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(font_icon(icon, 18., cx.theme().muted_foreground))
+        .child(Icon::new(icon).size(18.).color(cx.theme().muted_foreground))
         .on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
         .into_any_element()
 }
@@ -612,7 +613,7 @@ fn compact_entry(
         .border_color(cx.theme().border)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(font_icon(icon, 18., cx.theme().muted_foreground))
+        .child(Icon::new(icon).size(18.).color(cx.theme().muted_foreground))
         .on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
         .into_any_element()
 }

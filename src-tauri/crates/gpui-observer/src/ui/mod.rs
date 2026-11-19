@@ -6,6 +6,10 @@
 
 use gpui_kit::*;
 
+mod icon;
+
+pub use icon::Icon;
+
 /// Height of the custom titlebar, matching `--cs-titlebar-height`.
 pub const TITLEBAR_HEIGHT: f32 = 40.;
 
@@ -76,7 +80,7 @@ pub fn icon_button(
         .rounded(px(8.))
         .cursor_pointer()
         .hover(|style| style.bg(hover))
-        .child(crate::font_icon(icon, 18., color))
+        .child(Icon::new(icon).size(18.).color(color))
         // A control that takes the press must not also start the window move.
         .on_mouse_down(MouseButton::Left, |_, window, cx| {
             window.prevent_default();

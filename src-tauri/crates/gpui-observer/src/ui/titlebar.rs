@@ -13,20 +13,25 @@
 
 use gpui_kit::base::InteractiveElementExt;
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon as KitIcon, IconName, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 
-use crate::ui::{icon_button, surfaces, trigger, TITLEBAR_HEIGHT};
-use crate::{font_icon, Observer};
+use crate::ui::{icon_button, surfaces, trigger, Icon, TITLEBAR_HEIGHT};
+use crate::Observer;
 
 /// Width of a window control button, matching the platform convention.
 const CONTROL_WIDTH: f32 = 34.;
 
-/// Vue pads the bar with `--cs-space`; macOS hands the leading edge to the
-/// native traffic lights, so the first icon clears them.
-const LEADING_INSET: f32 = 16.;
+/// Distance from the window edge to the first and last titlebar control.
+///
+/// Both groups keep that same inset, so the bar looks the same whether the
+/// window controls sit on the right or the platform keeps them on the left
+/// (macOS traffic lights).
+const SIDE_INSET: f32 = 20.;
+/// macOS hands the leading edge to the native traffic lights, so the first icon
+/// clears them instead of sitting at [`SIDE_INSET`].
 const MACOS_TRAFFIC_LIGHTS_INSET: f32 = 78.;
 
 /// Renders the 40px titlebar above the sidebar and transcript.
@@ -73,7 +78,7 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
                     .rounded(px(6.))
                     .cursor_pointer()
                     .hover(move |style| style.bg(skin.hover))
-                    .child(font_icon("ext-folder", 12., secondary))
+                    .child(Icon::new("ext-folder").size(12.).color(secondary))
                     .child(
                         div()
                             .max_w(px(320.))
@@ -90,8 +95,9 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
     );
 
     // The four workflow actions keep Vue's order: automation, new task, undo,
-    // pin. The window controls follow them, flush with the right edge.
-    let right = h_flex()
+    // pin. The window controls follow them behind a wider gap, and the group
+    // ends at the same edge inset as the left one.
+    let mut right = h_flex()
         .flex_none()
         .items_center()
         .gap(px(8.))
@@ -122,9 +128,10 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
             if observer.pinned { accent } else { secondary },
             skin.hover,
             cx.listener(|this, _, _, cx| this.toggle_pin(cx)),
-        ))
-        .child(div().flex_none().w(px(16.)))
-        .child(window_controls(window, cx));
+        ));
+    if let Some(controls) = window_controls(window, cx) {
+        right = right.child(div().flex_none().w(px(16.))).child(controls);
+    }
 
     h_flex()
         .id("title-bar")
@@ -136,8 +143,9 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
         .pl(px(if cfg!(target_os = "macos") {
             MACOS_TRAFFIC_LIGHTS_INSET
         } else {
-            LEADING_INSET
+            SIDE_INSET
         }))
+        .pr(px(SIDE_INSET))
         // The window clips its children to a rectangular mask, so the bar has to
         // round its own top corners; the inner radius keeps its arc concentric
         // with the kit's outline instead of stepping against it.
@@ -301,7 +309,7 @@ fn approval_queue(
         .rounded(px(8.))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(font_icon("approval", 18., secondary))
+        .child(Icon::new("approval").size(18.).color(secondary))
         .child(
             div()
                 .absolute()
@@ -341,7 +349,7 @@ fn approval_queue(
                             h_flex()
                                 .items_center()
                                 .gap_2()
-                                .child(font_icon("approval", 14., accent))
+                                .child(Icon::new("approval").size(14.).color(accent))
                                 .child(
                                     div()
                                         .text_size(px(13.))
@@ -454,7 +462,7 @@ fn flat_button(id: &'static str, icon: &'static str, color: Hsla, hover: Hsla) -
         .rounded(px(8.))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(font_icon(icon, 18., color))
+        .child(Icon::new(icon).size(18.).color(color))
 }
 
 fn menu_row(
@@ -476,7 +484,7 @@ fn menu_row(
         .cursor_pointer()
         .text_color(text)
         .hover(move |style| style.bg(hover))
-        .child(font_icon(icon, 14., text))
+        .child(Icon::new(icon).size(14.).color(text))
         .child(div().text_size(px(13.)).child(label))
         .on_click(run)
         .into_any_element()
@@ -503,24 +511,27 @@ fn switch_row(
         .rounded(px(6.))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(font_icon(
-            if enabled { "check" } else { "uncheck" },
-            14.,
-            if enabled { accent } else { secondary },
-        ))
+        .child(
+            Icon::new(if enabled { "check" } else { "uncheck" })
+                .size(14.)
+                .color(if enabled { accent } else { secondary }),
+        )
         .child(div().text_size(px(13.)).text_color(foreground).child(label))
         .on_click(move |_, window, cx| run(window, cx))
         .into_any_element()
 }
 
-/// Window controls for client-decorated windows; the window manager draws its
-/// own under server-side decorations.
-fn window_controls(window: &Window, cx: &mut Context<Observer>) -> AnyElement {
+/// Window controls for client-decorated windows; `None` when the window manager
+/// draws its own, which is also the case on macOS with its native traffic
+/// lights.
+fn window_controls(window: &Window, cx: &mut Context<Observer>) -> Option<AnyElement> {
+    if cfg!(target_os = "macos") {
+        return None;
+    }
     if !matches!(window.window_decorations(), Decorations::Client { .. }) {
-        return div().into_any_element();
+        return None;
     }
     let supported = window.window_controls();
-    let radii = crate::ui::frame::inner_corner_radii(window, cx);
 
     let mut row = h_flex()
         .id("window-controls")
@@ -531,7 +542,6 @@ fn window_controls(window: &Window, cx: &mut Context<Observer>) -> AnyElement {
         row = row.child(control(
             "window-minimize",
             IconName::WindowMinimize,
-            px(0.),
             cx,
             |window, _| window.minimize_window(),
         ));
@@ -542,26 +552,24 @@ fn window_controls(window: &Window, cx: &mut Context<Observer>) -> AnyElement {
         } else {
             IconName::WindowMaximize
         };
-        row = row.child(control("window-maximize", icon, px(0.), cx, |window, _| {
+        row = row.child(control("window-maximize", icon, cx, |window, _| {
             window.zoom_window()
         }));
     }
-    // The close button sits in the frame's top-right corner, so it rounds that
-    // corner instead of filling it with a red square.
-    row.child(control(
-        "window-close",
-        IconName::WindowClose,
-        radii.top_right,
-        cx,
-        |window, _| window.remove_window(),
-    ))
-    .into_any_element()
+    Some(
+        row.child(control(
+            "window-close",
+            IconName::WindowClose,
+            cx,
+            |window, _| window.remove_window(),
+        ))
+        .into_any_element(),
+    )
 }
 
 fn control(
     id: &'static str,
     icon: IconName,
-    radius: Pixels,
     cx: &App,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
@@ -586,7 +594,6 @@ fn control(
         .justify_center()
         .w(px(CONTROL_WIDTH))
         .h_full()
-        .rounded_tr(radius)
         .text_color(foreground)
         .hover(|style| style.bg(hover_bg).text_color(hover_fg))
         .active(|style| style.bg(active_bg).text_color(hover_fg))
@@ -600,6 +607,6 @@ fn control(
             cx.stop_propagation();
             on_click(window, cx);
         })
-        .child(Icon::new(icon).small())
+        .child(KitIcon::new(icon).small())
         .into_any_element()
 }

@@ -10,6 +10,7 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::*;
 
 use crate::presentation::ToolView;
+use crate::ui::Icon;
 use crate::Observer;
 
 /// Renders the approval panel shown inside a pending tool row.
@@ -63,7 +64,7 @@ pub fn approval_card(tool: &ToolView, cx: &mut Context<Observer>) -> AnyElement 
                 .w_full()
                 .items_center()
                 .gap_2()
-                .child(crate::font_icon("approval", 14., accent))
+                .child(Icon::new("approval").size(14.).color(accent))
                 .child(
                     div()
                         .flex_1()
@@ -105,7 +106,7 @@ pub fn approval_card(tool: &ToolView, cx: &mut Context<Observer>) -> AnyElement 
                     .text_size(px(11.))
                     .text_color(muted)
                     .hover(|style| style.border_color(danger).text_color(danger))
-                    .child(crate::font_icon("close", 12., muted))
+                    .child(Icon::new("close").size(12.).color(muted))
                     .child(rust_i18n::t!("reject").to_string())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.submit_approval(reject_id.clone(), false, false, cx)
@@ -125,7 +126,7 @@ pub fn approval_card(tool: &ToolView, cx: &mut Context<Observer>) -> AnyElement 
                     .cursor_pointer()
                     .text_size(px(11.))
                     .text_color(gpui_kit::white())
-                    .child(crate::font_icon("check", 12., gpui_kit::white()))
+                    .child(Icon::new("check").size(12.).color(gpui_kit::white()))
                     .child(rust_i18n::t!("approve").to_string())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.submit_approval(approve_id.clone(), true, false, cx)

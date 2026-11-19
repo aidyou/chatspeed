@@ -10,7 +10,8 @@ use gpui_kit::*;
 use rust_i18n::t;
 
 use crate::icons::file_icon;
-use crate::{font_icon, Observer};
+use crate::ui::Icon;
+use crate::Observer;
 use chatspeed_gpui_observer::types::{root_name, DirEntry};
 
 /// Vue indents the root's children by `--cs-space` and every deeper level by 21px.
@@ -75,15 +76,15 @@ fn root_row(
         .py_2()
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(font_icon(
-            if expanded {
+        .child(
+            Icon::new(if expanded {
                 "ext-folder-open"
             } else {
                 "ext-folder"
-            },
-            14.,
-            secondary,
-        ))
+            })
+            .size(14.)
+            .color(secondary),
+        )
         .child(
             div()
                 .flex_1()
@@ -177,8 +178,8 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
                 .border_dashed()
                 .border_color(border),
         )
-        .child(font_icon(
-            if is_dir {
+        .child(
+            Icon::new(if is_dir {
                 if expanded {
                     "ext-folder-open"
                 } else {
@@ -186,10 +187,10 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
                 }
             } else {
                 file_icon(&name)
-            },
-            14.,
-            if is_dir { primary } else { secondary },
-        ))
+            })
+            .size(14.)
+            .color(if is_dir { primary } else { secondary }),
+        )
         .child(
             div()
                 .flex_1()
