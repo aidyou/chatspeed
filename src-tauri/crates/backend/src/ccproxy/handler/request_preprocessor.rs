@@ -13,6 +13,53 @@ fn should_relax_required_tool_choice(base_url: &str) -> bool {
         .is_some_and(|host| host == "api.deepseek.com" || host == "api.deepseek.cn")
 }
 
+/// Keep the experimental Go body field out of other upstreams and avoid
+/// promoting a request-local or explicitly overridden header to a cache key.
+pub(super) fn inject_opencode_go_prompt_cache_key(
+    body: &mut Value,
+    upstream_url: &str,
+    proxy_model: &ProxyModel,
+    client_headers: &http::HeaderMap,
+    upstream_headers: &reqwest::header::HeaderMap,
+) {
+    if !matches!(proxy_model.chat_protocol, ChatProtocol::OpenAI)
+        || proxy_model
+            .model_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("opencodeGoPromptCacheKey"))
+            .and_then(Value::as_bool)
+            != Some(true)
+        || !reqwest::Url::parse(upstream_url).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url.host_str() == Some("opencode.ai")
+                && url.port().is_none()
+                && url.path() == "/inference/go/openai/v1/chat/completions"
+        })
+    {
+        return;
+    }
+
+    let Some(session) = client_headers
+        .get("x-cs-conversation-id")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return;
+    };
+    if !upstream_headers
+        .get("x-opencode-session")
+        .is_some_and(|value| value == session)
+        || !uuid::Uuid::parse_str(session).is_ok_and(|id| id.get_version_num() == 5)
+        || !crate::ccproxy::auth::is_trusted_internal_request(client_headers)
+    {
+        return;
+    }
+
+    if let Some(body) = body.as_object_mut() {
+        body.entry("prompt_cache_key")
+            .or_insert_with(|| Value::String(session.to_owned()));
+    }
+}
+
 pub fn preprocess_client_request_body(
     client_request_body: Bytes,
     chat_protocol: &ChatProtocol,
@@ -68,11 +115,97 @@ pub fn preprocess_unified_request(unified_request: &mut UnifiedRequest, proxy_mo
 
 #[cfg(test)]
 mod tests {
-    use super::preprocess_client_request_body;
+    use super::{inject_opencode_go_prompt_cache_key, preprocess_client_request_body};
     use crate::ai::model_catalog::ThinkingAdapter;
     use crate::ccproxy::{types::ProxyModel, ChatProtocol};
     use bytes::Bytes;
     use serde_json::json;
+
+    const GO_CHAT_URL: &str = "https://opencode.ai/inference/go/openai/v1/chat/completions";
+
+    #[test]
+    fn opencode_go_prompt_cache_key_reuses_the_trusted_conversation_uuid() {
+        use crate::ai::chat::openai::build_prompt_cache_key;
+        use crate::ccproxy::helper::ModelResolver;
+
+        let mut model = deepseek_proxy_model();
+        model.base_url = "https://opencode.ai/inference/go/openai/v1".into();
+        model.model_metadata = Some(json!({"opencodeGoPromptCacheKey": true}));
+        let mut client = http::HeaderMap::new();
+        client.insert("x-cs-internal-request", "true".parse().unwrap());
+        client.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+
+        let mut keys = Vec::new();
+        for conversation in [42, 42, 43] {
+            let extra = json!({"conversationId": conversation});
+            let key = build_prompt_cache_key(None, extra.as_object(), "request-id").unwrap();
+            client.insert("x-cs-conversation-id", key.parse().unwrap());
+            let mut upstream = reqwest::header::HeaderMap::new();
+            ModelResolver::inject_proxy_headers(&mut upstream, &client, &model, "request-id");
+            let mut body = json!({"stream": true});
+            inject_opencode_go_prompt_cache_key(&mut body, GO_CHAT_URL, &model, &client, &upstream);
+            assert_eq!(upstream["x-opencode-session"], key.as_str());
+            assert_eq!(body, json!({"stream": true, "prompt_cache_key": key}));
+            keys.push(key);
+        }
+        assert_eq!(keys[0], keys[1]);
+        assert_ne!(keys[1], keys[2]);
+    }
+
+    #[test]
+    fn opencode_go_prompt_cache_key_preserves_unrelated_requests_and_overrides() {
+        let mut model = deepseek_proxy_model();
+        let mut client = http::HeaderMap::new();
+        let mut upstream = reqwest::header::HeaderMap::new();
+        let session = "d856d57d-27d9-52ac-9226-c93192fb3924";
+        client.insert("x-cs-conversation-id", session.parse().unwrap());
+        client.insert("x-cs-internal-request", "true".parse().unwrap());
+        client.insert(
+            "authorization",
+            format!(
+                "Bearer {}",
+                crate::constants::INTERNAL_CCPROXY_API_KEY.read()
+            )
+            .parse()
+            .unwrap(),
+        );
+        upstream.insert("x-opencode-session", session.parse().unwrap());
+        let mut body = json!({});
+
+        inject_opencode_go_prompt_cache_key(&mut body, GO_CHAT_URL, &model, &client, &upstream);
+        assert_eq!(body, json!({}));
+        model.model_metadata = Some(json!({"opencodeGoPromptCacheKey": true}));
+        for url in [
+            "https://api.deepseek.com/chat/completions",
+            "https://opencode.ai.example/inference/go/openai/v1/chat/completions",
+            "https://opencode.ai/zen/go/v1/chat/completions",
+            "https://opencode.ai/inference/go/openai/v1/responses",
+        ] {
+            inject_opencode_go_prompt_cache_key(&mut body, url, &model, &client, &upstream);
+            assert_eq!(body, json!({}));
+        }
+
+        let mut explicit = json!({"prompt_cache_key": "caller-key"});
+        inject_opencode_go_prompt_cache_key(&mut explicit, GO_CHAT_URL, &model, &client, &upstream);
+        assert_eq!(explicit, json!({"prompt_cache_key": "caller-key"}));
+
+        upstream.insert("x-opencode-session", "override".parse().unwrap());
+        inject_opencode_go_prompt_cache_key(&mut body, GO_CHAT_URL, &model, &client, &upstream);
+        assert_eq!(body, json!({}));
+
+        upstream.insert("x-opencode-session", session.parse().unwrap());
+        client.remove("authorization");
+        inject_opencode_go_prompt_cache_key(&mut body, GO_CHAT_URL, &model, &client, &upstream);
+        assert_eq!(body, json!({}));
+    }
 
     fn deepseek_proxy_model() -> ProxyModel {
         ProxyModel {

@@ -404,7 +404,18 @@ pub fn is_function_call_supported(lower_model_id: &str) -> bool {
     !is_lightweight_model
 }
 
-/// Checks if a model is explicitly documented as supporting reasoning/thinking steps.
+/// Parses the numeric version in a GPT chat model ID, ignoring provider prefixes and variant suffixes.
+pub(crate) fn gpt_model_version(model_id: &str) -> Option<(u32, u32)> {
+    let model_id = model_id.rsplit(['/', '@']).next()?.trim();
+    let normalized = model_id.to_ascii_lowercase();
+    let version = normalized.strip_prefix("gpt-")?.split(['-', ':']).next()?;
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    parts.next().is_none().then_some((major, minor))
+}
+
+/// Checks if a model is expected to support reasoning/thinking steps.
 pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
     let is_qwen_reasoning_model = lower_model_id.contains("qwq")
         || lower_model_id.contains("qwen3")
@@ -419,6 +430,7 @@ pub fn is_reasoning_supported(lower_model_id: &str) -> bool {
     if lower_model_id.starts_with("o1-")
         || lower_model_id.starts_with("o3-")
         || lower_model_id.contains("gpt-5")
+        || gpt_model_version(lower_model_id).is_some_and(|(major, _)| major >= 6)
     {
         return true;
     }
@@ -539,6 +551,13 @@ mod tests {
     fn recognizes_documented_reasoning_models() {
         for model in [
             "gpt-5.6",
+            "gpt-6.1-sol",
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
+            "openai/gpt-6.2-terra",
+            "openai@gpt-6.2-luna:batch",
+            "gpt-6.3-preview",
+            "gpt-10.2-preview",
             "o3-mini",
             "deepseek-ai/deepseek-v4-flash",
             "qwen/qwen-plus-2025-04-28",
@@ -562,6 +581,9 @@ mod tests {
             "step-2-mini",
             "mistral-large-latest",
             "custom-thinking-model",
+            "gpt-6oops",
+            "gpt-6.2.1",
+            "my-gpt-6.2-sol",
         ] {
             assert!(!is_reasoning_supported(model), "model: {model}");
         }

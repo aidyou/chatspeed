@@ -135,6 +135,14 @@ pub async fn handle_direct_forward(
         }
     }
 
+    super::request_preprocessor::inject_opencode_go_prompt_cache_key(
+        &mut body_json,
+        &full_url,
+        &proxy_model,
+        &client_headers,
+        &reqwest_headers,
+    );
+
     let modified_body = serde_json::to_vec(&body_json).map_err(|e| {
         CCProxyError::InternalError(format!("Failed to serialize modified body: {}", e))
     })?;
