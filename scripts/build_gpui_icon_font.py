@@ -29,7 +29,7 @@ from fontTools.ttLib.tables._g_l_y_f import Glyph
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "src/components/icon/iconfont.ttf"
-TARGET = ROOT / "src-tauri/crates/gpui-observer/assets/chatspeed-icons.ttf"
+TARGET = ROOT / "src-tauri/crates/gpui/assets/chatspeed-icons.ttf"
 
 UP_ARROW_CODEPOINT = 0xF101
 UP_ARROW_NAME = "double-arrow-up"

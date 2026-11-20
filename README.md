@@ -98,6 +98,18 @@ Please use the following terminal command to resolve this issue:
 3.  For `.deb` files, use your package manager to install, or install via the command `sudo dpkg -i Chatspeed*.deb`.
 4.  For `.rpm` files, use your package manager to install, or install via the command `sudo rpm -ivh Chatspeed*.rpm`.
 
+### Building the native GPUI workflow window on Linux
+
+On Ubuntu or Debian, install these additional packages before building the GPUI workflow window from source:
+
+```sh
+sudo apt update
+sudo apt install pkg-config libasound2-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+```
+
+`libasound2-dev` provides `alsa.pc` for audio playback. If Cargo reports `Package 'alsa' not found`, run `pkg-config --modversion alsa` after installation to verify that it can find ALSA. The XCB and xkbcommon development packages are needed to link GPUI's Linux window backends.
+
+From the repository root, run `cargo build --manifest-path src-tauri/Cargo.toml -p chatspeed-gpui` to build the window. To try it, start ChatSpeed first and then run `./run_gpui.sh`. The GPUI window is built separately from the current Tauri release packages; you do not need to install these development packages to run a prebuilt ChatSpeed release.
 
 ## 📚 Learn More
 

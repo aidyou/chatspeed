@@ -1347,12 +1347,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "chatspeed-gpui-observer"
+name = "chatspeed-gpui"
 version = "2.1.3"
 dependencies = [
  "chatspeed-runtime-client",
  "clap",
+ "embed-resource",
  "gpui-kit",
+ "image",
  "locale_config",
  "rodio",
  "rust-i18n",

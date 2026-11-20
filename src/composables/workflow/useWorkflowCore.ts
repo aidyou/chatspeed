@@ -1411,7 +1411,7 @@ export function useWorkflowCore({
                     )
                 } else if (payload.type === 'queued_user_message_removed') {
                     markSessionLiveFromNonTerminalEvent()
-                    workflowStore.removeQueuedMessage(payload.queued_user_message_id)
+                    workflowStore.acknowledgeQueuedMessage(payload.queued_user_message_id)
                 } else if (payload.type === 'retry_status') {
                     markSessionLiveFromNonTerminalEvent()
                     // Handle 429 retry status

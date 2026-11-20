@@ -1,0 +1,178 @@
+//! Delegated-task card and its nested transcript surface.
+
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+use rust_i18n::t;
+
+use crate::{accent, danger, pill, success, ui::Icon, warning};
+use chatspeed_gpui::presentation::{SubAgentStatus, SubAgentView};
+
+fn status_color(status: SubAgentStatus) -> Rgba {
+    match status {
+        SubAgentStatus::Running => accent(),
+        SubAgentStatus::Completed => success(),
+        SubAgentStatus::Failed => danger(),
+        SubAgentStatus::Cancelled => rgb(0x848586),
+    }
+}
+
+pub(crate) struct SubAgentDetails {
+    pub task: AnyElement,
+    pub result: Option<AnyElement>,
+    pub cost: Option<AnyElement>,
+    pub transcript: Option<AnyElement>,
+}
+
+pub(crate) fn sub_agent_card(
+    card: &SubAgentView,
+    details: Option<SubAgentDetails>,
+    on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
+    let open = details.is_some();
+    let status_color = status_color(card.status);
+    let muted = cx.theme().muted_foreground;
+    let header = h_flex()
+        .id(SharedString::from(card.key.clone()))
+        .w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .py_1()
+        .pl_2()
+        .cursor_pointer()
+        .hover(|style| style.bg(cx.theme().muted))
+        .child(Icon::new("skill-relation-chart").size(15.).color(muted))
+        .child(pill(
+            card.status_label.clone(),
+            status_color,
+            Some(status_color.opacity(0.12)),
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .text_size(px(13.))
+                .text_color(cx.theme().foreground)
+                .child(card.agent.clone()),
+        )
+        .child(
+            Icon::new(if open { "caret-down" } else { "caret-right" })
+                .size(14.)
+                .color(muted),
+        )
+        .on_click(on_toggle);
+    let mut body = v_flex().w_full().min_w_0().child(header);
+    if let Some(SubAgentDetails {
+        task,
+        result,
+        cost,
+        transcript,
+    }) = details
+    {
+        let mut rows = h_flex().w_full().min_w_0().gap_3();
+        for (label, value) in [
+            (t!("sub_agent_agent").to_string(), card.agent.clone()),
+            (t!("sub_agent_mode").to_string(), card.mode.clone()),
+            (t!("sub_agent_tools").to_string(), card.tools.clone()),
+            (t!("sub_agent_context").to_string(), card.context.clone()),
+        ] {
+            rows = rows.child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(muted)
+                            .child(label.to_uppercase()),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_size(px(13.))
+                            .text_color(cx.theme().foreground)
+                            .child(value),
+                    ),
+            );
+        }
+        body = body.child(
+            v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_3()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted)
+                .p_3()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .child(Icon::new("task").size(15.).color(warning()))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(cx.theme().foreground)
+                                .child(t!("sub_agent_delegated_task").to_string()),
+                        )
+                        .child(div().flex_1())
+                        .when(!card.usage.is_empty(), |view| {
+                            view.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(10.))
+                                    .text_color(muted)
+                                    .child(card.usage.clone()),
+                            )
+                        }),
+                )
+                .child(rows)
+                .child(task)
+                .children(result)
+                .children(cost),
+        );
+        body = body.children(transcript);
+    }
+    body.into_any_element()
+}
+
+pub(crate) fn child_transcript(rows: impl IntoIterator<Item = AnyElement>, cx: &App) -> AnyElement {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_3()
+        .mt_2()
+        .p_3()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().background)
+        .children(
+            rows.into_iter()
+                .map(|row| div().w_full().min_w_0().child(row)),
+        )
+        .into_any_element()
+}
+
+pub(crate) fn child_loading(cx: &App) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    h_flex()
+        .w_full()
+        .items_center()
+        .gap_2()
+        .pl_2()
+        .py_1()
+        .text_size(px(11.))
+        .text_color(muted)
+        .child(Icon::new("loading").size(12.).color(muted))
+        .child(t!("sub_agent_loading").to_string())
+        .into_any_element()
+}

@@ -601,11 +601,11 @@ assert.match(
 )
 assert.match(
   workflowStore,
-  /const hydrateQueuedMessages = \(executionContext, workflowId\) =>[\s\S]*normalizedContext\?\.sessionId === workflowId[\s\S]*messageQueue\.value = queuedMessages/
+  /const hydrateQueuedMessages = \(executionContext, workflowId\) =>[\s\S]*normalizedContext\?\.sessionId === workflowId[\s\S]*messageQueue\.value = restored\.concat/
 )
 assert.match(
   workflowStore,
-  /hydrateQueuedMessages\(snapshot\.workflow\.executionContext, workflowId\)/
+  /hydrateQueuedMessages\(snapshot\.executionContext, workflowId\)/
 )
 assert.match(
   workflowStore,

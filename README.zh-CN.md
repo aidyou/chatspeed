@@ -107,6 +107,19 @@ Chatspeed 从 v2.0 起引入了**工具驱动的工作流引擎**，专为编程
 3. 对于 `.deb` 文件，请使用您的包管理器进行安装，或通过命令 `sudo dpkg -i Chatspeed*.deb` 进行安装。
 4. 对于 `.rpm` 文件，请使用您的包管理器进行安装，或通过命令 `sudo rpm -ivh Chatspeed*.rpm` 进行安装。
 
+### 在 Linux 上构建 GPUI 原生工作流窗口
+
+在 Ubuntu 或 Debian 上，从源码构建 GPUI 工作流窗口前，需要额外安装以下软件包：
+
+```sh
+sudo apt update
+sudo apt install pkg-config libasound2-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+```
+
+`libasound2-dev` 提供音频播放依赖的 `alsa.pc`。如果 Cargo 报 `Package 'alsa' not found`，安装后可运行 `pkg-config --modversion alsa`，确认能找到 ALSA。XCB 和 xkbcommon 开发包用于链接 GPUI 的 Linux 窗口后端。
+
+在仓库根目录运行 `cargo build --manifest-path src-tauri/Cargo.toml -p chatspeed-gpui` 即可构建。要试用窗口，先启动 ChatSpeed，再运行 `./run_gpui.sh`。GPUI 窗口与当前的 Tauri 发布包分开构建；如果只运行预编译的 ChatSpeed 发行版，无需安装这些开发包。
+
 ## 📚 了解更多
 
 **我们强烈建议您从 [官方文档网站](https://docs.chatspeed.aidyou.ai/zh/) 开始，以获得最佳的阅读和学习体验。**

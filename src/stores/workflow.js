@@ -173,6 +173,8 @@ export const useWorkflowStore = defineStore('workflow', () => {
   const approvalSubmissions = ref(new Map()); // sessionId -> Set<toolCallId>
   const taskCompletionRevision = ref(0);
   let messageLoadRevision = 0;
+  const settledQueueIds = new Set();
+  let snapshotQueueIds = new Set();
   const lastTaskCompletion = ref(null);
   const reportedApprovalRecoveryInvariantSessions = new Set();
 
@@ -1243,9 +1245,13 @@ export const useWorkflowStore = defineStore('workflow', () => {
     messages.value = [];
     messageWindowBeforeId.value = null;
     hiddenEarlierMessageCount.value = 0;
+    if (currentWorkflowId.value !== workflowId) {
+      settledQueueIds.clear();
+      snapshotQueueIds.clear();
+    }
     currentWorkflowId.value = workflowId;
     lastTaskCompletion.value = null;
-    messageQueue.value = [];
+    messageQueue.value = messageQueue.value.filter(item => item.sessionId === workflowId);
     error.value = null;
     hasBlockingLiveSession.value = false;
     canRewindTail.value = false;
@@ -1299,7 +1305,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         executionContext: snapshot.workflow.executionContext,
         getPendingSummary: toolName => getToolStatusSummary(toolName, 'pending', 'Awaiting approval')
       });
-      hydrateQueuedMessages(snapshot.workflow.executionContext, workflowId);
+      hydrateQueuedMessages(snapshot.executionContext, workflowId);
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
       hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
       clearApprovalSubmissionsForSession(workflowId);
@@ -1399,9 +1405,18 @@ export const useWorkflowStore = defineStore('workflow', () => {
     const normalizedContext = normalizeExecutionContext(executionContext);
     const queuedMessages =
       normalizedContext?.sessionId === workflowId ? normalizedContext.queuedUserMessages : [];
-    messageQueue.value = queuedMessages
-      .filter((message) => message.id && message.content)
+    for (const id of executionContext?.removed_queued_user_message_ids || []) settledQueueIds.add(id);
+    for (const message of messages.value) {
+      const id = message.role === 'user' && message.metadata?.queued_user_message_id;
+      if (id) settledQueueIds.add(id);
+    }
+    const existing = new Map(messageQueue.value
+      .filter(item => item.sessionId === workflowId && !settledQueueIds.has(item.id))
+      .map(item => [item.id, item]));
+    const restored = queuedMessages
+      .filter(message => message.id && !settledQueueIds.has(message.id))
       .map((message) => ({
+        ...existing.get(message.id),
         id: message.id,
         sessionId: workflowId,
         content: message.content,
@@ -1411,10 +1426,15 @@ export const useWorkflowStore = defineStore('workflow', () => {
         acknowledged: true,
         attachedContext: message.attachedContext,
         metadata: message.metadata,
-        attachments: [],
-        createdAt: Date.now(),
+        attachments: existing.get(message.id)?.attachments || [],
+        createdAt: existing.get(message.id)?.createdAt ?? Date.now(),
         removable: true
       }));
+    const restoredIds = new Set(restored.map(item => item.id));
+    messageQueue.value = restored.concat([...existing.values()].filter(item =>
+      !restoredIds.has(item.id) && (!snapshotQueueIds.has(item.id) || !item.acknowledged)
+    ));
+    snapshotQueueIds = restoredIds;
   };
 
   const addMessageToQueue = (message) => {
@@ -1473,6 +1493,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const acknowledgeQueuedMessage = (id) => {
     if (!id) return;
+    settledQueueIds.add(id);
     messageQueue.value = messageQueue.value.filter((item) => item.id !== id);
   };
 
@@ -1504,7 +1525,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
       const queueStatus = message.metadata?.queue_status;
 
       if (queueStatus === 'queued') {
-        if (queuedId) {
+        if (queuedId && !settledQueueIds.has(queuedId)) {
           const existing = messageQueue.value.find((item) => item.id === queuedId);
           if (existing) {
             acknowledgeQueuedMessageSent(queuedId);
@@ -1848,7 +1869,7 @@ export const useWorkflowStore = defineStore('workflow', () => {
         executionContext: normalizeExecutionContext(snapshot.executionContext),
         getPendingSummary: toolName => getToolStatusSummary(toolName, 'pending', 'Awaiting approval')
       });
-      hydrateQueuedMessages(snapshot.workflow.executionContext, workflowId);
+      hydrateQueuedMessages(snapshot.executionContext, workflowId);
       messageWindowBeforeId.value = snapshot.messageWindowBeforeId ?? null;
       hiddenEarlierMessageCount.value = Number(snapshot.hiddenEarlierMessageCount) || 0;
 

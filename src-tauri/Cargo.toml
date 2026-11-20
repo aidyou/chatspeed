@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/contracts", "crates/cli", "crates/daemon", "crates/backend", "crates/client", "crates/gpui-observer"]
+members = [".", "crates/contracts", "crates/cli", "crates/daemon", "crates/backend", "crates/client", "crates/gpui"]
 exclude = ["vendor/gpui-component"]
 resolver = "2"
 
