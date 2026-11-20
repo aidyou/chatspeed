@@ -87,10 +87,46 @@ auto_approve_plan_hint:
   en: "Start implementation as soon as a plan is submitted"
   zh-Hans: "计划提交后直接进入实施阶段"
   zh-Hant: "計劃提交後直接進入實施階段"
+action_cancel:
+  en: Cancel
+  zh-Hans: 取消
+  zh-Hant: 取消
+automation_agent_label:
+  en: "Agent: %{agent}"
+  zh-Hans: "代理：%{agent}"
+  zh-Hant: "代理：%{agent}"
+automation_agent_required:
+  en: No agent is available
+  zh-Hans: 暂无可用代理
+  zh-Hant: 暫無可用代理
+automation_create_failed:
+  en: Could not create the scheduled task
+  zh-Hans: 无法创建定时任务
+  zh-Hant: 無法建立排程任務
+automation_created:
+  en: Scheduled task created
+  zh-Hans: 已创建定时任务
+  zh-Hant: 已建立排程任務
+automation_daily_time:
+  en: Daily at (local time)
+  zh-Hans: 每天执行时间（本地时间）
+  zh-Hant: 每天執行時間（本機時間）
 automation_empty:
   en: No automations yet
   zh-Hans: 暂无自动化
   zh-Hant: 暫無自動化
+automation_name:
+  en: Task name
+  zh-Hans: 任务名称
+  zh-Hant: 任務名稱
+automation_prompt:
+  en: Task instructions
+  zh-Hans: 任务指令
+  zh-Hant: 任務指令
+automation_required_fields:
+  en: Enter a name, instructions, and a valid time (HH:MM).
+  zh-Hans: 请输入名称、任务指令和有效时间（HH:MM）。
+  zh-Hant: 請輸入名稱、任務指令和有效時間（HH:MM）。
 awaiting_approval:
   en: Awaiting approval
   zh-Hans: 等待用户审批
@@ -647,6 +683,18 @@ quick_runtime:
   en: "Runtime"
   zh-Hans: "运行时"
   zh-Hant: "執行時"
+rewind_confirm:
+  en: Rewind this conversation by removing its latest step?
+  zh-Hans: 确定移除最近一步并回退会话吗？
+  zh-Hant: 確定移除最近一步並回退會話嗎？
+rewind_done:
+  en: Conversation rewound
+  zh-Hans: 已回退会话
+  zh-Hant: 已回退會話
+rewind_unavailable:
+  en: The conversation cannot be rewound right now
+  zh-Hans: 当前无法回退会话
+  zh-Hant: 目前無法回退會話
 reject:
   en: Reject
   zh-Hans: 拒绝

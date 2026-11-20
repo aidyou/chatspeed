@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["gui"]
-gui = ["dep:gpui-kit", "dep:image", "dep:rodio"]
+gui = ["dep:gpui-kit", "dep:image", "dep:rodio", "dep:raw-window-handle", "dep:x11rb", "dep:windows-sys", "dep:objc2-app-kit"]
 
 [[bin]]
 name = "chatspeed-gpui"
@@ -24,7 +24,16 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 clap = { version = "4", features = ["derive"] }
 locale_config = "0.3.0"
 
+raw-window-handle = { version = "0.6.2", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSView", "NSWindow"], optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13.2", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [build-dependencies]

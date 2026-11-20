@@ -35,6 +35,21 @@ impl RenderOnce for ChromeLabel {
     }
 }
 
+pub(crate) fn running_badge(label: String, id: impl Into<ElementId>) -> impl IntoElement {
+    let color = crate::success();
+    gpui_kit::component::h_flex()
+        .flex_none()
+        .gap_1()
+        .px_2()
+        .py(px(2.))
+        .rounded(px(4.))
+        .bg(color.opacity(0.12))
+        .text_color(color)
+        .text_size(px(11.))
+        .child(Icon::new("loading").size(12.).color(color).spin(id))
+        .child(chrome_label(label))
+}
+
 /// Keep the caret's space reserved so hovering never moves the label.
 pub(super) fn disclosure_caret(group: &'static str, open: bool, color: Hsla) -> impl IntoElement {
     div()
@@ -181,3 +196,4 @@ pub mod status;
 pub mod titlebar;
 pub(crate) mod toast;
 pub mod transcript;
+pub(crate) mod window_pin;

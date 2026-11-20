@@ -448,12 +448,19 @@ struct Observer {
     title_drag: bool,
     /// Multi-line composer state; sends read it and clear it.
     composer: Entity<TextareaState>,
+    drafts: BTreeMap<Option<String>, (String, Vec<Attachment>)>,
+    restore_composer: Option<String>,
+    show_today_cost: bool,
+    today_cost: f64,
+    rewind_pending: bool,
+    automation_pending: bool,
     /// Whether the composer owns focus, mirrored from its input events.
     composer_focused: bool,
     /// Vue's fullscreen toggle: the box grows instead of the transcript.
     composer_expanded: bool,
     /// A new session is being created and started; further sends wait.
     start_pending: bool,
+    start_draft: Option<(String, Vec<Attachment>)>,
     /// Transient action feedback shown below the titlebar.
     toast: Option<Toast>,
     /// Child transcripts loaded for expanded sub-agent cards, by task id.
@@ -625,9 +632,16 @@ impl Observer {
             files_auto_expanded: false,
             title_drag: false,
             composer,
+            drafts: BTreeMap::new(),
+            restore_composer: None,
+            show_today_cost: false,
+            today_cost: 0.,
+            rewind_pending: false,
+            automation_pending: false,
             composer_focused: false,
             composer_expanded: false,
             start_pending: false,
+            start_draft: None,
             toast: None,
             child_rows: BTreeMap::new(),
             ask_user_choice: BTreeMap::new(),
@@ -661,6 +675,31 @@ impl Observer {
         let _ = self.worker.commands.try_send(Command::Catalogue);
     }
 
+    fn switch_draft(&mut self, next: Option<String>, cx: &App) {
+        let text = self
+            .restore_composer
+            .take()
+            .unwrap_or_else(|| self.composer.read(cx).value().to_string());
+        let attachments = std::mem::take(&mut self.attachments);
+        if !text.is_empty() || !attachments.is_empty() {
+            self.drafts
+                .insert(self.selected.clone(), (text, attachments));
+        }
+        let (text, attachments) = self.drafts.remove(&next).unwrap_or_default();
+        self.selected = next;
+        self.attachments = attachments;
+        self.restore_composer = Some(text);
+    }
+
+    fn restore_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(text) = self.restore_composer.take() {
+            self.composer
+                .update(cx, |state, cx| state.set_value(text, window, cx));
+            self.file_query.clear();
+            self.file_results.clear();
+        }
+    }
+
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
         let generation = self.model.generation.wrapping_add(1);
         if self
@@ -674,15 +713,17 @@ impl Observer {
         {
             return;
         }
+        if self.selected.as_deref() != Some(id.as_str()) {
+            self.switch_draft(Some(id), cx);
+        }
         self.model.select();
-        self.selected = Some(id);
+        self.rewind_pending = false;
         self.markdown.clear();
         self.expanded.clear();
         self.rows.clear();
         self.ask_user_choice.clear();
         self.ask_user_text.clear();
         self.ask_user_answered.clear();
-        self.attachments.clear();
         self.quick_panel = None;
         self.sandbox_mode_draft = None;
         self.sandbox_scheme_draft = None;
@@ -912,14 +953,67 @@ impl Observer {
         cx.notify();
     }
 
-    fn toggle_pin(&mut self, cx: &mut Context<Self>) {
-        self.pinned = !self.pinned;
-        // GPUI exposes no always-on-top request, so the switch only reports the
-        // state the titlebar is asked for.
-        if self.pinned {
-            self.not_implemented(t!("pin"), cx);
+    fn can_rewind(&self) -> bool {
+        self.selected.is_some()
+            && self.model.can_rewind_tail
+            && !self.workflow_running()
+            && self.model.wait_reason.is_empty()
+            && !self.rewind_pending
+    }
+
+    fn confirm_rewind(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_rewind() {
+            return;
         }
-        cx.notify();
+        let generation = self.model.generation;
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &t!("delete_last_message"),
+            Some(&t!("rewind_confirm")),
+            &[
+                PromptButton::cancel(t!("action_cancel").to_string()),
+                PromptButton::new(t!("delete_last_message").to_string()),
+            ],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if answer.await.ok() != Some(1) {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                if !this.model.accepts(generation) || !this.can_rewind() {
+                    return;
+                }
+                let Some(session) = this.selected.clone() else {
+                    return;
+                };
+                if this
+                    .worker
+                    .commands
+                    .try_send(Command::Rewind {
+                        generation,
+                        session,
+                    })
+                    .is_ok()
+                {
+                    this.rewind_pending = true;
+                    cx.notify();
+                } else {
+                    this.show_toast(ToastKind::Error, t!("rewind_unavailable").to_string(), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn toggle_pin(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match ui::window_pin::set(window, !self.pinned) {
+            Ok(()) => {
+                self.pinned = !self.pinned;
+                cx.notify();
+            }
+            Err(error) => self.show_toast(ToastKind::Error, error.to_string(), cx),
+        }
     }
 
     fn show_toast(&mut self, kind: ToastKind, message: String, cx: &mut Context<Self>) {
@@ -1146,8 +1240,11 @@ impl Observer {
 
     /// Clears the window back to an unsent session; the first message creates it.
     fn start_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.is_some() {
+            self.switch_draft(None, cx);
+        }
+        self.rewind_pending = false;
         self.model.select();
-        self.selected = None;
         self.rows.clear();
         self.markdown.clear();
         self.expanded.clear();
@@ -1155,15 +1252,14 @@ impl Observer {
         self.ask_user_choice.clear();
         self.ask_user_text.clear();
         self.ask_user_answered.clear();
-        self.attachments.clear();
         self.sandbox_mode_draft = None;
         self.sandbox_scheme_draft = None;
         self.planning_mode = false;
         self.timeline_scroll.follow = true;
         self.timeline_scroll.scroll_pending = true;
         self.clear_dir_state();
+        self.restore_draft(window, cx);
         self.composer.update(cx, |state, cx| {
-            state.set_value("", window, cx);
             // Typing the first message is the next step, so take the focus there.
             let focus = state.focus_handle(cx);
             focus.focus(window, cx);
@@ -1173,8 +1269,12 @@ impl Observer {
 
     /// Sends the composer text, creating the session first when none is selected.
     fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.restore_draft(window, cx);
         let text = self.composer.read(cx).value().trim().to_string();
-        if (text.is_empty() && self.attachments.is_empty()) || self.start_pending {
+        if self.rewind_pending
+            || (text.is_empty() && self.attachments.is_empty())
+            || self.start_pending
+        {
             return;
         }
         let attachments = self.attachments.clone();
@@ -1255,11 +1355,25 @@ impl Observer {
                 } else {
                     text
                 };
-                let _ = self.worker.commands.try_send(Command::StartNew {
-                    prompt,
-                    attached_context,
-                    metadata,
-                });
+                if self
+                    .worker
+                    .commands
+                    .try_send(Command::StartNew {
+                        prompt,
+                        attached_context,
+                        metadata,
+                    })
+                    .is_err()
+                {
+                    self.start_pending = false;
+                    self.show_toast(
+                        ToastKind::Error,
+                        t!("queued_message_send_failed").to_string(),
+                        cx,
+                    );
+                    return;
+                }
+                self.start_draft = Some((self.composer.read(cx).value().to_string(), attachments));
             }
         }
         self.attachments.clear();
@@ -1667,6 +1781,35 @@ impl Observer {
                 continue;
             }
             match update.kind {
+                UpdateKind::TodayCost(amount) => self.today_cost = amount,
+                UpdateKind::Rewound(result) => {
+                    self.rewind_pending = false;
+                    match result {
+                        Ok(true) => {
+                            if let Some(id) = self.selected.clone() {
+                                self.select(id, cx);
+                            }
+                            self.show_toast(ToastKind::Success, t!("rewind_done").to_string(), cx);
+                        }
+                        Ok(false) => self.show_toast(
+                            ToastKind::Warning,
+                            t!("rewind_unavailable").to_string(),
+                            cx,
+                        ),
+                        Err(error) => self.show_toast(ToastKind::Error, error, cx),
+                    }
+                }
+                UpdateKind::AutomationCreated(result) => {
+                    self.automation_pending = false;
+                    match result {
+                        Ok(()) => self.show_toast(
+                            ToastKind::Success,
+                            t!("automation_created").to_string(),
+                            cx,
+                        ),
+                        Err(error) => self.show_toast(ToastKind::Error, error, cx),
+                    }
+                }
                 UpdateKind::Sessions(sessions) => self.sessions = sessions,
                 UpdateKind::Connected(connected) => self.connected = connected,
                 UpdateKind::Config(config, fetched_at) => {
@@ -1725,7 +1868,29 @@ impl Observer {
                 }
                 UpdateKind::Opened(id) => {
                     self.start_pending = false;
-                    self.select(id, cx);
+                    self.start_draft = None;
+                    if self.selected.is_none() {
+                        self.select(id, cx);
+                    }
+                }
+                UpdateKind::StartFailed(message) => {
+                    self.start_pending = false;
+                    if let Some((text, attachments)) = self.start_draft.take() {
+                        if self.selected.is_none()
+                            && self
+                                .restore_composer
+                                .as_deref()
+                                .unwrap_or(&self.composer.read(cx).value())
+                                .is_empty()
+                            && self.attachments.is_empty()
+                        {
+                            self.restore_composer = Some(text);
+                            self.attachments = attachments;
+                        } else if self.selected.is_some() {
+                            self.drafts.entry(None).or_insert((text, attachments));
+                        }
+                    }
+                    self.show_toast(ToastKind::Error, message, cx);
                 }
                 UpdateKind::Child(id, page) => {
                     self.child_pending.remove(&id);
@@ -1733,7 +1898,6 @@ impl Observer {
                         .insert(id, presentation::project(page.messages, self.roots()));
                 }
                 UpdateKind::Error(message) => {
-                    self.start_pending = false;
                     self.show_toast(ToastKind::Error, message, cx);
                 }
                 UpdateKind::Catalogue {
@@ -1892,6 +2056,10 @@ impl Observer {
     /// Mirrors the runtime preferences shared with the Vue titlebar.
     fn apply_config(&mut self, config: &Value, fetched_at: Instant, cx: &mut Context<Self>) {
         self.show_menu_button = config["show_menu_button"].as_bool().unwrap_or(true);
+        self.show_today_cost = config["show_today_cost_stats"].as_bool().unwrap_or(false);
+        if !self.show_today_cost {
+            self.today_cost = 0.;
+        }
         // A poll already in flight when a save completed may contain old values.
         if self
             .sound_saved_at
@@ -2432,20 +2600,10 @@ impl Observer {
     fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
         let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
         if tool.status == presentation::ToolStatus::Running {
-            detail = detail.child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(12.))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(
-                        Icon::new("loading")
-                            .size(14.)
-                            .color(accent())
-                            .spin(SharedString::from(format!("{}:running", tool.detail_key))),
-                    )
-                    .child(t!("executing").to_string()),
-            );
+            detail = detail.child(h_flex().child(ui::running_badge(
+                t!("executing").to_string(),
+                SharedString::from(format!("{}:running", tool.detail_key)),
+            )));
         }
         let answered =
             self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool);
@@ -2562,7 +2720,12 @@ impl Observer {
         detail.into_any_element()
     }
 
-    fn activity_row(&self, group: &ActivityView, cx: &mut Context<Self>) -> AnyElement {
+    fn activity_row(
+        &self,
+        group: &ActivityView,
+        shimmer: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let target = group.key.clone();
         let details = self.expanded.contains(&target).then(|| {
             group
@@ -2572,12 +2735,6 @@ impl Observer {
                 .collect()
         });
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
-        let shimmer = self.workflow_running()
-            && group.ongoing
-            && self
-                .rows
-                .last()
-                .is_some_and(|row| matches!(row, Row::Activity(tail) if tail.key == group.key));
         ui::transcript::activity_group(group, shimmer, details, on_toggle, cx)
     }
 
@@ -2627,7 +2784,8 @@ impl Observer {
                 .and_then(|id| match self.child_rows.get(id) {
                     // The same row renderer is used for both timelines.
                     Some(rows) if !rows.is_empty() => {
-                        let elements: Vec<_> = rows.iter().map(|row| self.row(row, cx)).collect();
+                        let elements: Vec<_> =
+                            rows.iter().map(|row| self.row(row, None, cx)).collect();
                         Some(child_transcript(elements, cx))
                     }
                     Some(_) => None,
@@ -2888,13 +3046,14 @@ impl Observer {
         ui::transcript::finish_task_card(view, open, on_toggle, cx)
     }
 
-    fn row(&self, row: &Row, cx: &mut Context<Self>) -> AnyElement {
-        ui::transcript::row(self, row, cx)
+    fn row(&self, row: &Row, active_group: Option<&str>, cx: &mut Context<Self>) -> AnyElement {
+        ui::transcript::row(self, row, active_group, cx)
     }
 }
 
 impl Render for Observer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.restore_draft(window, cx);
         if let Some((offset, previous_max)) = self.timeline_scroll.prepend_anchor.take() {
             let entity = cx.entity().downgrade();
             window.on_next_frame(move |_, cx| {
@@ -3065,15 +3224,14 @@ impl Render for Observer {
                     })),
             );
         }
+        let active_group = ui::transcript::latest_active_group(&self.rows, self.workflow_running());
         for row in &self.rows {
             // Vue separates transcript entries with the medium spacing token.
-            content = content.child(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .mb(px(20.))
-                    .child(self.row(row, cx)),
-            );
+            content = content.child(div().w_full().min_w_0().mb(px(20.)).child(self.row(
+                row,
+                active_group,
+                cx,
+            )));
         }
         if !self.model.queued_messages.is_empty() {
             content = content.child(ui::composer::message_queue::render(self, cx));

@@ -1356,11 +1356,15 @@ dependencies = [
  "gpui-kit",
  "image",
  "locale_config",
+ "objc2-app-kit 0.3.2",
+ "raw-window-handle",
  "rodio",
  "rust-i18n",
  "serde",
  "serde_json",
  "tokio",
+ "windows-sys 0.61.2",
+ "x11rb",
 ]
 
 [[package]]

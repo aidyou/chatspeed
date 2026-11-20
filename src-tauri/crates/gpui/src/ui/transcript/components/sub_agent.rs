@@ -45,25 +45,17 @@ pub(crate) fn sub_agent_card(
         .cursor_pointer()
         .hover(|style| style.bg(cx.theme().muted))
         .child(Icon::new("skill-relation-chart").size(15.).color(muted))
-        .child(
-            h_flex()
-                .flex_none()
-                .items_center()
-                .gap_1()
-                .when(card.status.is_running(), |row| {
-                    row.child(
-                        Icon::new("loading")
-                            .size(12.)
-                            .color(status_color)
-                            .spin("sub-agent-running"),
-                    )
-                })
-                .child(pill(
-                    card.status_label.clone(),
-                    status_color,
-                    Some(status_color.opacity(0.12)),
-                )),
-        )
+        .child(if card.status.is_running() {
+            crate::ui::running_badge(card.status_label.clone(), "sub-agent-running")
+                .into_any_element()
+        } else {
+            pill(
+                card.status_label.clone(),
+                status_color,
+                Some(status_color.opacity(0.12)),
+            )
+            .into_any_element()
+        })
         .child(
             div()
                 .flex_shrink_1()

@@ -36,6 +36,96 @@ const SIDE_INSET: f32 = 20.;
 /// clears them instead of sitting at [`SIDE_INSET`].
 const MACOS_TRAFFIC_LIGHTS_INSET: f32 = 78.;
 
+fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Context<Observer>) {
+    use gpui_kit::component::{
+        button::{Button, ButtonVariants},
+        input::{Input, InputState, Textarea, TextareaState},
+        WindowExt,
+    };
+    if observer.automation_pending || window.has_active_dialog(cx) {
+        return;
+    }
+    let Some(agent) = observer.current_agent_id().or_else(|| {
+        observer
+            .agents
+            .iter()
+            .find_map(|agent| agent["id"].as_str().map(str::to_owned))
+    }) else {
+        observer.show_toast(
+            crate::ToastKind::Warning,
+            t!("automation_agent_required").to_string(),
+            cx,
+        );
+        return;
+    };
+    let agent_label = observer
+        .agents
+        .iter()
+        .find(|entry| entry["id"].as_str() == Some(agent.as_str()))
+        .and_then(|entry| entry["name"].as_str())
+        .unwrap_or(&agent)
+        .to_owned();
+    let title =
+        cx.new(|cx| InputState::new(window, cx).placeholder(t!("automation_name").to_string()));
+    let prompt = cx
+        .new(|cx| TextareaState::new(window, cx).placeholder(t!("automation_prompt").to_string()));
+    let time = cx.new(|cx| {
+        let mut input = InputState::new(window, cx).placeholder("09:00");
+        input.set_value("09:00", window, cx);
+        input
+    });
+    let owner = cx.entity().downgrade();
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let (title_state, prompt_state, time_state, agent, owner) = (title.clone(), prompt.clone(), time.clone(), agent.clone(), owner.clone());
+        let submit = Button::new("create-automation-submit").primary().label(t!("create_automation").to_string())
+            .on_click(move |_, window, cx| {
+                let name = title_state.read(cx).value().trim().to_owned();
+                let prompt = prompt_state.read(cx).value().trim().to_owned();
+                let time = time_state.read(cx).value().trim().to_owned();
+                let accepted = owner.update(cx, |this, cx| {
+                    if this.automation_pending { return false; }
+                    if name.is_empty() || prompt.is_empty() || !valid_daily_time(&time) {
+                        this.show_toast(crate::ToastKind::Warning, t!("automation_required_fields").to_string(), cx);
+                        return false;
+                    }
+                    let spec = serde_json::json!({
+                        "title": name, "prompt": prompt, "agent_id": agent,
+                        "allowed_paths": [], "schedule_kind": "daily", "schedule_config": {"times": [time]},
+                        "continuous_context": false, "self_review": false, "enabled": true,
+                    });
+                    if this.worker.commands.try_send(chatspeed_gpui::types::Command::CreateAutomation(spec)).is_err() {
+                        this.show_toast(crate::ToastKind::Error, t!("automation_create_failed").to_string(), cx);
+                        return false;
+                    }
+                    this.automation_pending = true;
+                    true
+                }).unwrap_or(false);
+                if accepted { window.close_dialog(cx); }
+            });
+        dialog.title(t!("create_automation").to_string()).child(v_flex().gap_2()
+            .child(div().text_size(px(12.)).text_color(cx.theme().muted_foreground).child(t!("automation_agent_label", agent = agent_label.as_str()).to_string()))
+            .child(Input::new(&title)).child(Textarea::new(&prompt))
+            .child(t!("automation_daily_time").to_string()).child(Input::new(&time)))
+            .footer(h_flex().justify_end().gap_2()
+                .child(Button::new("create-automation-cancel").label(t!("action_cancel").to_string()).on_click(|_, window, cx| window.close_dialog(cx)))
+                .child(submit))
+    });
+}
+
+fn valid_daily_time(time: &str) -> bool {
+    let Some((hour, minute)) = time.split_once(':') else {
+        return false;
+    };
+    hour.len() == 2
+        && minute.len() == 2
+        && hour
+            .bytes()
+            .chain(minute.bytes())
+            .all(|b| b.is_ascii_digit())
+        && hour.parse::<u8>().is_ok_and(|v| v < 24)
+        && minute.parse::<u8>().is_ok_and(|v| v < 60)
+}
+
 /// Renders the 40px titlebar above the sidebar and transcript.
 pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>) -> AnyElement {
     let skin = surfaces(observer.appearance_dark);
@@ -64,9 +154,12 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
     }
     left = left.child(sound_menu(observer, secondary, skin.hover, cx));
 
-    let center = h_flex().flex_1().min_w_0().justify_center().when_some(
-        observer.roots().first().cloned(),
-        |row, root| {
+    let center = h_flex()
+        .flex_1()
+        .min_w_0()
+        .justify_center()
+        .gap(px(32.))
+        .when_some(observer.roots().first().cloned(), |row, root| {
             row.child(
                 h_flex()
                     .id("titlebar-path")
@@ -92,8 +185,21 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.open_files_tab(cx))),
             )
-        },
-    );
+        })
+        .when(observer.show_today_cost, |row| {
+            row.child(
+                h_flex()
+                    .flex_none()
+                    .gap_1()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(accent)
+                    .child(Icon::new("money").size(12.).color(accent))
+                    .child(super::chrome_label(chatspeed_gpui::native::compact_cost(
+                        observer.today_cost,
+                    ))),
+            )
+        });
 
     // The four workflow actions keep Vue's order: automation, new task, undo,
     // pin. The window controls follow them behind a wider gap, and the group
@@ -107,7 +213,7 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
             "clock",
             secondary,
             skin.hover,
-            cx.listener(|this, _, _, cx| this.not_implemented(t!("create_automation"), cx)),
+            cx.listener(|this, _, window, cx| open_automation(this, window, cx)),
         ))
         .child(icon_button(
             "new-session",
@@ -119,20 +225,23 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
         .child(icon_button(
             "rewind",
             "undo",
-            secondary,
+            if observer.can_rewind() {
+                secondary
+            } else {
+                secondary.opacity(0.45)
+            },
             skin.hover,
-            cx.listener(|this, _, _, cx| this.not_implemented(t!("delete_last_message"), cx)),
+            cx.listener(|this, _, window, cx| this.confirm_rewind(window, cx)),
         ))
-        // Vue tilts the pin 45° while the window is not pinned. GPUI only
-        // transforms SVG elements, so the glyph cannot carry that tilt; the
-        // button still reports the state it toggles.
-        .child(icon_button(
-            "pin-window",
-            "pin",
-            if observer.pinned { accent } else { secondary },
-            skin.hover,
-            cx.listener(|this, _, _, cx| this.toggle_pin(cx)),
-        ));
+        .when(super::window_pin::supported(window), |row| {
+            row.child(icon_button(
+                "pin-window",
+                "pin",
+                if observer.pinned { accent } else { secondary },
+                skin.hover,
+                cx.listener(|this, _, window, cx| this.toggle_pin(window, cx)),
+            ))
+        });
     if let Some(controls) = window_controls(window, cx) {
         right = right.child(div().flex_none().w(px(16.))).child(controls);
     }

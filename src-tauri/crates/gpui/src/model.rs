@@ -20,6 +20,7 @@ pub struct Model {
     pub reading_history: bool,
     pub live_overflow: bool,
     pub state: String,
+    pub can_rewind_tail: bool,
     /// Backend-owned compression hint, mirrored from `compression_status` events.
     pub compressing: bool,
     pub compression_message: String,
@@ -87,6 +88,7 @@ impl Model {
         }
         let context = &page.execution_context;
         if !older {
+            self.can_rewind_tail = page.can_rewind_tail;
             self.reconcile_queue(context, &page.messages);
         }
         self.wait_reason = context["waitReason"]

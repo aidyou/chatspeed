@@ -10,21 +10,24 @@ use gpui_kit::*;
 
 use crate::icons;
 
-gpui_kit::assets::icon_assets!(ExtraIcons, [Brain]);
+const REASONING_BULB: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6m-5 3h4M9 15c0-2-3-3-3-7a6 6 0 0 1 12 0c0 4-3 5-3 7z"/></svg>"#;
 
 pub(crate) struct IconAssets;
 
 impl AssetSource for IconAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        match ExtraIcons.load(path)? {
-            Some(icon) => Ok(Some(icon)),
-            None => gpui_kit::assets::Assets.load(path),
+        if path == "icons/reasoning-lightbulb.svg" {
+            Ok(Some(Cow::Borrowed(REASONING_BULB)))
+        } else {
+            gpui_kit::assets::Assets.load(path)
         }
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
-        paths.extend(ExtraIcons.list(path)?);
+        if "icons/reasoning-lightbulb.svg".starts_with(path) {
+            paths.push("icons/reasoning-lightbulb.svg".into());
+        }
         Ok(paths)
     }
 }
@@ -36,7 +39,7 @@ mod tests {
 
     #[test]
     fn animated_icons_are_available_with_the_default_assets() {
-        for path in ["icons/brain.svg", "icons/loader-circle.svg"] {
+        for path in ["icons/reasoning-lightbulb.svg", "icons/loader-circle.svg"] {
             let svg = IconAssets.load(path).unwrap().unwrap();
             assert!(svg.starts_with(b"<svg"), "{path}");
         }
@@ -109,7 +112,7 @@ impl RenderOnce for Icon {
         let color = self.color.unwrap_or(inherited.color);
         // GPUI transforms SVGs, but not text glyphs. Static icons still use the font.
         let animated_path = match self.name {
-            "reasoning" => Some("icons/brain.svg"),
+            "reasoning" => Some("icons/reasoning-lightbulb.svg"),
             "loading" => Some("icons/loader-circle.svg"),
             _ => None,
         };
@@ -121,7 +124,9 @@ impl RenderOnce for Icon {
                 .text_color(color)
                 .with_animation(
                     id,
-                    Animation::new(Duration::from_secs(2)).repeat(),
+                    Animation::new(Duration::from_millis(1200))
+                        .repeat_synced()
+                        .with_max_fps(30.),
                     |icon, phase| {
                         icon.with_transformation(Transformation::rotate(percentage(phase)))
                     },

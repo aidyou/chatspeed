@@ -8,12 +8,58 @@ use rust_i18n::t;
 use crate::{accent, danger, pill, plain_text, ui::Icon, warning, Observer};
 use chatspeed_gpui::presentation::{ActivityView, AlertKind, AlertView, Row};
 
+pub(crate) fn latest_active_group(rows: &[Row], running: bool) -> Option<&str> {
+    if !running {
+        return None;
+    }
+    rows.iter().rev().find_map(|row| match row {
+        Row::Activity(group) if group.ongoing => Some(group.key.as_str()),
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{latest_active_group, ActivityView, Row};
+
+    #[test]
+    fn sweep_selects_latest_running_group_even_with_later_non_group_rows() {
+        let group = |key: &str, ongoing| {
+            Row::Activity(ActivityView {
+                key: key.into(),
+                icon: "tool",
+                summary: String::new(),
+                thought_count: 0,
+                error_count: 0,
+                ongoing,
+                items: Vec::new(),
+            })
+        };
+        let rows = [
+            group("first", true),
+            group("latest", true),
+            group("finished", false),
+            Row::Divider,
+        ];
+        assert_eq!(latest_active_group(&rows, true), Some("latest"));
+        assert_eq!(latest_active_group(&rows, false), None);
+        assert_eq!(latest_active_group(&rows[2..], true), None);
+    }
+}
+
 /// Shared dispatch for the window transcript and nested delegated transcripts.
-pub(crate) fn row(window: &Observer, row: &Row, cx: &mut Context<Observer>) -> AnyElement {
+pub(crate) fn row(
+    window: &Observer,
+    row: &Row,
+    active_group: Option<&str>,
+    cx: &mut Context<Observer>,
+) -> AnyElement {
     match row {
         Row::User(view) => window.user_row(view, cx),
         Row::Assistant(view) => window.assistant_row(view, cx),
-        Row::Activity(group) => window.activity_row(group, cx),
+        Row::Activity(group) => {
+            window.activity_row(group, active_group == Some(group.key.as_str()), cx)
+        }
         Row::Tool(tool) => window.tool_row(tool, cx),
         Row::SubAgent(card) => window.sub_agent_row(card, cx),
         Row::FinishTask(view) => window.finish_task_row(view, cx),
@@ -47,6 +93,7 @@ pub(crate) fn activity_group(
     let mut title = h_flex()
         .relative()
         .overflow_hidden()
+        .h(px(22.))
         .min_w_0()
         .gap_2()
         .child(Icon::new(group.icon).size(15.).color(muted));
@@ -88,21 +135,22 @@ pub(crate) fn activity_group(
             })
             .child(crate::ui::chrome_label(group.summary.clone())),
     );
-    if shimmer {
+    if shimmer && !cx.reduce_motion() {
         let clear = primary.opacity(0.);
-        let peak = primary.opacity(0.27);
+        let peak = primary.opacity(0.35);
         title = title.child(
             h_flex()
                 .absolute()
                 .top_0()
-                .bottom_0()
+                .h(px(22.))
+                .items_stretch()
                 .w(relative(0.45))
-                .child(div().w(relative(0.5)).h_full().bg(linear_gradient(
+                .child(div().flex_1().bg(linear_gradient(
                     90.,
                     linear_color_stop(clear, 0.),
                     linear_color_stop(peak, 1.),
                 )))
-                .child(div().w(relative(0.5)).h_full().bg(linear_gradient(
+                .child(div().flex_1().bg(linear_gradient(
                     90.,
                     linear_color_stop(peak, 0.),
                     linear_color_stop(clear, 1.),
@@ -110,7 +158,8 @@ pub(crate) fn activity_group(
                 .with_animation(
                     "activity-sweep",
                     Animation::new(std::time::Duration::from_secs(3))
-                        .repeat()
+                        .repeat_synced()
+                        .with_max_fps(30.)
                         .with_easing(ease_in_out),
                     |band, phase| band.left(relative(phase * 1.45 - 0.45)),
                 ),

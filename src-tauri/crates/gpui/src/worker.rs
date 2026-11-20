@@ -156,8 +156,37 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                         )
                         .await;
                         if let Ok(Ok(config)) = config {
+                            let show_cost = config["show_today_cost_stats"].as_bool() == Some(true);
                             if !send(&list_tx, 0, UpdateKind::Config(config, fetched_at)).await {
                                 return;
+                            }
+                            if show_cost {
+                                let fetch = |command| {
+                                    let path = chatspeed_runtime_client::data_command_path(command);
+                                    let client = &client;
+                                    async move { client.post(&path, &json!({})).await }
+                                };
+                                if let Ok((Ok(rows), Ok(providers))) =
+                                    tokio::time::timeout(Duration::from_secs(5), async {
+                                        tokio::join!(
+                                            fetch("get_ccproxy_today_cost_stats"),
+                                            fetch("get_all_ai_models")
+                                        )
+                                    })
+                                    .await
+                                {
+                                    if !send(
+                                        &list_tx,
+                                        0,
+                                        UpdateKind::TodayCost(native::today_cost(
+                                            &rows, &providers,
+                                        )),
+                                    )
+                                    .await
+                                    {
+                                        return;
+                                    }
+                                }
                             }
                         }
                     }
@@ -275,6 +304,39 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
+            Command::Rewind {
+                generation,
+                session,
+            } => {
+                let result = native::workflow_command(
+                    &options,
+                    "delete_last_workflow_message",
+                    json!({"session_id": session}),
+                    Some(&idempotency_key("rewind")),
+                )
+                .await
+                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+                if !send(&tx, generation, UpdateKind::Rewound(result)).await {
+                    return;
+                }
+            }
+            Command::CreateAutomation(spec) => {
+                let result = match native::connect(&options).await {
+                    Some(client) => client
+                        .post_with_idempotency(
+                            "/control/v1/automations",
+                            &spec,
+                            &idempotency_key("create-automation"),
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string()),
+                    None => Err(rust_i18n::t!("automation_create_failed").to_string()),
+                };
+                if !send(&tx, 0, UpdateKind::AutomationCreated(result)).await {
+                    return;
+                }
+            }
             Command::Stop { id } => {
                 if options.demo {
                     continue;
@@ -295,7 +357,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     if !send(
                         &tx,
                         0,
-                        UpdateKind::Error("demo mode cannot start a session".into()),
+                        UpdateKind::StartFailed("demo mode cannot start a session".into()),
                     )
                     .await
                     {
@@ -310,7 +372,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                         }
                     }
                     Err(error) => {
-                        if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        if !send(&tx, 0, UpdateKind::StartFailed(error)).await {
                             return;
                         }
                     }

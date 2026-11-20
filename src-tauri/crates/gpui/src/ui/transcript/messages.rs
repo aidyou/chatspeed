@@ -71,8 +71,8 @@ pub(crate) fn user_bubble(
                 .bg(surface)
                 .px_4()
                 .py_3()
-                // Keep the toggle entirely in the reserved space below the text.
-                .when(expandable, |bubble| bubble.pb(px(28.)))
+                // Keep the toggle in a side gutter instead of adding a blank row below.
+                .when(expandable, |bubble| bubble.pr(px(28.)))
                 .child(div().relative().child(text).when(collapsed, |body| {
                     body.child(
                         div()

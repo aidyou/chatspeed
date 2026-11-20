@@ -91,6 +91,80 @@ pub async fn config(options: &Options) -> Result<Value, String> {
     data_command(options, "get_all_config", json!({})).await
 }
 
+/// Match the desktop's estimate from current pricing, not stored historical costs.
+pub fn today_cost(rows: &Value, providers: &Value) -> f64 {
+    use std::collections::HashMap;
+    let mut by_id = HashMap::new();
+    let mut by_name = HashMap::new();
+    let rate = |p: &Value, field: &str| p[field].as_f64().unwrap_or(0.).max(0.);
+    fn insert<'a, K: Eq + std::hash::Hash>(
+        map: &mut HashMap<K, &'a Value>,
+        key: K,
+        pricing: &'a Value,
+    ) {
+        let priced = |p: &Value| {
+            ["inputPerMillion", "outputPerMillion", "cachePerMillion"]
+                .iter()
+                .any(|field| p[*field].as_f64().is_some_and(|v| v > 0.))
+        };
+        let entry = map.entry(key).or_insert(pricing);
+        if !priced(entry) && priced(pricing) {
+            *entry = pricing;
+        }
+    }
+    for provider in providers.as_array().into_iter().flatten() {
+        for model in provider["models"].as_array().into_iter().flatten() {
+            if let Some(id) = model["id"].as_str() {
+                if let Some(provider_id) = provider["id"].as_i64() {
+                    insert(&mut by_id, (provider_id, id), &model["pricing"]);
+                }
+            }
+            if let Some(name) = provider["name"].as_str() {
+                for key in ["id", "name"]
+                    .into_iter()
+                    .filter_map(|key| model[key].as_str())
+                {
+                    insert(&mut by_name, (name, key), &model["pricing"]);
+                }
+            }
+        }
+    }
+    rows.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let model = row["backendModel"].as_str()?;
+            let pricing = row["providerId"]
+                .as_i64()
+                .and_then(|id| by_id.get(&(id, model)))
+                .or_else(|| by_name.get(&(row["provider"].as_str()?, model)))?;
+            let input = rate(row, "totalInputTokens");
+            let cache = rate(row, "totalCacheTokens");
+            Some(
+                ((input - cache).max(0.) * rate(pricing, "inputPerMillion")
+                    + cache * rate(pricing, "cachePerMillion")
+                    + rate(row, "totalOutputTokens") * rate(pricing, "outputPerMillion"))
+                    / 1_000_000.
+                    * pricing["multiplier"].as_f64().unwrap_or(1.).max(0.),
+            )
+        })
+        .sum()
+}
+
+pub fn compact_cost(cost: f64) -> String {
+    if !cost.is_finite() || cost == 0. {
+        "$0.00".into()
+    } else if cost >= 1000. {
+        format!("${:.2}K", cost / 1000.)
+    } else if cost >= 1. {
+        format!("${cost:.2}")
+    } else if cost >= 0.01 {
+        format!("${cost:.4}")
+    } else {
+        format!("${cost:.6}")
+    }
+}
+
 /// Directory names the workflow treats as workspace noise, mirroring
 /// `is_workspace_noise_name` in the runtime so the tree shows the same entries
 /// the agent's `list_dir` tool reports.
@@ -165,6 +239,17 @@ mod tests {
 
         assert!(list_dir(root.join("b.txt").to_string_lossy().as_ref()).is_err());
         std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn today_cost_uses_provider_id_and_cached_input_pricing() {
+        let rows = json!([{"providerId": 9, "provider": "old name", "backendModel": "m",
+            "totalInputTokens": 1000000, "totalCacheTokens": 500000,
+            "totalOutputTokens": 250000, "totalEstimatedCost": 1000}]);
+        let providers = json!([{"id": 9, "name": "renamed", "models": [{"id": "m",
+            "pricing": {"inputPerMillion": 2, "cachePerMillion": 1, "outputPerMillion": 4, "multiplier": 2}}]}]);
+        assert_eq!(compact_cost(today_cost(&rows, &providers)), "$5.00");
+        assert_eq!(compact_cost(today_cost(&rows, &json!([]))), "$0.00");
     }
 
     #[test]

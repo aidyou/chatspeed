@@ -154,6 +154,8 @@ pub struct Page {
     /// Runtime execution context: wait reason, awaiting tool call, pending tools.
     #[serde(default, alias = "executionContext")]
     pub execution_context: Value,
+    #[serde(default, alias = "canRewindTail")]
+    pub can_rewind_tail: bool,
 }
 
 /// UI requests use generations to invalidate all old-selection results.
@@ -184,6 +186,11 @@ pub enum Command {
         id: String,
         signal: Value,
     },
+    Rewind {
+        generation: u64,
+        session: String,
+    },
+    CreateAutomation(Value),
     Stop {
         id: String,
     },
@@ -279,6 +286,9 @@ pub struct Update {
 
 /// Control messages share the reliable queue with text deltas.
 pub enum UpdateKind {
+    TodayCost(f64),
+    Rewound(Result<bool, String>),
+    AutomationCreated(Result<(), String>),
     Sessions(Vec<Session>),
     Snapshot(Page),
     Older(Page),
@@ -306,6 +316,7 @@ pub enum UpdateKind {
     DecodeUs(u64),
     /// A session the runtime accepted and started for the first prompt.
     Opened(String),
+    StartFailed(String),
     /// A child session snapshot for an expanded sub-agent card.
     Child(String, Page),
     /// A user-action failure worth showing above the composer.
