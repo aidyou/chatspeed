@@ -234,10 +234,16 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
             cx.listener(|this, _, window, cx| this.confirm_rewind(window, cx)),
         ))
         .when(super::window_pin::supported(window), |row| {
-            row.child(icon_button(
+            row.child(super::icon_button_element(
                 "pin-window",
-                "pin",
-                if observer.pinned { accent } else { secondary },
+                Icon::new("pin")
+                    .size(18.)
+                    .color(if observer.pinned {
+                        crate::success().into()
+                    } else {
+                        secondary
+                    })
+                    .rotate(if observer.pinned { 0. } else { 45. }),
                 skin.hover,
                 cx.listener(|this, _, window, cx| this.toggle_pin(window, cx)),
             ))

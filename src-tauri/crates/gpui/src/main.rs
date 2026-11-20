@@ -412,12 +412,19 @@ struct Observer {
     palette_applied: bool,
     /// Size to apply on the next frame, from the remembered workflow geometry.
     pending_window_size: Option<Size<Pixels>>,
+    #[cfg(target_os = "windows")]
+    pending_window_position: Option<(i32, i32, String)>,
     /// Remembered size already applied, so the periodic config poll cannot
     /// override a size the user picked in this window.
     applied_window_size: Option<Size<Pixels>>,
+    #[cfg(target_os = "windows")]
+    window_position_read: bool,
     copy_flash: Arc<Mutex<Option<CopyFlash>>>,
     /// Sidebar collapse state, matching the Vue compact sidebar.
     sidebar_collapsed: bool,
+    sidebar_changed: bool,
+    pending_settings: BTreeMap<(String, &'static str), (bool, Option<Instant>)>,
+    send_with_shift: bool,
     /// Tab shown in the expanded sidebar, and the rail entry that selects it.
     sidebar_tab: ui::sidebar::SidebarTab,
     rail_tab: ui::sidebar::RailTab,
@@ -468,6 +475,7 @@ struct Observer {
     /// Selected option per `ask_user` group, keyed by `tool_call_id:group`.
     ask_user_choice: BTreeMap<String, usize>,
     /// Free text typed for an `ask_user` "Other" row, by the same key.
+    approval_drafts: BTreeMap<String, Entity<TextareaState>>,
     ask_user_text: BTreeMap<String, Entity<TextareaState>>,
     /// Child transcripts requested but not loaded yet.
     child_pending: BTreeSet<String>,
@@ -497,7 +505,8 @@ struct Observer {
     /// Image files attached to the next message, shown above the box.
     attachments: Vec<Attachment>,
     /// The `@` query the file panel answered, so a stale list is never shown.
-    file_query: String,
+    suggestions: ui::composer::suggestions::State,
+    _completion_keys: Subscription,
     file_results: Vec<serde_json::Value>,
     task: Task<()>,
 }
@@ -533,13 +542,7 @@ impl Observer {
         cx.subscribe_in(
             &composer,
             window,
-            |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { shift: false, .. } => {
-                    // Enter completes the open `@`/`/` panel before it sends.
-                    if !ui::composer::suggestions::apply_first(this, window, cx) {
-                        this.send_message(window, cx);
-                    }
-                }
+            |this, _, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
                     ui::composer::suggestions::refresh(this, cx);
                     cx.notify();
@@ -558,6 +561,48 @@ impl Observer {
             },
         )
         .detach();
+        cx.observe_in(&composer, window, |this, _, _, cx| {
+            if ui::composer::suggestions::refresh(this, cx) {
+                cx.notify();
+            }
+        })
+        .detach();
+        let owner = cx.entity().downgrade();
+        let completion_keys = cx.intercept_keystrokes(move |event, window, cx| {
+            let key = &event.keystroke;
+            let modifiers = key.modifiers;
+            if modifiers.control
+                || modifiers.platform
+                || modifiers.alt
+                || modifiers.function
+                || (modifiers.shift && key.key != "enter")
+                || !matches!(key.key.as_str(), "enter" | "tab" | "up" | "down" | "escape")
+            {
+                return;
+            }
+            let _ = owner.update(cx, |this, cx| {
+                let input = this.composer.clone();
+                if !input.read(cx).focus_handle(cx).is_focused(window) {
+                    return;
+                }
+                let composing = input.update(cx, |state, cx| {
+                    state.marked_text_range(window, cx).is_some()
+                });
+                if composing {
+                    return;
+                }
+                let consumed = ui::composer::suggestions::handle_key(this, &key.key, window, cx);
+                let send =
+                    !consumed && key.key == "enter" && modifiers.shift == this.send_with_shift;
+                if send {
+                    this.send_message(window, cx);
+                }
+                if consumed || send {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            });
+        });
         let session_search =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("search_sessions").to_string()));
         // The list filters while the query changes, so every edit repaints it.
@@ -610,9 +655,16 @@ impl Observer {
             applied_primary: DEFAULT_PRIMARY,
             palette_applied: false,
             pending_window_size: None,
+            #[cfg(target_os = "windows")]
+            pending_window_position: None,
             applied_window_size: None,
+            #[cfg(target_os = "windows")]
+            window_position_read: false,
             copy_flash: Arc::new(Mutex::new(None)),
             sidebar_collapsed: false,
+            sidebar_changed: false,
+            pending_settings: BTreeMap::new(),
+            send_with_shift: false,
             sidebar_tab: ui::sidebar::SidebarTab::Tasks,
             rail_tab: ui::sidebar::RailTab::Tasks,
             session_search,
@@ -645,6 +697,7 @@ impl Observer {
             toast: None,
             child_rows: BTreeMap::new(),
             ask_user_choice: BTreeMap::new(),
+            approval_drafts: BTreeMap::new(),
             ask_user_text: BTreeMap::new(),
             child_pending: BTreeSet::new(),
             agents: Vec::new(),
@@ -662,7 +715,8 @@ impl Observer {
             skills_draft: None,
             tool_draft: None,
             attachments: Vec::new(),
-            file_query: String::new(),
+            suggestions: Default::default(),
+            _completion_keys: completion_keys,
             file_results: Vec::new(),
             task,
         };
@@ -695,7 +749,7 @@ impl Observer {
         if let Some(text) = self.restore_composer.take() {
             self.composer
                 .update(cx, |state, cx| state.set_value(text, window, cx));
-            self.file_query.clear();
+            self.suggestions.file_request = None;
             self.file_results.clear();
         }
     }
@@ -717,6 +771,7 @@ impl Observer {
             self.switch_draft(Some(id), cx);
         }
         self.model.select();
+        self.approval_drafts.clear();
         self.rewind_pending = false;
         self.markdown.clear();
         self.expanded.clear();
@@ -758,7 +813,27 @@ impl Observer {
     }
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_collapsed = !self.sidebar_collapsed;
+        self.set_sidebar_collapsed(!self.sidebar_collapsed, cx);
+    }
+
+    fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut Context<Self>) {
+        if self.sidebar_collapsed == collapsed {
+            return;
+        }
+        self.sidebar_collapsed = collapsed;
+        self.sidebar_changed = true;
+        if self
+            .worker
+            .commands
+            .try_send(Command::SetSidebarCollapsed(collapsed))
+            .is_err()
+        {
+            self.show_toast(
+                ToastKind::Warning,
+                t!("sidebar_save_failed").into_owned(),
+                cx,
+            );
+        }
         // Vue drops the root filter when the panel collapses.
         if self.sidebar_collapsed {
             self.session_root_filter = None;
@@ -810,7 +885,7 @@ impl Observer {
 
     /// Vue's titlebar path opens the authorized-paths tab, expanding first.
     fn open_files_tab(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_collapsed = false;
+        self.set_sidebar_collapsed(false, cx);
         self.sidebar_tab = ui::sidebar::SidebarTab::Files;
         cx.notify();
     }
@@ -1129,7 +1204,11 @@ impl Observer {
             .as_str()
             .unwrap_or("")
             .to_lowercase();
-        self.planning_mode = phase == "planning";
+        self.planning_mode = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.pending_settings.get(&(id.clone(), "phase")))
+            .map_or(phase == "planning", |(enabled, _)| *enabled);
     }
 
     fn sandbox_mode(&self) -> String {
@@ -1154,6 +1233,55 @@ impl Observer {
             .or_else(|| config["sandbox_scheme_id"].as_str())
             .filter(|id| !id.is_empty())
             .map(str::to_owned)
+    }
+
+    fn can_toggle_planning(&self) -> bool {
+        if self.selected.is_none() {
+            return true;
+        }
+        if self.model.workflow.is_null() || self.model.has_live_session || self.workflow_running() {
+            return false;
+        }
+        self.can_switch_agent() || self.can_clear_context()
+    }
+
+    fn can_clear_context(&self) -> bool {
+        self.selected.is_some()
+            && (matches!(
+                self.model.state.as_str(),
+                "completed" | "error" | "failed" | "cancelled"
+            ) || (self.model.state == "pending"
+                && !self.model.has_live_session
+                && self.model.wait_reason.is_empty()))
+    }
+
+    fn toggle_planning(&mut self, cx: &mut Context<Self>) {
+        if !self.can_toggle_planning() {
+            return;
+        }
+        let enabled = !self.planning_mode;
+        if let Some(session) = self.selected.clone() {
+            let key = (session.clone(), "phase");
+            if self.options.demo
+                || self
+                    .pending_settings
+                    .get(&key)
+                    .is_some_and(|(_, ack)| ack.is_none())
+            {
+                return;
+            }
+            if self
+                .worker
+                .commands
+                .try_send(Command::SetPlanning { session, enabled })
+                .is_err()
+            {
+                return;
+            }
+            self.pending_settings.insert(key, (enabled, None));
+        }
+        self.planning_mode = enabled;
+        cx.notify();
     }
 
     /// Vue's `canSwitchCurrentWorkflowAgent`: a live session blocks switching,
@@ -1192,11 +1320,49 @@ impl Observer {
     }
 
     fn auto_compress_enabled(&self) -> bool {
-        self.agent_bool("autoCompress", "auto_compress", false)
+        self.runtime_preference("autoCompress", "auto_compress")
+    }
+
+    fn runtime_preference(&self, key: &'static str, snake: &str) -> bool {
+        self.selected
+            .as_ref()
+            .and_then(|id| self.pending_settings.get(&(id.clone(), key)))
+            .map(|(enabled, _)| *enabled)
+            .unwrap_or_else(|| self.agent_bool(key, snake, false))
+    }
+
+    fn toggle_runtime_preference(&mut self, key: &'static str, cx: &mut Context<Self>) {
+        let Some(session) = self.selected.clone() else {
+            return;
+        };
+        let entry = (session.clone(), key);
+        if self.options.demo
+            || self
+                .pending_settings
+                .get(&entry)
+                .is_some_and(|(_, ack)| ack.is_none())
+        {
+            return;
+        }
+        let (enabled, command) = match key {
+            "autoCompress" => {
+                let enabled = !self.auto_compress_enabled();
+                (enabled, Command::SetAutoCompress { session, enabled })
+            }
+            "finalAudit" => {
+                let enabled = !self.final_audit_enabled();
+                (enabled, Command::SetFinalAudit { session, enabled })
+            }
+            _ => return,
+        };
+        if self.worker.commands.try_send(command).is_ok() {
+            self.pending_settings.insert(entry, (enabled, None));
+            cx.notify();
+        }
     }
 
     fn final_audit_enabled(&self) -> bool {
-        self.agent_bool("finalAudit", "final_audit", false)
+        self.runtime_preference("finalAudit", "final_audit")
     }
 
     fn approval_level(&self) -> String {
@@ -1245,6 +1411,7 @@ impl Observer {
         }
         self.rewind_pending = false;
         self.model.select();
+        self.approval_drafts.clear();
         self.rows.clear();
         self.markdown.clear();
         self.expanded.clear();
@@ -1452,11 +1619,36 @@ impl Observer {
         }
     }
 
-    fn stop_workflow(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected.clone() {
-            let _ = self.worker.commands.try_send(Command::Stop { id });
-            cx.notify();
-        }
+    fn stop_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.selected.clone().filter(|_| self.workflow_running()) else {
+            return;
+        };
+        let generation = self.model.generation;
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &t!("stop_confirm"),
+            None,
+            &[
+                PromptButton::cancel(t!("action_cancel").into_owned()),
+                PromptButton::new(t!("stop_workflow").into_owned()),
+            ],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if answer.await.ok() != Some(1) {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                if this.selected.as_deref() == Some(id.as_str())
+                    && this.model.accepts(generation)
+                    && this.workflow_running()
+                {
+                    let _ = this.worker.commands.try_send(Command::Stop { id });
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn toggle_composer_expanded(&mut self, cx: &mut Context<Self>) {
@@ -1535,14 +1727,19 @@ impl Observer {
         let Some(session) = self.selected.clone() else {
             return;
         };
+        let reason = self
+            .approval_drafts
+            .get(&tool_call_id)
+            .map(|input| input.read(cx).value().trim().to_owned());
+        let mut signal = serde_json::json!({"type":"approval", "id":tool_call_id, "approved":approved, "approve_all":approve_all});
+        if !approved {
+            if let Some(reason) = reason.filter(|reason| !reason.is_empty()) {
+                signal["rejection_message"] = Value::String(reason);
+            }
+        }
         let _ = self.worker.commands.try_send(Command::Signal {
             id: session,
-            signal: serde_json::json!({
-                "type": "approval",
-                "id": tool_call_id,
-                "approved": approved,
-                "approve_all": approve_all,
-            }),
+            signal,
         });
         cx.notify();
     }
@@ -1781,6 +1978,22 @@ impl Observer {
                 continue;
             }
             match update.kind {
+                UpdateKind::SettingsChanged {
+                    session,
+                    key,
+                    result,
+                } => {
+                    let entry = (session, key);
+                    if let Err(error) = result {
+                        self.pending_settings.remove(&entry);
+                        if key == "phase" && self.selected.as_ref() == Some(&entry.0) {
+                            self.sync_planning_mode();
+                        }
+                        self.show_toast(ToastKind::Error, error, cx);
+                    } else if let Some((_, ack)) = self.pending_settings.get_mut(&entry) {
+                        *ack = Some(Instant::now());
+                    }
+                }
                 UpdateKind::TodayCost(amount) => self.today_cost = amount,
                 UpdateKind::Rewound(result) => {
                     self.rewind_pending = false;
@@ -1919,9 +2132,13 @@ impl Observer {
                 UpdateKind::Toast(message) => {
                     self.show_toast(ToastKind::Success, message, cx);
                 }
-                UpdateKind::Files { query, files } => {
-                    // Only the newest query may paint the `@` panel.
-                    if query == self.file_query {
+                UpdateKind::Files { request, files } => {
+                    if self
+                        .suggestions
+                        .file_request
+                        .as_ref()
+                        .is_some_and(|(id, _, _)| *id == request)
+                    {
                         self.file_results = files;
                     }
                     cx.notify();
@@ -1957,6 +2174,13 @@ impl Observer {
                     }
                 }
                 UpdateKind::Snapshot(page) => {
+                    if let (Some(session), Some(fetched_from)) =
+                        (self.selected.as_ref(), page.fetched_from)
+                    {
+                        self.pending_settings.retain(|(id, _), (_, ack)| {
+                            id != session || !ack.is_some_and(|at| fetched_from > at)
+                        });
+                    }
                     self.model.page(page, false);
                     self.sync_planning_mode();
                     self.auto_expand_first_root(cx);
@@ -2055,6 +2279,12 @@ impl Observer {
 
     /// Mirrors the runtime preferences shared with the Vue titlebar.
     fn apply_config(&mut self, config: &Value, fetched_at: Instant, cx: &mut Context<Self>) {
+        if !self.sidebar_changed {
+            self.sidebar_collapsed = config["gpui_workflow_sidebar_collapsed"]
+                .as_bool()
+                .unwrap_or(false);
+        }
+        self.send_with_shift = config["send_message_key"].as_str() == Some("Shift+Enter");
         self.show_menu_button = config["show_menu_button"].as_bool().unwrap_or(true);
         self.show_today_cost = config["show_today_cost_stats"].as_bool().unwrap_or(false);
         if !self.show_today_cost {
@@ -2081,6 +2311,11 @@ impl Observer {
         set_primary(config["primary_color"].as_str().unwrap_or("green"));
         self.proxy_targets = config["chat_completion_proxy"].clone();
         self.adopt_window_size(config);
+        #[cfg(target_os = "windows")]
+        if !std::mem::replace(&mut self.window_position_read, true) {
+            self.pending_window_position =
+                prefs::saved_window_position(config).map(|(x, y, name)| (x, y, name.to_owned()));
+        }
         self.theme_setting = config["theme"].as_str().unwrap_or("system").to_owned();
         self.refresh_palette(cx);
         cx.notify();
@@ -2406,7 +2641,15 @@ impl Observer {
         let open = self.expanded.contains(&key);
         let target = key.clone();
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
-        ui::transcript::messages::thought(key, title, text, open, on_toggle, cx)
+        let live = key == "msg--1:thought"
+            && self.workflow_running()
+            && self.model.live.message.is_empty();
+        let title = if live {
+            t!("live_thinking").to_string()
+        } else {
+            title
+        };
+        ui::transcript::messages::thought(key, title, text, open, live, on_toggle, cx)
     }
 
     fn assistant_row(&self, view: &AssistantView, cx: &mut Context<Self>) -> AnyElement {
@@ -2575,22 +2818,40 @@ impl Observer {
         } else if pending && tool.choices.is_empty() && tool.name != "ask_user" {
             // The approval card owns the diff/command/plan while pending, so the
             // regular detail would only repeat it. `ask_user` keeps its options.
-            let reject_id = tool.tool_call_id.clone();
-            let approve_id = tool.tool_call_id.clone();
-            let reject = cx.listener(move |this, _, _, cx| {
-                this.submit_approval(reject_id.clone(), false, false, cx)
-            });
-            let approve = cx.listener(move |this, _, _, cx| {
-                this.submit_approval(approve_id.clone(), true, false, cx)
-            });
-            body = body.child(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .pl_6()
-                    .pb_2()
-                    .child(ui::approval::approval_card(tool, reject, approve, cx)),
-            );
+            let id = tool.tool_call_id.clone();
+            let owner = cx.entity().downgrade();
+            let generation = self.model.generation;
+            let dispatch = move |decision, _: &mut Window, cx: &mut App| {
+                let _ = owner.update(cx, |this, cx| {
+                    if !this.model.accepts(generation) || !this.approval_drafts.contains_key(&id) {
+                        return;
+                    }
+                    use ui::approval::Decision;
+                    match decision {
+                        Decision::Reject => this.submit_approval(id.clone(), false, false, cx),
+                        Decision::Approve => this.submit_approval(id.clone(), true, false, cx),
+                        Decision::Whitelist => this.submit_approval(id.clone(), true, true, cx),
+                        Decision::Batch => {
+                            let tool_ids = this.approval_drafts.keys().cloned().collect();
+                            if let Some(session) = this.selected.clone() {
+                                let _ = this
+                                    .worker
+                                    .commands
+                                    .try_send(Command::ApprovalBatch { session, tool_ids });
+                            }
+                        }
+                    }
+                });
+            };
+            body = body.child(div().w_full().min_w_0().pl_6().pb_2().child(
+                ui::approval::approval_card(
+                    tool,
+                    self.approval_drafts.get(&tool.tool_call_id),
+                    self.approval_drafts.len(),
+                    dispatch,
+                    cx,
+                ),
+            ));
         } else {
             body = body.child(self.tool_detail(tool, cx));
         }
@@ -2603,6 +2864,7 @@ impl Observer {
             detail = detail.child(h_flex().child(ui::running_badge(
                 t!("executing").to_string(),
                 SharedString::from(format!("{}:running", tool.detail_key)),
+                cx,
             )));
         }
         let answered =
@@ -3096,6 +3358,17 @@ impl Render for Observer {
             }
         }
 
+        #[cfg(target_os = "windows")]
+        if let Some((x, y, name)) = self.pending_window_position.take() {
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |window, _| {
+                    if !window.is_maximized() && !window.is_fullscreen() {
+                        ui::window_pin::restore_position(window, x, y, &name);
+                    }
+                });
+            });
+        }
+
         // Apply the palette before the first frame, then follow OS light/dark
         // switches while the setting is `system`.
         if !self.palette_applied
@@ -3113,6 +3386,34 @@ impl Render for Observer {
 
         // The answer fields are entities, so they are created outside the row
         // builder; Vue keeps them mounted under every waiting question.
+        let approval_ids: BTreeSet<_> = self
+            .model
+            .pending_tool_ids
+            .iter()
+            .cloned()
+            .chain(
+                self.model
+                    .messages
+                    .values()
+                    .filter(|row| {
+                        row.metadata["approval_status"] == "pending"
+                            || row.metadata["execution_status"] == "pending_approval"
+                    })
+                    .filter_map(|row| row.metadata["tool_call_id"].as_str().map(str::to_owned)),
+            )
+            .filter(|id| self.model.awaiting_user_tool_call_id.as_ref() != Some(id))
+            .collect();
+        self.approval_drafts
+            .retain(|id, _| approval_ids.contains(id));
+        for id in approval_ids {
+            self.approval_drafts.entry(id).or_insert_with(|| {
+                cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .placeholder(t!("approval_rejection_reason").into_owned())
+                        .auto_grow(2, 4)
+                })
+            });
+        }
         self.ensure_ask_user_fields(window, cx);
 
         // The resize band owns the press; this frame follows the pointer while

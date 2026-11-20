@@ -32,11 +32,23 @@ mod locale_tests {
 
     #[test]
     fn status_placeholders_use_rust_i18n_syntax() {
-        let locale = include_str!("../locales/observer.yml");
-        assert!(
-            !locale.contains("{{"),
-            "vue-style placeholder left in locale"
-        );
+        let locales = [
+            include_str!("../locales/en.yml"),
+            include_str!("../locales/zh-Hans.yml"),
+            include_str!("../locales/zh-Hant.yml"),
+        ];
+        let keys = |text: &'static str| {
+            text.lines()
+                .filter_map(|line| line.split_once(':').map(|(key, _)| key))
+                .collect::<Vec<_>>()
+        };
+        for locale in locales {
+            assert!(
+                !locale.contains("{{"),
+                "vue-style placeholder left in locale"
+            );
+            assert_eq!(keys(locale), keys(locales[0]));
+        }
         assert_eq!(
             rust_i18n::t!(
                 "live_elapsed",

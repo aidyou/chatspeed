@@ -35,8 +35,9 @@ impl RenderOnce for ChromeLabel {
     }
 }
 
-pub(crate) fn running_badge(label: String, id: impl Into<ElementId>) -> impl IntoElement {
-    let color = crate::success();
+pub(crate) fn running_badge(label: String, id: impl Into<ElementId>, cx: &App) -> impl IntoElement {
+    use gpui_kit::component::ActiveTheme;
+    let color = cx.theme().primary;
     gpui_kit::component::h_flex()
         .flex_none()
         .gap_1()
@@ -46,7 +47,12 @@ pub(crate) fn running_badge(label: String, id: impl Into<ElementId>) -> impl Int
         .bg(color.opacity(0.12))
         .text_color(color)
         .text_size(px(11.))
-        .child(Icon::new("loading").size(12.).color(color).spin(id))
+        .child(
+            Icon::new("loading")
+                .size(12.)
+                .color(color)
+                .spin(id, icon::Spin::Eased),
+        )
         .child(chrome_label(label))
 }
 
@@ -123,6 +129,15 @@ pub fn icon_button(
     hover: Hsla,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    icon_button_element(id, Icon::new(icon).size(18.).color(color), hover, on_click)
+}
+
+pub(super) fn icon_button_element(
+    id: &'static str,
+    icon: Icon,
+    hover: Hsla,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
     div()
         .id(id)
         .flex_none()
@@ -134,7 +149,7 @@ pub fn icon_button(
         .rounded(px(8.))
         .cursor_pointer()
         .hover(|style| style.bg(hover))
-        .child(Icon::new(icon).size(18.).color(color))
+        .child(icon)
         // A control that takes the press must not also start the window move.
         .on_mouse_down(MouseButton::Left, |_, window, cx| {
             window.prevent_default();

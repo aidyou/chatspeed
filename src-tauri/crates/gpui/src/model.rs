@@ -21,6 +21,7 @@ pub struct Model {
     pub live_overflow: bool,
     pub state: String,
     pub can_rewind_tail: bool,
+    pub has_live_session: bool,
     /// Backend-owned compression hint, mirrored from `compression_status` events.
     pub compressing: bool,
     pub compression_message: String,
@@ -71,6 +72,14 @@ impl Model {
     }
 
     pub fn page(&mut self, mut page: Page, older: bool) {
+        if older {
+            self.before = page.message_window_before_id;
+            self.hidden = page.hidden_earlier_message_count;
+            self.messages
+                .extend(page.messages.into_iter().map(|m| (m.id, m)));
+            self.reading_history = true;
+            return;
+        }
         if let Some(status) = page.workflow["status"].as_str() {
             page.status = status.to_owned();
         }
@@ -87,10 +96,9 @@ impl Model {
             self.roots = crate::types::workflow_roots(&page.workflow);
         }
         let context = &page.execution_context;
-        if !older {
-            self.can_rewind_tail = page.can_rewind_tail;
-            self.reconcile_queue(context, &page.messages);
-        }
+        self.can_rewind_tail = page.can_rewind_tail;
+        self.has_live_session = page.has_live_session;
+        self.reconcile_queue(context, &page.messages);
         self.wait_reason = context["waitReason"]
             .as_str()
             .or_else(|| context["wait_reason"].as_str())
@@ -122,26 +130,22 @@ impl Model {
             .messages
             .iter()
             .any(|row| row.role == "assistant" && !self.messages.contains_key(&row.id));
-        if !older
-            && (finalized_live
-                || matches!(
-                    page.status.as_str(),
-                    "completed" | "failed" | "cancelled" | "error"
-                ))
+        if finalized_live
+            || matches!(
+                page.status.as_str(),
+                "completed" | "failed" | "cancelled" | "error"
+            )
         {
             self.live = Message::default();
             self.live_overflow = false;
         }
-        if older || initial {
+        if initial {
             self.before = page.message_window_before_id;
             self.hidden = page.hidden_earlier_message_count;
         }
         // Snapshot windows are partial: never replace already loaded history.
         self.messages
             .extend(page.messages.into_iter().map(|m| (m.id, m)));
-        if older {
-            self.reading_history = true;
-        }
         if initial {
             self.live = Message::default();
             self.tools.clear();
@@ -344,6 +348,40 @@ impl Model {
                         self.live_overflow = false;
                     }
                     self.messages.insert(id, row);
+                }
+            }
+            "confirm" | "approval_requested" => {
+                if let Some(id) = event["tool_call_id"]
+                    .as_str()
+                    .or_else(|| event["id"].as_str())
+                {
+                    let mut preview = event.clone();
+                    preview["tool_call_id"] = json!(id);
+                    preview["execution_status"] = json!("pending_approval");
+                    self.pending_tool_ids.insert(id.to_owned());
+                    if !self.tools.contains_key(id) {
+                        self.tool_order.push(id.to_owned());
+                    }
+                    self.tools.insert(id.to_owned(), preview);
+                }
+            }
+            "approval_resolved" => {
+                if let Some(id) = event["tool_call_id"].as_str() {
+                    self.pending_tool_ids.remove(id);
+                    self.tools.remove(id);
+                    self.tool_order.retain(|tool| tool != id);
+                    for row in self.messages.values_mut().rev() {
+                        if row.metadata["tool_call_id"].as_str() == Some(id) {
+                            row.metadata["approval_status"] = event["approval_status"].clone();
+                            row.metadata["execution_status"] =
+                                json!(if event["approved"].as_bool() == Some(true) {
+                                    "approval_submitted"
+                                } else {
+                                    "rejected"
+                                });
+                            break;
+                        }
+                    }
                 }
             }
             "tool_started" | "tool_completed" | "tool_failed" => {

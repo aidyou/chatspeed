@@ -139,30 +139,41 @@ pub(crate) fn activity_group(
         let clear = primary.opacity(0.);
         let peak = primary.opacity(0.35);
         title = title.child(
-            h_flex()
-                .absolute()
-                .top_0()
-                .h(px(22.))
-                .items_stretch()
-                .w(relative(0.45))
-                .child(div().flex_1().bg(linear_gradient(
-                    90.,
-                    linear_color_stop(clear, 0.),
-                    linear_color_stop(peak, 1.),
-                )))
-                .child(div().flex_1().bg(linear_gradient(
-                    90.,
-                    linear_color_stop(peak, 0.),
-                    linear_color_stop(clear, 1.),
-                )))
-                .with_animation(
-                    "activity-sweep",
-                    Animation::new(std::time::Duration::from_secs(3))
-                        .repeat_synced()
-                        .with_max_fps(30.)
-                        .with_easing(ease_in_out),
-                    |band, phase| band.left(relative(phase * 1.45 - 0.45)),
-                ),
+            div().absolute().inset_0().with_animation(
+                "activity-sweep",
+                Animation::new(std::time::Duration::from_secs(3))
+                    .repeat_synced()
+                    .with_max_fps(30.)
+                    .with_easing(ease_in_out),
+                move |track, phase| {
+                    track.child(
+                        canvas(
+                            |_, _, _| (),
+                            move |bounds, (), window, _| {
+                                let half = bounds.size.width * 0.225;
+                                let x = bounds.origin.x + (bounds.size.width + half * 2.) * phase
+                                    - half * 2.;
+                                let size = size(half, bounds.size.height);
+                                for (offset, from, to) in
+                                    [(px(0.), clear, peak), (half, peak, clear)]
+                                {
+                                    let band =
+                                        Bounds::new(point(x + offset, bounds.origin.y), size);
+                                    window.paint_quad(fill(
+                                        band,
+                                        linear_gradient(
+                                            90.,
+                                            linear_color_stop(from, 0.),
+                                            linear_color_stop(to, 1.),
+                                        ),
+                                    ));
+                                }
+                            },
+                        )
+                        .size_full(),
+                    )
+                },
+            ),
         );
     }
     header = header

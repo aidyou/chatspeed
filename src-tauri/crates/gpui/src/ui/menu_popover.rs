@@ -26,25 +26,42 @@ pub(super) struct MenuPopover {
     content: Box<MenuContent>,
 }
 
-type MenuContent = dyn Fn(&mut PopoverState, &mut Window, &mut Context<PopoverState>) -> Stateful<Div>;
+type MenuContent =
+    dyn Fn(&mut PopoverState, &mut Window, &mut Context<PopoverState>) -> Stateful<Div>;
 
 impl MenuPopover {
-    pub(super) fn new(id: &'static str, button: AnyElement, content: impl Fn(&mut PopoverState, &mut Window, &mut Context<PopoverState>) -> Stateful<Div> + 'static) -> Self {
-        Self { id, button, content: Box::new(content) }
+    pub(super) fn new(
+        id: &'static str,
+        button: AnyElement,
+        content: impl Fn(&mut PopoverState, &mut Window, &mut Context<PopoverState>) -> Stateful<Div>
+            + 'static,
+    ) -> Self {
+        Self {
+            id,
+            button,
+            content: Box::new(content),
+        }
     }
 }
 
 impl RenderOnce for MenuPopover {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let top = window
-            .use_keyed_state(SharedString::from(format!("{}-trigger-top", self.id)), cx, |_, _| Rc::new(Cell::new(None)))
+            .use_keyed_state(
+                SharedString::from(format!("{}-trigger-top", self.id)),
+                cx,
+                |_, _| Rc::new(Cell::new(None)),
+            )
             .read(cx)
             .clone();
         let measured = top.clone();
         let button = div().relative().flex_none().child(self.button).on_prepaint(
             move |bounds, window, _| {
                 let next = bounds.top();
-                if measured.get().is_none_or(|old: Pixels| (old - next).abs() >= px(1.)) {
+                if measured
+                    .get()
+                    .is_none_or(|old: Pixels| (old - next).abs() >= px(1.))
+                {
                     measured.set(Some(next));
                     window.on_next_frame(|window, _| window.refresh());
                 }

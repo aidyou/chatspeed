@@ -141,6 +141,8 @@ pub struct Message {
 /// Bounded history response, either a snapshot or the older-message adapter.
 #[derive(Default, Deserialize)]
 pub struct Page {
+    #[serde(skip)]
+    pub fetched_from: Option<Instant>,
     #[serde(default)]
     pub status: String,
     #[serde(default)]
@@ -156,11 +158,18 @@ pub struct Page {
     pub execution_context: Value,
     #[serde(default, alias = "canRewindTail")]
     pub can_rewind_tail: bool,
+    #[serde(default, alias = "hasLiveSession")]
+    pub has_live_session: bool,
 }
 
 /// UI requests use generations to invalidate all old-selection results.
 pub enum Command {
     DesktopMenu(chatspeed_runtime_client::desktop_menu::Action),
+    ApprovalBatch {
+        session: String,
+        tool_ids: Vec<String>,
+    },
+    SetSidebarCollapsed(bool),
     SetSound {
         chime: crate::chimes::Chime,
         muted: bool,
@@ -271,6 +280,7 @@ pub enum Command {
     },
     /// Searches the authorized roots for the `@` file panel.
     SearchFiles {
+        request: u64,
         paths: Vec<String>,
         query: String,
     },
@@ -286,6 +296,11 @@ pub struct Update {
 
 /// Control messages share the reliable queue with text deltas.
 pub enum UpdateKind {
+    SettingsChanged {
+        session: String,
+        key: &'static str,
+        result: Result<(), String>,
+    },
     TodayCost(f64),
     Rewound(Result<bool, String>),
     AutomationCreated(Result<(), String>),
@@ -334,7 +349,7 @@ pub enum UpdateKind {
     Tools(Vec<Value>),
     /// Files matching the `@` query, keyed by the query they answered.
     Files {
-        query: String,
+        request: u64,
         files: Vec<Value>,
     },
     /// Children of a directory the authorized-path tree expanded.

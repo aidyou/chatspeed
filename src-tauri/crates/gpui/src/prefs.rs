@@ -7,6 +7,15 @@ use serde_json::Value;
 /// Runtime configuration key the desktop stores the workflow window size under.
 pub const WORKFLOW_WINDOW_SIZE_KEY: &str = "workflow_window_size";
 
+/// Tauri saves the physical outer origin and the monitor name together.
+pub fn saved_window_position(config: &Value) -> Option<(i32, i32, &str)> {
+    let saved = config.get("workflow_window_position")?;
+    let x = i32::try_from(saved.get("x")?.as_i64()?).ok()?;
+    let y = i32::try_from(saved.get("y")?.as_i64()?).ok()?;
+    let monitor = saved.get("screen_name")?.as_str()?;
+    ((x != 0 || y != 0) && !monitor.trim().is_empty()).then_some((x, y, monitor))
+}
+
 /// ChatSpeed's default primary preset (`green`).
 pub const DEFAULT_PRIMARY: u32 = 0x41b555;
 
@@ -67,6 +76,22 @@ mod tests {
             saved_window_size(&serde_json::json!({"workflow_window_size": "wide"})),
             None
         );
+    }
+
+    #[test]
+    fn remembered_position_requires_a_named_monitor_and_signed_coordinates() {
+        let config = serde_json::json!({"workflow_window_position": {"x": -1200, "y": 8, "screen_name": "Display"}});
+        assert_eq!(saved_window_position(&config), Some((-1200, 8, "Display")));
+        for position in [
+            serde_json::json!({"x": 0, "y": 0, "screen_name": "Display"}),
+            serde_json::json!({"x": 10, "y": 20}),
+            serde_json::json!({"x": 2147483648_i64, "y": 20, "screen_name": "Display"}),
+        ] {
+            assert_eq!(
+                saved_window_position(&serde_json::json!({"workflow_window_position": position})),
+                None
+            );
+        }
     }
 
     #[test]

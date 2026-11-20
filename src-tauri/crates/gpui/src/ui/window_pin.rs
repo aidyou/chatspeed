@@ -3,6 +3,92 @@
 use gpui_kit::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+/// Move only when the saved monitor name and the entire outer frame match a
+/// current work area. Wayland does not expose absolute toplevel positioning.
+#[cfg(target_os = "windows")]
+pub fn restore_position(window: &Window, x: i32, y: i32, name: &str) {
+    use windows_sys::Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*};
+    struct Candidate<'a> {
+        name: &'a str,
+        x: i64,
+        y: i64,
+        width: i64,
+        height: i64,
+        fits: bool,
+    }
+    unsafe extern "system" fn visit(monitor: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> i32 {
+        // EnumDisplayMonitors invokes this callback synchronously.
+        let candidate = unsafe { &mut *(data as *mut Candidate<'_>) };
+        let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) } != 0 {
+            let end = info
+                .szDevice
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(info.szDevice.len());
+            let work = info.monitorInfo.rcWork;
+            candidate.fits |= String::from_utf16_lossy(&info.szDevice[..end]) == candidate.name
+                && candidate.x >= i64::from(work.left)
+                && candidate.y >= i64::from(work.top)
+                && candidate.x + candidate.width <= i64::from(work.right)
+                && candidate.y + candidate.height <= i64::from(work.bottom);
+        }
+        1
+    }
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = handle.hwnd.get() as HWND;
+    let mut frame = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut frame) } == 0 {
+        return;
+    }
+    // Refuse crosses between different DPI scales: moving there could enlarge
+    // the frame after validation. Monitor DPI is evaluated by Windows itself.
+    let mut candidate = Candidate {
+        name,
+        x: x.into(),
+        y: y.into(),
+        width: i64::from(frame.right) - i64::from(frame.left),
+        height: i64::from(frame.bottom) - i64::from(frame.top),
+        fits: false,
+    };
+    if candidate.width <= 0 || candidate.height <= 0 {
+        return;
+    }
+    let current_monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) };
+    let saved_monitor = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONULL) };
+    if current_monitor != saved_monitor || saved_monitor.is_null() {
+        return;
+    }
+    if unsafe {
+        EnumDisplayMonitors(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            Some(visit),
+            &mut candidate as *mut _ as LPARAM,
+        )
+    } != 0
+        && candidate.fits
+    {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+    }
+}
+
 pub fn supported(window: &Window) -> bool {
     HasWindowHandle::window_handle(window).is_ok_and(|handle| match handle.as_raw() {
         #[cfg(target_os = "linux")]

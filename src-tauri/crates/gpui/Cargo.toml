@@ -27,7 +27,7 @@ locale_config = "0.3.0"
 raw-window-handle = { version = "0.6.2", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"], optional = true }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSView", "NSWindow"], optional = true }

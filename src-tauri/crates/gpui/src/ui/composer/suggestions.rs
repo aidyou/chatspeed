@@ -1,12 +1,8 @@
-//! `/` skill and `@` file completion for the composer.
-//!
-//! Mirrors the suggestion panels of `src/components/workflow/WorkflowInputArea.vue`:
-//! a leading `/` lists the installed skills (`get_system_skills`) and a trailing
-//! `@` lists files from the authorized roots (`search_workspace_files`). Enter
-//! applies the first row, which is the same "first match" behaviour Vue gets from
-//! its highlighted index, and clicking a row applies it directly.
+//! Caret-scoped file and slash completion for the composer.
 
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
+use std::ops::Range;
+
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, ThemeStyled};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use serde_json::Value;
@@ -16,66 +12,117 @@ use crate::Observer;
 use chatspeed_gpui::types::Command;
 
 /// What the draft is currently completing.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Trigger {
-    Skill { query: String },
-    File { query: String },
+    Skill { query: String, range: Range<usize> },
+    File { query: String, range: Range<usize> },
 }
 
-/// The completion context of `text`, or `None` when no panel should show.
-///
-/// Vue triggers on the caret; the native composer completes at the end of the
-/// draft, which is where typing continues.
-pub fn trigger(text: &str) -> Option<Trigger> {
-    let trimmed = text.trim_start();
-    if let Some(rest) = trimmed.strip_prefix('/') {
-        if !rest.chars().any(char::is_whitespace) {
+impl Trigger {
+    fn range(&self) -> Range<usize> {
+        match self {
+            Self::Skill { range, .. } | Self::File { range, .. } => range.clone(),
+        }
+    }
+}
+
+/// Complete the token under the caret, never the surrounding draft.
+pub fn trigger(text: &str, caret: usize) -> Option<Trigger> {
+    let head = text.get(..caret)?;
+    let tail = text.get(caret..)?;
+    let end = caret + tail.find(char::is_whitespace).unwrap_or(tail.len());
+    if let Some(rest) = head.strip_prefix('/') {
+        if !rest.chars().any(char::is_whitespace) && end == text.len() {
             return Some(Trigger::Skill {
                 query: rest.to_owned(),
+                range: 0..end,
             });
         }
     }
-    // A mention closes as soon as the draft moves past the token, which is what
-    // the space appended after an insertion does.
-    let head = text;
     let index = head.rfind('@')?;
-    // An `@` inside a word (`user@host`) is not a mention.
-    let before = head[..index].chars().next_back();
-    if before.is_some_and(|c| !c.is_whitespace()) {
+    if head[..index]
+        .chars()
+        .next_back()
+        .is_some_and(|c| !c.is_whitespace())
+    {
         return None;
     }
     let query = &head[index + 1..];
-    if query.chars().any(char::is_whitespace) {
+    if query.chars().any(char::is_whitespace) || query.starts_with('"') {
         return None;
     }
     Some(Trigger::File {
         query: query.to_owned(),
+        range: index..end,
     })
 }
 
+#[derive(Default)]
+pub struct State {
+    current: Option<Trigger>,
+    dismissed: bool,
+    selected: usize,
+    scroll: ScrollHandle,
+    pub(crate) file_request: Option<(u64, String, Vec<String>)>,
+    request_id: u64,
+}
+
+fn active(observer: &Observer, cx: &App) -> Option<Trigger> {
+    let input = observer.composer.read(cx);
+    if !input.selected_range().is_empty() {
+        return None;
+    }
+    trigger(&input.value(), input.cursor())
+}
+
+fn rows(observer: &Observer, trigger: &Trigger) -> Vec<Row> {
+    match trigger {
+        Trigger::Skill { query, .. } => skill_rows(observer, query),
+        Trigger::File { query, .. } => file_rows(observer, query),
+    }
+}
+
 /// The panel above the box, or `None` when nothing matches.
-pub fn panel(
-    observer: &Observer,
-    trigger: &Trigger,
-    cx: &mut Context<Observer>,
-) -> Option<AnyElement> {
-    let rows = match trigger {
-        Trigger::Skill { query } => skill_rows(observer, query),
-        Trigger::File { query } => file_rows(observer, query),
-    };
+pub fn panel(observer: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement> {
+    let trigger = active(observer, cx)?;
+    if !observer.composer_focused
+        || observer.suggestions.dismissed && observer.suggestions.current.as_ref() == Some(&trigger)
+    {
+        return None;
+    }
+    let rows = rows(observer, &trigger);
     if rows.is_empty() {
         return None;
     }
-    let border = cx.theme().border;
-    let background = cx.theme().background;
     let primary = cx.theme().primary;
     let muted = cx.theme().muted_foreground;
     let hover = cx.theme().muted;
-    let composer = observer.composer.clone();
     let file_panel = matches!(trigger, Trigger::File { .. });
-    let mut list = v_flex().id("composer-suggestions").w_full().gap(px(1.));
-    for row in rows {
-        let text = row.insert.clone();
-        let composer = composer.clone();
+    let mut group = None;
+    let mut list = v_flex()
+        .id("composer-suggestions")
+        .w_full()
+        .gap(px(1.))
+        .track_scroll(&observer.suggestions.scroll)
+        .max_h(px(292.))
+        .overflow_y_scroll();
+    for (index, row) in rows.into_iter().enumerate() {
+        if row.group != group {
+            group = row.group;
+            if let Some(label) = group {
+                list = list.child(
+                    div()
+                        .px_2()
+                        .pt_2()
+                        .text_size(px(11.))
+                        .text_color(muted)
+                        .child(label.title()),
+                );
+            }
+        }
+        let expected = trigger.clone();
+        let completion = row.completion.clone();
+        let selected = index == observer.suggestions.selected;
         let line = if file_panel {
             // Vue's file panel is one compact line with an icon and the path.
             h_flex()
@@ -136,12 +183,12 @@ pub fn panel(
                 .min_w_0()
                 .rounded(px(6.))
                 .cursor_pointer()
+                .when(selected, |line| line.bg(primary.opacity(0.14)))
                 .hover(move |style| style.bg(hover))
                 .child(line)
-                .on_click(move |_, window, cx: &mut App| {
-                    let text = text.clone();
-                    composer.update(cx, |state, cx| state.set_value(text, window, cx));
-                }),
+                .on_click(cx.listener(move |observer, _, window, cx| {
+                    apply(observer, &expected, &completion, window, cx);
+                })),
         );
     }
     Some(
@@ -149,25 +196,10 @@ pub fn panel(
             .w_full()
             .max_w(px(780.))
             .max_h(px(300.))
+            .popover_style(cx)
             .rounded(px(10.))
-            .border_1()
-            .border_color(border)
-            .bg(background)
             .p_1()
-            .shadow(vec![gpui::BoxShadow {
-                offset: gpui::point(px(0.), px(6.)),
-                blur_radius: px(20.),
-                spread_radius: px(0.),
-                inset: false,
-                color: cx.theme().foreground.opacity(0.12),
-            }])
-            .child(
-                v_flex()
-                    .id("composer-suggestion-scroll")
-                    .max_h(px(292.))
-                    .overflow_y_scroll()
-                    .child(list),
-            )
+            .child(list)
             .into_any_element(),
     )
 }
@@ -177,34 +209,154 @@ struct Row {
     label: String,
     detail: String,
     icon: &'static str,
-    /// The text the row writes into the composer.
-    insert: String,
+    completion: Completion,
+    group: Option<Group>,
+}
+
+#[derive(Clone)]
+enum Completion {
+    Insert(String),
+    Run(&'static str),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Group {
+    Installed,
+    Bundled,
+    Commands,
+}
+
+impl Group {
+    fn title(self) -> String {
+        match self {
+            Self::Installed => rust_i18n::t!("suggestion_installed"),
+            Self::Bundled => rust_i18n::t!("suggestion_bundled"),
+            Self::Commands => rust_i18n::t!("suggestion_commands"),
+        }
+        .into_owned()
+    }
 }
 
 fn skill_rows(observer: &Observer, query: &str) -> Vec<Row> {
-    let query = query.to_lowercase();
-    observer
-        .skills
-        .iter()
-        .filter_map(|skill| {
-            let name = skill["name"].as_str()?;
-            if !query.is_empty() && !name.to_lowercase().contains(&query) {
-                return None;
+    use rust_i18n::t;
+    let mut candidates = Vec::new();
+    let existing = observer.selected.is_some();
+    for (name, detail, available) in [
+        ("settings", t!("menu_settings"), true),
+        ("models", t!("model_config"), true),
+        ("skills-config", t!("skills_config"), true),
+        ("mcp", t!("mcp_config"), true),
+        ("proxy", t!("menu_proxy"), true),
+        ("agent", t!("menu_agent"), true),
+        ("about", t!("menu_about"), true),
+        ("new", t!("new_task"), true),
+        ("audit", t!("final_audit_label"), existing),
+        ("compress", t!("manual_compress"), existing),
+        (
+            "clear",
+            t!("clear_context"),
+            existing && !observer.workflow_running(),
+        ),
+        ("plan", t!("planning_mode"), existing),
+        ("attach", t!("add_attachment"), true),
+    ] {
+        if available {
+            candidates.push(Row {
+                id: format!("command-{name}"),
+                label: format!("/{name}"),
+                detail: detail.into_owned(),
+                icon: "setting",
+                completion: Completion::Run(name),
+                group: Some(Group::Commands),
+            });
+        }
+    }
+    let config = observer.agent_config();
+    let disabled = config["skillEnabled"]
+        .as_bool()
+        .or_else(|| config["skill_enabled"].as_bool())
+        == Some(false);
+    let selected = crate::SkillsDraft::from_config(&config).selected;
+    if !disabled {
+        for skill in &observer.skills {
+            let Some(name) = skill["name"].as_str() else {
+                continue;
+            };
+            if !selected.is_empty() && !selected.contains(name) {
+                continue;
             }
-            Some(Row {
+            candidates.push(Row {
                 id: format!("composer-skill-{name}"),
                 label: format!("/{name}"),
                 detail: skill["description"].as_str().unwrap_or_default().to_owned(),
                 icon: "skill",
-                insert: format!("/{name} "),
-            })
+                completion: Completion::Insert(format!("/{name} ")),
+                group: Some(if skill["source"].as_str() == Some("user") {
+                    Group::Installed
+                } else {
+                    Group::Bundled
+                }),
+            });
+        }
+    }
+    rank_rows(candidates, query)
+}
+
+fn rank_rows(rows: Vec<Row>, query: &str) -> Vec<Row> {
+    let query = query.to_lowercase();
+    let mut rows: Vec<_> = rows
+        .into_iter()
+        .filter_map(|row| {
+            let name = row.label[1..].to_lowercase();
+            let detail = row.detail.to_lowercase();
+            let rank = if name == query {
+                0
+            } else if name.starts_with(&query) {
+                1
+            } else if name.contains(&query) {
+                2
+            } else if detail.starts_with(&query) {
+                3
+            } else if detail.contains(&query) {
+                4
+            } else {
+                return None;
+            };
+            Some((rank, name, row))
         })
-        .collect()
+        .collect();
+    if rows.iter().any(|(rank, _, _)| *rank < 3) {
+        rows.retain(|(rank, _, _)| *rank < 3);
+    }
+    // Put the strongest matching group first so its best result is highlighted.
+    let best = [Group::Installed, Group::Bundled, Group::Commands].map(|group| {
+        rows.iter()
+            .filter(|(_, _, row)| row.group == Some(group))
+            .map(|(rank, _, _)| *rank)
+            .min()
+            .unwrap_or(5)
+    });
+    rows.sort_by(|(rank, name, row), (other_rank, other_name, other)| {
+        let group = row.group.unwrap_or(Group::Commands);
+        let other_group = other.group.unwrap_or(Group::Commands);
+        (best[group as usize], group, rank, name).cmp(&(
+            best[other_group as usize],
+            other_group,
+            other_rank,
+            other_name,
+        ))
+    });
+    rows.into_iter().map(|(_, _, row)| row).collect()
 }
 
 fn file_rows(observer: &Observer, query: &str) -> Vec<Row> {
     // A stale list must never answer a newer query.
-    if observer.file_query != query {
+    if !observer
+        .suggestions
+        .file_request
+        .as_ref()
+        .is_some_and(|(_, previous, roots)| previous == query && *roots == observer.model.roots)
+    {
         return Vec::new();
     }
     let primary_root = observer.model.roots.first();
@@ -227,7 +379,8 @@ fn file_rows(observer: &Observer, query: &str) -> Vec<Row> {
                 } else {
                     "ext-file"
                 },
-                insert: format!("{} ", format_reference(&display)),
+                group: None,
+                completion: Completion::Insert(format!("{} ", format_reference(&display))),
             })
         })
         .collect()
@@ -261,65 +414,179 @@ fn format_reference(path: &str) -> String {
     format!("@\"{escaped}\"")
 }
 
-/// Applies the first row of the active panel; `false` lets Enter send instead.
-pub fn apply_first(
+fn apply(
     observer: &mut Observer,
+    expected: &Trigger,
+    completion: &Completion,
+    window: &mut Window,
+    cx: &mut Context<Observer>,
+) {
+    if active(observer, cx).as_ref() != Some(expected) {
+        return;
+    }
+    let input = observer.composer.clone();
+    let value = input.read(cx).value();
+    let range = expected.range();
+    let replacement = match completion {
+        Completion::Insert(text) => text.trim_end(),
+        Completion::Run(_) => "",
+    };
+    let append_space = matches!(completion, Completion::Insert(_))
+        && !value[range.end..].starts_with(char::is_whitespace);
+    let replacement = if append_space {
+        format!("{replacement} ")
+    } else {
+        replacement.to_owned()
+    };
+    let utf16 =
+        value[..range.start].encode_utf16().count()..value[..range.end].encode_utf16().count();
+    input.update(cx, |state, cx| {
+        EntityInputHandler::replace_text_in_range(state, Some(utf16), &replacement, window, cx);
+        state.focus_handle(cx).focus(window, cx);
+    });
+    if let Completion::Run(name) = completion {
+        run(observer, name, window, cx);
+    }
+    refresh(observer, cx);
+    observer.suggestions.dismissed = true;
+    cx.notify();
+}
+
+pub fn handle_key(
+    observer: &mut Observer,
+    key: &str,
     window: &mut Window,
     cx: &mut Context<Observer>,
 ) -> bool {
-    let text = observer.composer.read(cx).value().to_string();
-    let Some(trigger) = trigger(&text) else {
+    refresh(observer, cx);
+    let Some(trigger) = observer.suggestions.current.clone() else {
         return false;
     };
-    let rows = match &trigger {
-        Trigger::Skill { query } => skill_rows(observer, query),
-        Trigger::File { query } => file_rows(observer, query),
-    };
-    let Some(row) = rows.into_iter().next() else {
+    if observer.suggestions.dismissed {
         return false;
-    };
-    let next = match trigger {
-        Trigger::Skill { .. } => row.insert.clone(),
-        Trigger::File { .. } => {
-            // Replace the `@token` being completed, keeping the text before it.
-            let head = text.trim_end();
-            let start = head.rfind('@').unwrap_or(head.len());
-            format!("{}{}", &text[..start], row.insert)
+    }
+    let rows = rows(observer, &trigger);
+    let state = &mut observer.suggestions;
+    match key {
+        "escape" => state.dismissed = true,
+        "up" | "down" => {
+            if !rows.is_empty() {
+                state.selected = advance(state.selected, rows.len(), key == "down");
+                let headings = rows
+                    .iter()
+                    .take(state.selected + 1)
+                    .enumerate()
+                    .filter(|(i, row)| {
+                        row.group.is_some() && (*i == 0 || row.group != rows[i - 1].group)
+                    })
+                    .count();
+                state.scroll.scroll_to_item(state.selected + headings);
+            }
         }
-    };
-    observer
-        .composer
-        .update(cx, |state, cx| state.set_value(next, window, cx));
+        "enter" | "tab" => {
+            if let Some(row) = rows.get(state.selected).or_else(|| rows.first()) {
+                apply(observer, &trigger, &row.completion, window, cx);
+            }
+        }
+        _ => return false,
+    }
+    cx.notify();
     true
 }
 
-/// Sends the `@` search the draft now needs, replacing any older one.
-pub fn refresh(observer: &mut Observer, cx: &mut Context<Observer>) {
-    let text = observer.composer.read(cx).value().to_string();
-    match trigger(&text) {
-        Some(Trigger::File { query }) if query != observer.file_query => {
-            observer.file_query = query.clone();
-            observer.file_results.clear();
-            let _ = observer.worker.commands.try_send(Command::SearchFiles {
-                paths: observer.model.roots.clone(),
-                query,
-            });
+fn advance(selected: usize, len: usize, down: bool) -> usize {
+    if down {
+        (selected + 1) % len
+    } else {
+        (selected + len - 1) % len
+    }
+}
+
+pub fn refresh(observer: &mut Observer, cx: &mut Context<Observer>) -> bool {
+    let trigger = active(observer, cx);
+    let state = &mut observer.suggestions;
+    let changed = state.current != trigger;
+    if changed {
+        state.current = trigger.clone();
+        state.selected = 0;
+        state.dismissed = false;
+        state.scroll = ScrollHandle::new();
+    }
+    let Some(Trigger::File { query, .. }) = trigger else {
+        state.file_request = None;
+        observer.file_results.clear();
+        return changed;
+    };
+    let paths = observer.model.roots.clone();
+    if !state
+        .file_request
+        .as_ref()
+        .is_some_and(|(_, previous, roots)| *previous == query && *roots == paths)
+    {
+        observer.file_results.clear();
+        state.request_id = state.request_id.wrapping_add(1);
+        let request = state.request_id;
+        if observer
+            .worker
+            .commands
+            .try_send(Command::SearchFiles {
+                request,
+                paths: paths.clone(),
+                query: query.clone(),
+            })
+            .is_ok()
+        {
+            state.file_request = Some((request, query, paths));
         }
-        Some(_) => {}
-        None => {
-            observer.file_query.clear();
-            observer.file_results.clear();
-        }
+    }
+    changed
+}
+
+fn run(observer: &mut Observer, name: &str, window: &mut Window, cx: &mut Context<Observer>) {
+    use crate::QuickPanel;
+    use chatspeed_runtime_client::desktop_menu::Action;
+    match name {
+        "settings" => observer.desktop_menu_action(Action::Settings, cx),
+        "mcp" => observer.desktop_menu_action(Action::Mcp, cx),
+        "proxy" => observer.desktop_menu_action(Action::Proxy, cx),
+        "agent" => observer.desktop_menu_action(Action::Agent, cx),
+        "about" => observer.desktop_menu_action(Action::About, cx),
+        "models" => observer.open_quick_panel(QuickPanel::Models, cx),
+        "skills-config" => observer.open_quick_panel(QuickPanel::Skills, cx),
+        "new" => observer.start_new_session(window, cx),
+        "clear" => observer.clear_context_frame(cx),
+        "compress" => observer.manual_compress(cx),
+        "attach" => observer.pick_attachments(cx),
+        "plan" => observer.toggle_planning(cx),
+        "audit" => observer.toggle_runtime_preference("finalAudit", cx),
+        _ => {}
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{format_reference, trigger, Trigger};
+    use super::{advance, format_reference, trigger as at_caret, Trigger};
+
+    fn trigger(text: &str) -> Option<Trigger> {
+        at_caret(text, text.len())
+    }
+
+    #[test]
+    fn completion_targets_only_the_token_even_after_unicode_and_before_suffix() {
+        let draft = "🦀 中文 @srcremainder then continue";
+        let caret = "🦀 中文 @src".len();
+        let result = at_caret(draft, caret).expect("file completion");
+        let range = result.range();
+        assert_eq!(&draft[range.clone()], "@srcremainder");
+        assert_eq!(&draft[..range.start], "🦀 中文 ");
+        assert_eq!(&draft[range.end..], " then continue");
+        assert_eq!(advance(0, 3, false), 2);
+        assert_eq!(advance(2, 3, true), 0);
+    }
 
     #[test]
     fn leading_slash_completes_skills_only_before_whitespace() {
-        assert!(matches!(trigger("/ski"), Some(Trigger::Skill { query }) if query == "ski"));
+        assert!(matches!(trigger("/ski"), Some(Trigger::Skill { query, .. }) if query == "ski"));
         assert!(trigger("/skill now").is_none());
         assert!(trigger("hello /skill").is_none());
     }

@@ -98,6 +98,7 @@ pub(crate) fn thought(
     title: String,
     text: &str,
     open: bool,
+    live: bool,
     on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
@@ -117,7 +118,14 @@ pub(crate) fn thought(
                 .h(px(24.))
                 .cursor_pointer()
                 .hover(|style| style.bg(cx.theme().muted))
-                .child(Icon::new("reasoning").size(14.).color(muted))
+                .child({
+                    let bulb = Icon::new("reasoning").size(14.).color(muted);
+                    if live {
+                        bulb.spin("thought-spin", crate::ui::icon::Spin::Linear)
+                    } else {
+                        bulb
+                    }
+                })
                 .child(
                     div()
                         .min_w_0()

@@ -63,7 +63,10 @@ mod tests {
     fn only_scrollbar_input_signals_the_reader() {
         let handle = ScrollHandle::new();
         let input = ScrollbarInput::default();
-        let scrollbar = UserScrollHandle { handle: handle.clone(), input: input.clone() };
+        let scrollbar = UserScrollHandle {
+            handle: handle.clone(),
+            input: input.clone(),
+        };
         handle.set_offset(point(px(0.), px(-20.)));
         assert!(!input.take());
         scrollbar.set_offset(point(px(0.), px(-30.)));

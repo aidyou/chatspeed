@@ -220,6 +220,27 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     return;
                 }
             }
+            Command::SetSidebarCollapsed(collapsed) => {
+                if !options.demo
+                    && native::data_command(
+                        &options,
+                        "set_config",
+                        json!({"key": "gpui_workflow_sidebar_collapsed", "value": collapsed}),
+                    )
+                    .await
+                    .is_err()
+                {
+                    if !send(
+                        &tx,
+                        0,
+                        UpdateKind::Error(rust_i18n::t!("sidebar_save_failed").into_owned()),
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                }
+            }
             Command::SetSound { chime, muted } => {
                 let saved = options.demo
                     || native::data_command(
@@ -290,6 +311,21 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     .await
                     {
                         return;
+                    }
+                }
+            }
+            Command::ApprovalBatch { session, tool_ids } => {
+                if options.demo {
+                    continue;
+                }
+                let path = format!("/control/v1/workflows/{session}/signal");
+                for id in tool_ids {
+                    let signal =
+                        json!({"type":"approval", "id":id, "approved":true, "approve_all":false});
+                    if let Err(error) = native::control_post(&options, &path, signal).await {
+                        if !send(&tx, 0, UpdateKind::Error(error)).await {
+                            return;
+                        }
                     }
                 }
             }
@@ -569,10 +605,18 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key("auto-compress")),
                 )
                 .await;
-                if let Err(error) = result {
-                    if !send(&tx, 0, UpdateKind::Error(error)).await {
-                        return;
-                    }
+                if !send(
+                    &tx,
+                    0,
+                    UpdateKind::SettingsChanged {
+                        session,
+                        key: "autoCompress",
+                        result: result.map(|_| ()),
+                    },
+                )
+                .await
+                {
+                    return;
                 }
             }
             Command::SetFinalAudit { session, enabled } => {
@@ -586,10 +630,18 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key("final-audit")),
                 )
                 .await;
-                if let Err(error) = result {
-                    if !send(&tx, 0, UpdateKind::Error(error)).await {
-                        return;
-                    }
+                if !send(
+                    &tx,
+                    0,
+                    UpdateKind::SettingsChanged {
+                        session,
+                        key: "finalAudit",
+                        result: result.map(|_| ()),
+                    },
+                )
+                .await
+                {
+                    return;
                 }
             }
             Command::SetApprovalLevel { session, level } => {
@@ -623,10 +675,18 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key("workflow-phase")),
                 )
                 .await;
-                if let Err(error) = result {
-                    if !send(&tx, 0, UpdateKind::Error(error)).await {
-                        return;
-                    }
+                if !send(
+                    &tx,
+                    0,
+                    UpdateKind::SettingsChanged {
+                        session,
+                        key: "phase",
+                        result: result.map(|_| ()),
+                    },
+                )
+                .await
+                {
+                    return;
                 }
             }
             Command::SetPersonality {
@@ -694,7 +754,11 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
-            Command::SearchFiles { paths, query } => {
+            Command::SearchFiles {
+                request,
+                paths,
+                query,
+            } => {
                 if options.demo {
                     continue;
                 }
@@ -708,7 +772,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 .ok()
                 .and_then(|value| value.as_array().cloned())
                 .unwrap_or_default();
-                if !send(&tx, 0, UpdateKind::Files { query, files }).await {
+                if !send(&tx, 0, UpdateKind::Files { request, files }).await {
                     return;
                 }
             }
@@ -1007,6 +1071,7 @@ async fn snapshot(
     tx: &mpsc::Sender<Update>,
     generation: u64,
 ) -> bool {
+    let fetched_from = Instant::now();
     let Ok(value) = client
         .get(&format!("/control/v1/workflows/{id}?limit={PAGE_LIMIT}"))
         .await
@@ -1014,9 +1079,10 @@ async fn snapshot(
         return false;
     };
     let decode_start = Instant::now();
-    let Ok(page) = serde_json::from_value(value) else {
+    let Ok(mut page) = serde_json::from_value::<Page>(value) else {
         return false;
     };
+    page.fetched_from = Some(fetched_from);
     if !send(
         tx,
         generation,

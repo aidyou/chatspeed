@@ -15,7 +15,7 @@ use rust_i18n::t;
 use serde_json::Value;
 
 use crate::ui::{menu_popover::MenuPopover, Icon};
-use crate::{danger, Observer, QuickPanel};
+use crate::{Observer, QuickPanel};
 use chatspeed_gpui::types::Command;
 
 /// The actions under the box, in Vue's left/right arrangement.
@@ -55,9 +55,9 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             row.child(icon_action(
                 "stop-workflow",
                 "stop",
-                danger(),
+                cx.theme().foreground,
                 hover,
-                cx.listener(|this, _, _, cx| this.stop_workflow(cx)),
+                cx.listener(|this, _, window, cx| this.stop_workflow(window, cx)),
             ))
         })
         .child(
@@ -107,14 +107,20 @@ struct MenuRowStyle {
     checked: bool,
     danger: bool,
     colors: OptionColors,
+    disabled: bool,
 }
 
 impl MenuRowStyle {
+    fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
     fn new(colors: OptionColors, checked: bool, danger: bool) -> Self {
         Self {
             checked,
             danger,
             colors,
+            disabled: false,
         }
     }
 }
@@ -515,6 +521,7 @@ fn quick_actions(
     cx: &mut Context<Observer>,
 ) -> AnyElement {
     let planning = observer.planning_mode;
+    let can_plan = observer.can_toggle_planning();
     let auto_approve_plan = observer.agent_bool("autoApprovePlan", "auto_approve_plan", false);
     let auto_compress = observer.auto_compress_enabled();
     let final_audit = observer.final_audit_enabled();
@@ -597,16 +604,10 @@ fn quick_actions(
             let toggle_planning = {
                 let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
-                let session = session.clone();
                 move |window: &mut Window, cx: &mut App| {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
                     observer_entity.update(cx, |this, cx| {
-                        this.planning_mode = !planning;
-                        let _ = this.worker.commands.try_send(Command::SetPlanning {
-                            session: session.clone(),
-                            enabled: !planning,
-                        });
-                        cx.notify();
+                        this.toggle_planning(cx);
                     });
                 }
             };
@@ -630,30 +631,20 @@ fn quick_actions(
             let toggle_auto_compress = {
                 let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
-                let session = session.clone();
                 move |window: &mut Window, cx: &mut App| {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
                     observer_entity.update(cx, |this, cx| {
-                        let _ = this.worker.commands.try_send(Command::SetAutoCompress {
-                            session: session.clone(),
-                            enabled: !auto_compress,
-                        });
-                        cx.notify();
+                        this.toggle_runtime_preference("autoCompress", cx);
                     });
                 }
             };
             let toggle_final_audit = {
                 let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
-                let session = session.clone();
                 move |window: &mut Window, cx: &mut App| {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
                     observer_entity.update(cx, |this, cx| {
-                        let _ = this.worker.commands.try_send(Command::SetFinalAudit {
-                            session: session.clone(),
-                            enabled: !final_audit,
-                        });
-                        cx.notify();
+                        this.toggle_runtime_preference("finalAudit", cx);
                     });
                 }
             };
@@ -732,7 +723,7 @@ fn quick_actions(
                     "skill-plan",
                     t!("planning_mode").to_string(),
                     t!("planning_mode_hint").to_string(),
-                    MenuRowStyle::new(colors, planning, false),
+                    MenuRowStyle::new(colors, planning, false).disabled(!can_plan),
                     toggle_planning,
                 ));
             if planning {
@@ -834,6 +825,7 @@ fn menu_row(
         checked,
         danger,
         colors,
+        disabled,
     } = style;
     let OptionColors {
         primary,
@@ -894,7 +886,10 @@ fn menu_row(
                     .child(hint),
             )
         })
-        .on_click(move |_, window, cx: &mut App| on_click(window, cx))
+        .when(disabled, |row| row.opacity(0.45).cursor_not_allowed())
+        .when(!disabled, |row| {
+            row.on_click(move |_, window, cx: &mut App| on_click(window, cx))
+        })
         .into_any_element()
 }
 

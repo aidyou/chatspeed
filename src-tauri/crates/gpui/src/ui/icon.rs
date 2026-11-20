@@ -12,21 +12,25 @@ use crate::icons;
 
 const REASONING_BULB: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6m-5 3h4M9 15c0-2-3-3-3-7a6 6 0 0 1 12 0c0 4-3 5-3 7z"/></svg>"#;
 
+const PIN: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h8l-1 7 4 5v2H5v-2l4-5-1-7zm4 14v5"/></svg>"#;
+
 pub(crate) struct IconAssets;
 
 impl AssetSource for IconAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        if path == "icons/reasoning-lightbulb.svg" {
-            Ok(Some(Cow::Borrowed(REASONING_BULB)))
-        } else {
-            gpui_kit::assets::Assets.load(path)
+        match path {
+            "icons/reasoning-lightbulb.svg" => Ok(Some(Cow::Borrowed(REASONING_BULB))),
+            "icons/chatspeed-pin.svg" => Ok(Some(Cow::Borrowed(PIN))),
+            _ => gpui_kit::assets::Assets.load(path),
         }
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
-        if "icons/reasoning-lightbulb.svg".starts_with(path) {
-            paths.push("icons/reasoning-lightbulb.svg".into());
+        for asset in ["icons/reasoning-lightbulb.svg", "icons/chatspeed-pin.svg"] {
+            if asset.starts_with(path) {
+                paths.push(asset.into());
+            }
         }
         Ok(paths)
     }
@@ -70,7 +74,39 @@ pub struct Icon {
     name: &'static str,
     size: Option<f32>,
     color: Option<Hsla>,
-    spin: Option<ElementId>,
+    spin: Option<(ElementId, Spin)>,
+    turns: f32,
+}
+
+/// Rotation curves shared by active indicators.
+#[derive(Clone, Copy)]
+pub(crate) enum Spin {
+    Linear,
+    Eased,
+}
+
+impl Spin {
+    fn phase(self, phase: f32) -> f32 {
+        match self {
+            Self::Linear => phase,
+            // CSS `ease` (Vue's `.cs-spin`): solve the x coordinate first.
+            Self::Eased => {
+                let sample = |t: f32, a: f32, b: f32| {
+                    3. * (1. - t).powi(2) * t * a + 3. * (1. - t) * t * t * b + t.powi(3)
+                };
+                let (mut low, mut high) = (0., 1.);
+                for _ in 0..12 {
+                    let mid = (low + high) / 2.;
+                    if sample(mid, 0.25, 0.25) < phase {
+                        low = mid;
+                    } else {
+                        high = mid;
+                    }
+                }
+                sample((low + high) / 2., 0.1, 1.)
+            }
+        }
+    }
 }
 
 impl Icon {
@@ -80,6 +116,7 @@ impl Icon {
             size: None,
             color: None,
             spin: None,
+            turns: 0.,
         }
     }
 
@@ -96,9 +133,14 @@ impl Icon {
         self
     }
 
+    pub(crate) fn rotate(mut self, degrees: f32) -> Self {
+        self.turns = degrees / 360.;
+        self
+    }
+
     /// Animate an active indicator using its caller's stable element ID.
-    pub fn spin(mut self, id: impl Into<ElementId>) -> Self {
-        self.spin = Some(id.into());
+    pub(crate) fn spin(mut self, id: impl Into<ElementId>, curve: Spin) -> Self {
+        self.spin = Some((id.into(), curve));
         self
     }
 }
@@ -114,23 +156,36 @@ impl RenderOnce for Icon {
         let animated_path = match self.name {
             "reasoning" => Some("icons/reasoning-lightbulb.svg"),
             "loading" => Some("icons/loader-circle.svg"),
+            "pin" => Some("icons/chatspeed-pin.svg"),
             _ => None,
         };
-        if let (Some(id), Some(path)) = (self.spin, animated_path) {
-            return svg()
+        if let Some(path) = animated_path {
+            let icon = svg()
                 .path(path)
                 .size(px(size))
                 .flex_none()
-                .text_color(color)
-                .with_animation(
-                    id,
-                    Animation::new(Duration::from_millis(1200))
-                        .repeat_synced()
-                        .with_max_fps(30.),
-                    |icon, phase| {
-                        icon.with_transformation(Transformation::rotate(percentage(phase)))
-                    },
-                )
+                .text_color(color);
+            if let Some((id, curve)) = self.spin {
+                let period = match curve {
+                    Spin::Linear => 2000,
+                    Spin::Eased => 1000,
+                };
+                return icon
+                    .with_animation(
+                        id,
+                        Animation::new(Duration::from_millis(period))
+                            .repeat_synced()
+                            .with_max_fps(30.),
+                        move |icon, phase| {
+                            icon.with_transformation(Transformation::rotate(percentage(
+                                curve.phase(phase),
+                            )))
+                        },
+                    )
+                    .into_any_element();
+            }
+            return icon
+                .with_transformation(Transformation::rotate(percentage(self.turns)))
                 .into_any_element();
         }
 

@@ -46,7 +46,7 @@ pub(crate) fn sub_agent_card(
         .hover(|style| style.bg(cx.theme().muted))
         .child(Icon::new("skill-relation-chart").size(15.).color(muted))
         .child(if card.status.is_running() {
-            crate::ui::running_badge(card.status_label.clone(), "sub-agent-running")
+            crate::ui::running_badge(card.status_label.clone(), "sub-agent-running", cx)
                 .into_any_element()
         } else {
             pill(
@@ -177,7 +177,12 @@ pub(crate) fn child_loading(cx: &App) -> AnyElement {
         .py_1()
         .text_size(px(11.))
         .text_color(muted)
-        .child(Icon::new("loading").size(12.).color(muted))
+        .child(
+            Icon::new("loading")
+                .size(12.)
+                .color(muted)
+                .spin("child-loading", crate::ui::icon::Spin::Eased),
+        )
         .child(t!("sub_agent_loading").to_string())
         .into_any_element()
 }

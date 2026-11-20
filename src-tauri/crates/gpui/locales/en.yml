@@ -1,0 +1,298 @@
+action_cancel: Cancel
+add_attachment: "Add attachment"
+agent_placeholder: "Select Agent"
+approval_default: "Default"
+approval_default_hint: "Ask before every write and command"
+approval_full: "Full access"
+approval_full_hint: "Run tools without asking"
+approval_level: "Approval level"
+approval_rejection_reason: Rejection reason (optional)
+approval_smart: "Smart"
+approval_smart_hint: "Ask only for risky actions"
+approve: Approve
+approve_all: Approve all
+approve_whitelist: Approve and add to allowlist
+arguments_label: Arguments
+ask_user_other: Other
+ask_user_other_placeholder: Type your answer
+ask_user_other_required: Type your own answer for the “Other” option
+ask_user_required: Pick an option for every question first
+attachment_unsupported: "Only image files can be attached"
+auto_approve_plan: "Auto-approve plan"
+auto_approve_plan_hint: "Start implementation as soon as a plan is submitted"
+auto_compress_disabled: "Auto compression off"
+auto_compress_enabled: "Auto compression on"
+auto_compress_hint: "Roll up long context automatically"
+automation_agent_label: "Agent: %{agent}"
+automation_agent_required: No agent is available
+automation_create_failed: Could not create the scheduled task
+automation_created: Scheduled task created
+automation_daily_time: Daily at (local time)
+automation_empty: No automations yet
+automation_name: Task name
+automation_prompt: Task instructions
+automation_required_fields: Enter a name, instructions, and a valid time (HH:MM).
+awaiting_approval: Awaiting approval
+chat_hub: ChatHub
+clear_context_divider: Start new session
+clear_context_failed: "Failed to clear the context frame"
+clear_context_frame_done: "Context cleared for subsequent AI turns"
+clear_context_no_session: "No task session available to clear"
+click_to_expand: (click to expand)
+close_window: Close window
+collapse_sidebar: Collapse sidebar
+completed: Completed
+composer_placeholder: Ask for the next step, Enter to send
+connected: Connected
+connecting: Disconnected — retrying discovery
+continue_workflow: Continue
+copied: Copied
+cost_cache: Cache
+cost_cache_hit_rate: Cache hit rate
+cost_input: Input
+cost_label: Cost
+cost_output: Output
+cost_partial: Pricing or attribution is incomplete.
+cost_self: Self
+cost_tokens: tokens
+cost_unpriced: Unpriced
+cost_unpriced_rate: -- / M
+cost_with_sub_agents: With sub-agents
+create_automation: Create automation
+critical_error: Critical Error
+delete_last_message: Delete the last message
+demo: Deterministic local replay
+desktop_menu_unavailable: The desktop menu is unavailable. Open an up-to-date ChatSpeed desktop for this profile.
+earlier: Show earlier messages
+edited: Edited
+error: Error
+error_context_window: Context limit exceeded
+error_llm_authentication: Model authentication failed
+error_llm_billing: Insufficient model balance or billing issue
+error_llm_retry_exhausted: Model retry limit reached
+exec_backend_docker: Docker
+exec_backend_host: Host
+exec_backend_msb: macOS Sandbox
+exec_route_explicit_host: Explicit Host rule
+exec_route_host_only: Host only
+exec_route_sandbox: Sandbox profile
+executing: Executing...
+execution_style: "Personality"
+expand_sidebar: Expand sidebar
+failed: Failed
+final_audit_hint: "Review the result before completion"
+final_audit_label: "Final audit"
+finish_task: Task finished
+follow: Follow latest
+font_bold_fallback: Theme font has no bold face, switching to
+font_error: Cannot load ChatSpeed icon font
+group_call_mcp: Call MCP
+group_edit_file: Edit file
+group_fetch_result: Fetch execution result
+group_file_search: Search files
+group_read_file: Read file
+group_run_command: Run command
+group_task_changes: Update tasks
+group_use_tool: Use tool
+live_awaiting_approval: Awaiting approval
+live_awaiting_bash_approval: "Awaiting command approval: %{command}"
+live_awaiting_edit_approval: "Awaiting file edit approval: %{path}"
+live_awaiting_plan_approval: Awaiting plan confirmation
+live_awaiting_user: Awaiting user reply
+live_awaiting_write_approval: "Awaiting file creation approval: %{path}"
+live_elapsed: "%{text} ...(%{seconds}s)"
+live_file_created: "File created: %{path}"
+live_file_edited: "File edited: %{path}"
+live_overflow: Live preview limit reached — awaiting durable final
+live_running_command: "Running command: %{command}"
+live_running_edit: "Editing file: %{path}"
+live_running_tool: "Running tool: %{tool}"
+live_running_write: "Creating file: %{path}"
+live_thinking: Thinking...
+live_tool_completed: "Tool completed: %{tool}"
+manual_compress: Compress context
+mcp_auto_approve: "Auto approve"
+mcp_auto_expand: "Expand arguments"
+mcp_available: "Available"
+mcp_config: "MCP configuration"
+mcp_empty: "No MCP tools found"
+menu_about: About
+menu_agent: Agent
+menu_assistant: Assistant
+menu_chat: Chat
+menu_chat_hub: Chat Hub
+menu_mcp: MCP
+menu_model: AI Provider
+menu_note: Note
+menu_proxy: Proxy
+menu_proxy_switcher: Proxy Switcher
+menu_quit: Quit
+menu_scraper: Scraper Test
+menu_settings: Settings
+menu_skill: Skill
+menu_workflow: Task
+metrics_error: Metrics output unavailable
+model_config: "Model configuration"
+model_placeholder: "Select Model"
+model_slot_act: "Action model"
+model_slot_lite: "Lite model"
+model_slot_plan: "Planning model"
+model_slot_utility: "Utility model"
+model_slot_vision: "Vision model"
+new_task: New task
+no_sessions: No workflow sessions yet
+not_supported_native: Not available in the native window yet
+open_file: Open file
+paths_empty: No authorized paths
+personality_coach: "Coach"
+personality_coach_hint: "Move the task forward transparently and explain key decisions"
+personality_companion: "Companion"
+personality_companion_hint: "Stay warm and patient while still completing the task rigorously"
+personality_custom: "Custom"
+personality_custom_hint: "The agent's configured execution style"
+personality_default: "Default"
+personality_default_hint: "The built-in pragmatic, direct and collaborative style"
+personality_executor: "Executor"
+personality_executor_hint: "Advance once the goal is clear, keeping communication on the task"
+personality_expert: "Expert"
+personality_expert_hint: "Identify real risks with professional judgment, then act safely"
+personality_researcher: "Researcher"
+personality_researcher_hint: "Gather evidence carefully and cross-check facts without inventing any"
+personality_reviewer: "Reviewer"
+personality_reviewer_hint: "Carry review awareness into the task and correct risks and gaps"
+pin: Pin
+planning_mode: "Planning mode"
+planning_mode_hint: "Research and design before execution"
+plugin_panel: Plugins
+queued_message_empty: "Message without text"
+queued_message_remove_failed: "Could not remove the queued message"
+queued_message_send_failed: "Could not send the queued message"
+queued_message_sending: "Waiting for confirmation…"
+queued_messages: "Queued messages"
+quick_configuration: "Configuration"
+quick_runtime: "Runtime"
+reject: Reject
+rejected_label: Rejected
+remove_attachment: "Remove attachment"
+rewind_confirm: Rewind this conversation by removing its latest step?
+rewind_done: Conversation rewound
+rewind_unavailable: The conversation cannot be rewound right now
+root_filter_all: All directories
+sandbox_config: "Sandbox configuration"
+sandbox_empty: "No sandbox profiles"
+sandbox_mode_auto: "Auto"
+sandbox_mode_auto_hint: "Use host or sandbox rules by priority, then fall back to the common sandbox"
+sandbox_mode_host: "Host only"
+sandbox_mode_only: "Sandbox only"
+sandbox_mode_only_hint: "Run Shell/CMD directly in the sandbox"
+sandbox_refresh: "Refresh configuration"
+search_sessions: Search conversations
+select: Select a workflow session
+sessions: Workflow sessions
+sidebar_save_failed: "Could not save the sidebar preference"
+skill_enabled: "Enable skills"
+skills_config: "Skills configuration"
+skills_empty: "No skills available"
+snapshot_boundary_open_items: Open items at boundary
+snapshot_completed_rollup: Completed-task archive
+snapshot_completed_work: Completed work
+snapshot_confirmed_facts: Confirmed facts
+snapshot_constraints: Constraints and guards
+snapshot_context_handoff: Context handoff
+snapshot_context_title: Context Snapshot
+snapshot_error_log: Error Log
+snapshot_evidence: Evidence
+snapshot_file_changes: File changes
+snapshot_file_system_state: File System State
+snapshot_findings: Findings
+snapshot_key_knowledge: Key Knowledge
+snapshot_open_decision: Decision
+snapshot_open_remediation: Remediation
+snapshot_open_verification: Verification
+snapshot_overall_goal: Overall Goal
+snapshot_previous: Previous Context Snapshot
+snapshot_previous_tasks: Previous Tasks
+snapshot_recent_actions: Recent Actions
+snapshot_required_fixes: Required fixes
+snapshot_review_approved: Approved
+snapshot_review_open: Open
+snapshot_review_round: Review
+snapshot_review_rounds: Review rounds
+snapshot_review_verified: Verified after re-review
+snapshot_task_state: Task State
+snapshot_unresolved_carryovers: Unresolved carryovers
+snapshot_user_directives: User directives
+sound_approval: Approval sound
+sound_completion: Completion sound
+sound_playback_unavailable: Unable to play the workflow sound on the default audio device.
+sound_save_failed: Unable to save the workflow sound setting.
+status_auditing: Auditing
+status_awaiting_approval: Awaiting approval
+status_awaiting_sub_agent: Awaiting sub-agent
+status_awaiting_user: Awaiting answer
+status_cancelled: Cancelled
+status_completed: Completed
+status_error: Error
+status_executing: Executing
+status_failed: Failed
+status_interrupted: Interrupted
+status_paused: Paused
+status_pending: Pending
+status_running: Running
+status_stopping: Stopping
+status_thinking: Thinking
+stop_confirm: Stop the running workflow?
+stop_workflow: Stop
+sub_agent_agent: Agent
+sub_agent_approved: Approved
+sub_agent_cancelled: Cancelled
+sub_agent_changes_required: Changes Required
+sub_agent_completed: Completed
+sub_agent_context: Context
+sub_agent_default_agent: Sub-agent
+sub_agent_default_task: Delegated task
+sub_agent_delegated_task: Delegated Task
+sub_agent_failed: Error
+sub_agent_loading: Loading the delegated transcript...
+sub_agent_mode: Mode
+sub_agent_result_section: Result
+sub_agent_running: Running
+sub_agent_task_section: Task
+sub_agent_tools: Tools
+submit_answer: Submit
+suggestion_add_directory: "Authorize a directory"
+suggestion_bundled: "Bundled skills"
+suggestion_clear_context: "Start a new context"
+suggestion_commands: "ChatSpeed commands"
+suggestion_directory_invalid: "Enter an existing absolute directory path"
+suggestion_installed: "Installed skills"
+suggestion_remove_directory: "Remove an authorized directory"
+tab_automation: Automation
+tab_paths: Authorized paths
+tab_tasks: Tasks
+terminal: Terminal
+thinking: Thinking...
+thought: Thought
+thought_completed: Thought completed
+title: ChatSpeed GPUI observer
+todo_create: Create todo
+todo_create_batch: Create batch todos
+todo_items: items
+todo_list: List todos
+todo_plan_note: Planning note
+todo_status_completed: completed
+todo_status_in_progress: in progress
+todo_status_pending: pending
+todo_update: Update todo
+todo_view: View todo
+tool_config: "Tool configuration"
+tools_empty: "No tools found"
+tree_loading: Loading
+unit_hour: h
+unit_minute: m
+unit_second: s
+unpin: Unpin
+untitled: Untitled workflow
+window_error: Cannot open GPUI window
+worker_error: Cannot start observer worker
+written: Written

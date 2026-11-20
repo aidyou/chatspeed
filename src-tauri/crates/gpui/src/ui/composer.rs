@@ -47,9 +47,7 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         answered,
         cx,
     ));
-    let draft = observer.composer.read(cx).value().to_string();
-    let panel =
-        suggestions::trigger(&draft).and_then(|trigger| suggestions::panel(observer, &trigger, cx));
+    let panel = suggestions::panel(observer, cx);
     // Vue floats the panel above the box instead of pushing the transcript up.
     let mut frame = v_flex()
         .relative()

@@ -49,7 +49,7 @@ fn render_status(live: Option<Live>, cx: &App) -> AnyElement {
     };
     let mut icon = Icon::new(live.icon).size(14.).color(color);
     if live.icon == "reasoning" {
-        icon = icon.spin("live-reasoning-spin");
+        icon = icon.spin("live-reasoning-spin", super::icon::Spin::Linear);
     }
     h_flex()
         .w_full()
@@ -92,8 +92,8 @@ fn live_state(model: &Model, running: bool, answered: bool) -> Option<Live> {
     if pending_plan(model) {
         return Some(Live {
             text: t!("live_awaiting_plan_approval").to_string(),
-            icon: "skill-plan",
-            warning: true,
+            icon: "approval",
+            warning: false,
         });
     }
 
@@ -123,8 +123,8 @@ fn live_state(model: &Model, running: bool, answered: bool) -> Option<Live> {
     if waiting_approval && !answered_ask {
         return Some(Live {
             text: t!("live_awaiting_approval").to_string(),
-            icon: "warning",
-            warning: true,
+            icon: "approval",
+            warning: false,
         });
     }
 
@@ -265,8 +265,8 @@ fn tool_status(model: &Model, id: &str, tool: &Value, phase: &str) -> Live {
 
     Live {
         text,
-        icon,
-        warning: phase == "pending",
+        icon: if phase == "pending" { "approval" } else { icon },
+        warning: false,
     }
 }
 

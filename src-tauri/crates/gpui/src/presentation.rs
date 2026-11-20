@@ -1093,29 +1093,11 @@ fn tool_detail(
 
 /// Extract canonical edit details for the native diff renderer.
 pub fn edit_lines(tool: &Value) -> Option<Vec<(bool, String)>> {
-    let tool = primary_tool(tool);
-    let call = tool.get("tool_call").unwrap_or(tool);
-    let function = call.get("function").unwrap_or(call);
-    let name = tool["tool_name"]
-        .as_str()
-        .or_else(|| function["name"].as_str())?;
-    if !matches!(name, "edit_file" | "write_file") {
+    let name = tool_name(tool);
+    if !matches!(name, "edit_file" | "write_file" | "plan_note") && tool["display_type"] != "diff" {
         return None;
     }
-    let details = decoded(&tool["details"]);
-    let args = if details.is_object()
-        && ["old_string", "new_string", "content"]
-            .iter()
-            .any(|key| details.get(*key).is_some())
-    {
-        details
-    } else {
-        decoded(
-            tool.get("arguments")
-                .or_else(|| function.get("arguments"))
-                .unwrap_or(&Value::Null),
-        )
-    };
+    let args = tool_arguments(tool);
     let mut lines = Vec::new();
     if let Some(old) = args["old_string"].as_str() {
         lines.extend(old.lines().map(|line| (false, line.to_owned())));
@@ -2270,15 +2252,16 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
         }
     }
     let superseded = |message: &Message| {
-        is_observation(message) && tool_call_id(message).is_some_and(|id| {
-            best.get(id).is_some_and(|best| {
-                *best
-                    != (
-                        ToolStatus::from_message(message).progress_rank(),
-                        message.id,
-                    )
+        is_observation(message)
+            && tool_call_id(message).is_some_and(|id| {
+                best.get(id).is_some_and(|best| {
+                    *best
+                        != (
+                            ToolStatus::from_message(message).progress_rank(),
+                            message.id,
+                        )
+                })
             })
-        })
     };
     let messages: Vec<Message> = messages
         .into_iter()
