@@ -101,23 +101,44 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     return;
                 }
             } else {
-                // Locale and appearance follow the runtime configuration, so a
-                // setting change shows up on the next poll without a restart.
-                let fetched_at = Instant::now();
-                if let Ok(config) = native::config(&list_options).await {
-                    if !send(&list_tx, 0, UpdateKind::Config(config, fetched_at)).await {
-                        return;
-                    }
-                }
                 match native::connect(&list_options).await {
                     Some(client) => {
-                        if let Ok(value) = client.get("/control/v1/workflows").await {
-                            if let Ok(sessions) = serde_json::from_value(value) {
+                        let started = Instant::now();
+                        let sessions = match client.get("/control/v1/workflows").await {
+                            Ok(value) => serde_json::from_value(value).map_err(|_| "decode"),
+                            Err(_) => Err("request"),
+                        };
+                        match sessions {
+                            Ok(sessions) => {
                                 if !send(&list_tx, 0, UpdateKind::Sessions(sessions)).await
                                     || !send(&list_tx, 0, UpdateKind::Connected(true)).await
                                 {
                                     return;
                                 }
+                            }
+                            Err(stage) => {
+                                eprintln!(
+                                    "chatspeed-gpui-observer: session list refresh failed (stage={stage}, elapsed_ms={})",
+                                    started.elapsed().as_millis(),
+                                );
+                                if !send(&list_tx, 0, UpdateKind::Connected(false)).await {
+                                    return;
+                                }
+                            }
+                        }
+                        // Appearance is optional and must not delay publishing the list.
+                        let fetched_at = Instant::now();
+                        let config = tokio::time::timeout(
+                            Duration::from_secs(5),
+                            client.post(
+                                &chatspeed_runtime_client::data_command_path("get_all_config"),
+                                &json!({}),
+                            ),
+                        )
+                        .await;
+                        if let Ok(Ok(config)) = config {
+                            if !send(&list_tx, 0, UpdateKind::Config(config, fetched_at)).await {
+                                return;
                             }
                         }
                     }

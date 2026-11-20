@@ -187,6 +187,12 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
             };
             let (content_type, body) = if path == "/control/v1/meta" {
                 ("application/json", json!({"service":"chatspeed-runtime","protocol_version":"1","schema_version":1,"server_instance_id":"mock","pid":std::process::id()}).to_string())
+            } else if path == "/control/v1/data-commands/get_all_config" {
+                // A stalled settings response must not hold up the first sidebar list.
+                held_streams.push(socket);
+                continue;
+            } else if path == "/control/v1/workflows" {
+                ("application/json", json!([{"id":"session","title":"Session","status":"executing"}]).to_string())
             } else if path.ends_with("/stream") {
                 streams += 1;
                 let body = match streams {
@@ -234,6 +240,18 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
         demo: false,
     })
     .unwrap();
+    let list_deadline = Instant::now() + Duration::from_secs(4);
+    let mut listed = false;
+    while Instant::now() < list_deadline {
+        if let Ok(update) = worker.updates.try_recv() {
+            if let UpdateKind::Sessions(sessions) = update.kind {
+                listed = sessions.iter().any(|session| session.id == "session");
+                break;
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     let mut model = Model::default();
     let generation = model.select();
     worker
@@ -289,6 +307,7 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
     done.store(true, Ordering::Relaxed);
     server.join().unwrap();
     std::fs::remove_file(discovery).unwrap();
+    assert!(listed, "sidebar list must arrive while settings are stalled");
     assert!(partial, "resume must not duplicate partial delta");
     assert!(reset, "client reset must clear transient state");
     assert!(
