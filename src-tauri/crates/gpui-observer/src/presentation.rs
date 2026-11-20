@@ -1772,10 +1772,18 @@ pub fn ask_user_response(
             .options
             .get(index)
             .ok_or(AskUserDraftError::Required)?;
+        // Vue keeps a note typed beside the chosen option by appending it to
+        // the option text; the parser strips the option prefix again.
+        let supplement = draft.supplement.trim();
+        let choice = if supplement.is_empty() {
+            text.clone()
+        } else {
+            format!("{text}\n{supplement}")
+        };
         selections.push(serde_json::json!({
             "title": group.title,
             "choice_index": index + 1,
-            "choice": text,
+            "choice": choice,
             "source": "option",
         }));
     }
@@ -2965,6 +2973,25 @@ mod tests {
         assert_eq!(user_message_lines("a\nb\nc\nd\ne"), 5);
         assert!(user_message_lines(&"a".repeat(400)) > 4);
         assert!(user_message_lines(&"中".repeat(200)) > 4);
+    }
+
+    #[test]
+    fn ask_user_option_note_is_appended_to_choice() {
+        let groups = vec![ChoiceGroupView {
+            title: "Scope".into(),
+            options: vec!["Narrow".into(), "Wide".into()],
+            ..ChoiceGroupView::default()
+        }];
+        let content = ask_user_response(
+            &groups,
+            &[AskUserDraft {
+                choice: Some(0),
+                supplement: "only the parser",
+            }],
+        )
+        .expect("answer");
+        assert!(content.contains(r#""choice": "Narrow\nonly the parser""#));
+        assert!(content.contains(r#""source": "option""#));
     }
 
     #[test]

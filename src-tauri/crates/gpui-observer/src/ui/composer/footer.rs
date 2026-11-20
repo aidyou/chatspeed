@@ -15,7 +15,7 @@ use rust_i18n::t;
 use serde_json::Value;
 
 use crate::ui::{trigger, Icon};
-use crate::{danger, Observer};
+use crate::{danger, Observer, QuickPanel};
 use chatspeed_gpui_observer::types::Command;
 
 /// The actions under the box, in Vue's left/right arrangement.
@@ -24,7 +24,9 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let hover = cx.theme().muted;
     let muted = cx.theme().muted_foreground;
     let running = observer.workflow_running();
-    let can_send = !observer.composer.read(cx).value().trim().is_empty() && !observer.start_pending;
+    let can_send = (!observer.composer.read(cx).value().trim().is_empty()
+        || !observer.attachments.is_empty())
+        && !observer.start_pending;
 
     h_flex()
         .w_full()
@@ -95,6 +97,24 @@ impl OptionColors {
             hover: cx.theme().muted,
             muted: cx.theme().muted_foreground,
             foreground: cx.theme().foreground,
+        }
+    }
+}
+
+/// Selection state and tone for one quick-action row.
+#[derive(Clone, Copy)]
+struct MenuRowStyle {
+    checked: bool,
+    danger: bool,
+    colors: OptionColors,
+}
+
+impl MenuRowStyle {
+    fn new(colors: OptionColors, checked: bool, danger: bool) -> Self {
+        Self {
+            checked,
+            danger,
+            colors,
         }
     }
 }
@@ -248,7 +268,7 @@ fn agent_selector(
                     is_selected,
                     move |_, window, cx| {
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        let _ = observer_entity.update(cx, |this, _| {
+                        observer_entity.update(cx, |this, _| {
                             let _ = this.worker.commands.try_send(
                                 chatspeed_gpui_observer::types::Command::SetAgent {
                                     session: session.clone(),
@@ -265,6 +285,145 @@ fn agent_selector(
         .into_any_element()
 }
 
+/// One selectable model, either a provider entry or a proxy alias.
+#[derive(Clone)]
+pub(super) struct ModelChoice {
+    pub provider_id: i64,
+    pub model: String,
+    pub name: String,
+    /// Provider entry copied into the slot so capabilities stay in sync.
+    pub target: Option<Value>,
+}
+
+/// The provider model behind an `(id, model)` pair, used for capabilities.
+fn provider_model(observer: &Observer, provider_id: i64, model: &str) -> Option<Value> {
+    observer
+        .models
+        .iter()
+        .find(|provider| provider["id"].as_i64() == Some(provider_id))
+        .and_then(|provider| {
+            provider["models"]
+                .as_array()?
+                .iter()
+                .find(|entry| entry["id"].as_str() == Some(model))
+                .cloned()
+        })
+}
+
+/// Model choices for one slot, matching Vue's `buildCurrentModelOptions`.
+pub(super) fn model_choices(observer: &Observer, config: &Value) -> (String, Vec<ModelChoice>) {
+    let current = config["model"].as_str().unwrap_or("");
+    let provider_id = config["id"].as_i64().unwrap_or_default();
+    if provider_id == 0 && current.contains('@') {
+        let group = current.split('@').next().unwrap_or("");
+        let aliases: Vec<ModelChoice> = observer.proxy_targets[group]
+            .as_object()
+            .map(|aliases| {
+                aliases
+                    .keys()
+                    .map(|alias| {
+                        let target = observer.proxy_targets[group][alias]
+                            .as_array()
+                            .and_then(|targets| targets.first());
+                        let target = target.and_then(|target| {
+                            let id = target["id"].as_i64()?;
+                            let model = target["model"].as_str()?;
+                            provider_model(observer, id, model)
+                        });
+                        ModelChoice {
+                            provider_id: 0,
+                            model: format!("{group}@{alias}"),
+                            name: alias.clone(),
+                            target,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if aliases.is_empty() && !current.is_empty() {
+            // Keep the pill responsive even before the settings poll delivers
+            // its proxy map.
+            let alias = current
+                .split_once('@')
+                .map(|(_, alias)| alias)
+                .unwrap_or(current);
+            return (
+                group.to_owned(),
+                vec![ModelChoice {
+                    provider_id: 0,
+                    model: current.to_owned(),
+                    name: alias.to_owned(),
+                    target: None,
+                }],
+            );
+        }
+        return (group.to_owned(), aliases);
+    }
+    let Some(provider) = observer
+        .models
+        .iter()
+        .find(|provider| provider["id"].as_i64() == Some(provider_id))
+    else {
+        // A stale provider id must not turn the pill into a dead control.
+        if current.is_empty() {
+            return (String::new(), Vec::new());
+        }
+        return (
+            String::new(),
+            vec![ModelChoice {
+                provider_id,
+                model: current.to_owned(),
+                name: current.to_owned(),
+                target: None,
+            }],
+        );
+    };
+    let label = provider["name"].as_str().unwrap_or_default().to_owned();
+    let choices = provider["models"]
+        .as_array()
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|entry| {
+                    let id = entry["id"].as_str()?.to_owned();
+                    Some(ModelChoice {
+                        provider_id,
+                        name: entry["name"]
+                            .as_str()
+                            .or_else(|| entry["id"].as_str())
+                            .unwrap_or_default()
+                            .to_owned(),
+                        model: id,
+                        target: Some(entry.clone()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (label, choices)
+}
+
+/// Applies a choice to a slot config, copying Vue's capability fields.
+pub(super) fn apply_model_choice(config: &Value, choice: &ModelChoice) -> Value {
+    let mut next = config.clone();
+    next["id"] = Value::from(choice.provider_id);
+    next["model"] = Value::from(choice.model.clone());
+    if let Some(target) = &choice.target {
+        for key in [
+            "functionCall",
+            "thinking",
+            "temperature",
+            "contextSize",
+            "maxTokens",
+        ] {
+            if !target[key].is_null() {
+                next[key] = target[key].clone();
+            }
+        }
+    }
+    next
+}
+
 /// The model pill: the active provider's models, as Vue's compact selector lists.
 fn model_selector(
     observer: &Observer,
@@ -278,34 +437,16 @@ fn model_selector(
         return trigger_el;
     };
     let config = observer.active_model_config();
-    let Some(provider_id) = config["id"].as_i64() else {
-        return trigger_el;
+    let slot = if observer.planning_mode {
+        "plan"
+    } else {
+        "act"
     };
-    let Some(provider) = observer.active_provider().cloned() else {
-        return trigger_el;
-    };
-    let entries: Vec<(String, String)> = provider["models"]
-        .as_array()
-        .map(|models| {
-            models
-                .iter()
-                .filter_map(|model| {
-                    Some((
-                        model["id"].as_str()?.to_owned(),
-                        model["name"]
-                            .as_str()
-                            .or_else(|| model["id"].as_str())
-                            .unwrap_or_default()
-                            .to_owned(),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let current_model = config["model"].as_str().unwrap_or_default().to_owned();
+    let (group, entries) = model_choices(observer, &config);
     if entries.is_empty() {
         return trigger_el;
     }
-    let current_model = config["model"].as_str().unwrap_or_default().to_owned();
     let base_config = config.clone();
     let all_configs = observer.model_configs();
     let observer_entity = cx.entity();
@@ -314,43 +455,27 @@ fn model_selector(
         .trigger(trigger(trigger_el))
         .content(move |_, _, cx| {
             let popover = cx.entity();
-            let mut list = v_flex().id("composer-model-list").w(px(240.)).gap(px(2.));
-            for (id, name) in entries.clone() {
+            let mut list = v_flex().id("composer-model-list").w(px(260.)).gap(px(2.));
+            if !group.is_empty() {
+                list = list.child(model_group_label(group.clone(), cx));
+            }
+            for choice in entries.clone() {
                 let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
                 let session = session.clone();
-                let is_selected = current_model == id;
                 // Vue copies the model's own capabilities into the slot config.
-                let mut next = base_config.clone();
-                next["id"] = Value::from(provider_id);
-                next["model"] = Value::from(id.clone());
-                if let Some(model) = provider["models"].as_array().and_then(|models| {
-                    models
-                        .iter()
-                        .find(|model| model["id"].as_str() == Some(id.as_str()))
-                }) {
-                    for key in [
-                        "functionCall",
-                        "thinking",
-                        "temperature",
-                        "contextSize",
-                        "maxTokens",
-                    ] {
-                        if !model[key].is_null() {
-                            next[key] = model[key].clone();
-                        }
-                    }
-                }
+                let next = apply_model_choice(&base_config, &choice);
                 let mut configs = all_configs.clone();
-                configs["act"] = next;
+                configs[slot] = next;
+                let is_selected = current_model == choice.model;
                 list = list.child(option_row(
-                    format!("composer-model-{id}"),
-                    name,
+                    format!("composer-model-{}", choice.model),
+                    choice.name,
                     String::new(),
                     is_selected,
                     move |_, window, cx| {
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        let _ = observer_entity.update(cx, |this, _| {
+                        observer_entity.update(cx, |this, _| {
                             let _ = this.worker.commands.try_send(
                                 chatspeed_gpui_observer::types::Command::SetModelConfig {
                                     session: session.clone(),
@@ -367,6 +492,18 @@ fn model_selector(
         .into_any_element()
 }
 
+fn model_group_label(label: String, cx: &App) -> AnyElement {
+    div()
+        .w_full()
+        .px_2()
+        .py_1()
+        .text_size(px(10.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(cx.theme().muted_foreground)
+        .child(label)
+        .into_any_element()
+}
+
 /// Vue's `+` quick actions: the compress command, the runtime switches and the
 /// approval level, grouped under the same section titles the web menu uses.
 fn quick_actions(
@@ -375,8 +512,18 @@ fn quick_actions(
     muted: Hsla,
     cx: &mut Context<Observer>,
 ) -> AnyElement {
+    let planning = observer.planning_mode;
+    let auto_approve_plan = observer.agent_bool("autoApprovePlan", "auto_approve_plan", false);
+    let auto_compress = observer.auto_compress_enabled();
+    let final_audit = observer.final_audit_enabled();
+    let active_count = usize::from(planning)
+        + usize::from(planning && auto_approve_plan)
+        + usize::from(final_audit)
+        + usize::from(auto_compress);
+    let accent = cx.theme().primary;
     let trigger_el = div()
         .id("composer-quick-actions")
+        .relative()
         .flex_none()
         .flex()
         .items_center()
@@ -386,12 +533,29 @@ fn quick_actions(
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new("add").size(13.).color(muted))
+        .when(active_count > 0, |button| {
+            button.child(
+                div()
+                    .absolute()
+                    .top(px(-5.))
+                    .right(px(-5.))
+                    .min_w(px(15.))
+                    .h(px(15.))
+                    .px_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(accent)
+                    .text_size(px(9.))
+                    .text_color(gpui_kit::white())
+                    .child(active_count.to_string()),
+            )
+        })
         .into_any_element();
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
-    let auto_compress = observer.auto_compress_enabled();
-    let final_audit = observer.final_audit_enabled();
     let approval = observer.approval_level();
     let observer_entity = cx.entity();
     Popover::new("composer-quick-popover")
@@ -401,6 +565,7 @@ fn quick_actions(
             let popover = cx.entity();
             let observer_entity = observer_entity.clone();
             let session = session.clone();
+            let colors = OptionColors::new(cx);
             // Every entry acts on a fresh copy of the runtime state, so the
             // menu closes after the command like Vue's dropdown does.
             let compress = {
@@ -408,7 +573,56 @@ fn quick_actions(
                 let observer_entity = observer_entity.clone();
                 move |window: &mut Window, cx: &mut App| {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
-                    let _ = observer_entity.update(cx, |this, cx| this.manual_compress(cx));
+                    observer_entity.update(cx, |this, cx| this.manual_compress(cx));
+                }
+            };
+            let attach = {
+                let popover = popover.clone();
+                let observer_entity = observer_entity.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                    observer_entity.update(cx, |this, cx| this.pick_attachments(cx));
+                }
+            };
+            let open_panel = |panel: QuickPanel| {
+                let popover = popover.clone();
+                let observer_entity = observer_entity.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                    observer_entity.update(cx, |this, cx| this.open_quick_panel(panel, cx));
+                }
+            };
+            let toggle_planning = {
+                let popover = popover.clone();
+                let observer_entity = observer_entity.clone();
+                let session = session.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                    observer_entity.update(cx, |this, cx| {
+                        this.planning_mode = !planning;
+                        let _ = this.worker.commands.try_send(Command::SetPlanning {
+                            session: session.clone(),
+                            enabled: !planning,
+                        });
+                        cx.notify();
+                    });
+                }
+            };
+            let toggle_auto_approve_plan = {
+                let popover = popover.clone();
+                let observer_entity = observer_entity.clone();
+                let session = session.clone();
+                move |window: &mut Window, cx: &mut App| {
+                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                    observer_entity.update(cx, |this, cx| {
+                        let mut config = this.agent_config();
+                        config["autoApprovePlan"] = Value::from(!auto_approve_plan);
+                        let _ = this.worker.commands.try_send(Command::SetAgentConfig {
+                            session: session.clone(),
+                            config,
+                        });
+                        cx.notify();
+                    });
                 }
             };
             let toggle_auto_compress = {
@@ -417,11 +631,12 @@ fn quick_actions(
                 let session = session.clone();
                 move |window: &mut Window, cx: &mut App| {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
-                    let _ = observer_entity.update(cx, |this, _| {
+                    observer_entity.update(cx, |this, cx| {
                         let _ = this.worker.commands.try_send(Command::SetAutoCompress {
                             session: session.clone(),
                             enabled: !auto_compress,
                         });
+                        cx.notify();
                     });
                 }
             };
@@ -431,31 +646,113 @@ fn quick_actions(
                 let session = session.clone();
                 move |window: &mut Window, cx: &mut App| {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
-                    let _ = observer_entity.update(cx, |this, _| {
+                    observer_entity.update(cx, |this, cx| {
                         let _ = this.worker.commands.try_send(Command::SetFinalAudit {
                             session: session.clone(),
                             enabled: !final_audit,
                         });
+                        cx.notify();
                     });
                 }
             };
             let mut list = v_flex()
                 .id("composer-quick-list")
                 .w(px(280.))
+                .max_h(px(520.))
+                .overflow_y_scroll()
                 .gap(px(1.))
+                .child(menu_row(
+                    "composer-quick-attachment",
+                    "attachment",
+                    t!("add_attachment").to_string(),
+                    String::new(),
+                    MenuRowStyle::new(colors, false, false),
+                    attach,
+                ))
                 .child(menu_row(
                     "composer-quick-compress",
                     "compress",
                     t!("manual_compress").to_string(),
                     String::new(),
-                    false,
-                    OptionColors::new(cx),
+                    MenuRowStyle::new(colors, false, false),
                     compress,
+                ))
+                .child(menu_section(
+                    t!("quick_configuration").to_string(),
+                    cx.theme().border,
+                    cx.theme().muted_foreground,
+                ))
+                .child(menu_row(
+                    "composer-quick-model-config",
+                    "model",
+                    t!("model_config").to_string(),
+                    String::new(),
+                    MenuRowStyle::new(colors, false, false),
+                    open_panel(QuickPanel::Models),
+                ))
+                .child(menu_row(
+                    "composer-quick-skills-config",
+                    "skill",
+                    t!("skills_config").to_string(),
+                    String::new(),
+                    MenuRowStyle::new(colors, false, false),
+                    open_panel(QuickPanel::Skills),
+                ))
+                .child(menu_row(
+                    "composer-quick-mcp-config",
+                    "mcp",
+                    t!("mcp_config").to_string(),
+                    String::new(),
+                    MenuRowStyle::new(colors, false, false),
+                    open_panel(QuickPanel::Mcp),
+                ))
+                .child(menu_row(
+                    "composer-quick-tools-config",
+                    "hammer",
+                    t!("tool_config").to_string(),
+                    String::new(),
+                    MenuRowStyle::new(colors, false, false),
+                    open_panel(QuickPanel::Tools),
+                ))
+                .child(menu_row(
+                    "composer-quick-personality",
+                    "skill-mindmap-circle",
+                    t!("execution_style").to_string(),
+                    String::new(),
+                    MenuRowStyle::new(colors, false, false),
+                    open_panel(QuickPanel::Personality),
                 ))
                 .child(menu_section(
                     t!("quick_runtime").to_string(),
                     cx.theme().border,
                     cx.theme().muted_foreground,
+                ))
+                .child(menu_row(
+                    "composer-quick-planning",
+                    "skill-plan",
+                    t!("planning_mode").to_string(),
+                    t!("planning_mode_hint").to_string(),
+                    MenuRowStyle::new(colors, planning, false),
+                    toggle_planning,
+                ));
+            if planning {
+                list = list.child(menu_row(
+                    "composer-quick-auto-approve-plan",
+                    "check-circle",
+                    t!("auto_approve_plan").to_string(),
+                    t!("auto_approve_plan_hint").to_string(),
+                    MenuRowStyle::new(colors, auto_approve_plan, false),
+                    toggle_auto_approve_plan,
+                ));
+            }
+            list = list
+                .child(menu_row(
+                    "composer-quick-final-audit",
+                    "check-circle",
+                    t!("final_audit_label").to_string(),
+                    t!("final_audit_hint").to_string(),
+                    MenuRowStyle::new(colors, final_audit, false),
+                    toggle_final_audit,
                 ))
                 .child(menu_row(
                     "composer-quick-auto-compress",
@@ -466,42 +763,35 @@ fn quick_actions(
                         t!("auto_compress_disabled").to_string()
                     },
                     t!("auto_compress_hint").to_string(),
-                    auto_compress,
-                    OptionColors::new(cx),
+                    MenuRowStyle::new(colors, auto_compress, false),
                     toggle_auto_compress,
-                ))
-                .child(menu_row(
-                    "composer-quick-final-audit",
-                    "check-circle",
-                    t!("final_audit_label").to_string(),
-                    t!("final_audit_hint").to_string(),
-                    final_audit,
-                    OptionColors::new(cx),
-                    toggle_final_audit,
                 ))
                 .child(menu_section(
                     t!("approval_level").to_string(),
                     cx.theme().border,
                     cx.theme().muted_foreground,
                 ));
-            for (value, icon, label, hint) in [
+            for (value, icon, label, hint, danger) in [
                 (
                     "default",
                     "setting",
                     t!("approval_default").to_string(),
                     t!("approval_default_hint").to_string(),
+                    false,
                 ),
                 (
                     "smart",
                     "brain",
                     t!("approval_smart").to_string(),
                     t!("approval_smart_hint").to_string(),
+                    false,
                 ),
                 (
                     "full",
                     "yolo",
                     t!("approval_full").to_string(),
                     t!("approval_full_hint").to_string(),
+                    true,
                 ),
             ] {
                 let popover = popover.clone();
@@ -513,11 +803,10 @@ fn quick_actions(
                     icon,
                     label,
                     hint,
-                    approval == value,
-                    OptionColors::new(cx),
+                    MenuRowStyle::new(colors, approval == value, danger),
                     move |window: &mut Window, cx: &mut App| {
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        let _ = observer_entity.update(cx, |this, _| {
+                        observer_entity.update(cx, |this, _| {
                             let _ = this.worker.commands.try_send(Command::SetApprovalLevel {
                                 session: session.clone(),
                                 level: level.clone(),
@@ -537,16 +826,30 @@ fn menu_row(
     icon: &'static str,
     label: String,
     hint: String,
-    checked: bool,
-    colors: OptionColors,
+    style: MenuRowStyle,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    let MenuRowStyle {
+        checked,
+        danger,
+        colors,
+    } = style;
     let OptionColors {
         primary,
         hover,
         muted,
         foreground,
     } = colors;
+    let danger_color: Hsla = crate::danger().into();
+    let accent = if danger { danger_color } else { primary };
+    let icon_color = if checked { accent } else { muted };
+    // Vue only tints the full-access row while it is the active level; an
+    // inactive row keeps the ordinary text color.
+    let text_color = if danger && checked {
+        danger_color
+    } else {
+        foreground
+    };
     v_flex()
         .id(SharedString::from(id.to_owned()))
         .w_full()
@@ -556,6 +859,7 @@ fn menu_row(
         .py_1()
         .rounded(px(6.))
         .cursor_pointer()
+        .when(checked, |row| row.bg(primary.opacity(0.12)))
         .hover(move |style| style.bg(hover))
         .child(
             h_flex()
@@ -563,7 +867,7 @@ fn menu_row(
                 .min_w_0()
                 .items_center()
                 .gap_2()
-                .child(Icon::new(icon).size(13.).color(muted))
+                .child(Icon::new(icon).size(13.).color(icon_color))
                 .child(
                     div()
                         .flex_1()
@@ -571,11 +875,11 @@ fn menu_row(
                         .overflow_hidden()
                         .text_ellipsis()
                         .text_size(px(12.))
-                        .text_color(foreground)
+                        .text_color(text_color)
                         .child(label),
                 )
                 .when(checked, |row| {
-                    row.child(Icon::new("check").size(12.).color(primary))
+                    row.child(Icon::new("check").size(12.).color(accent))
                 }),
         )
         .when(!hint.is_empty(), |column| {
@@ -653,6 +957,17 @@ fn sandbox_selector(
             .and_then(|scheme| scheme["id"].as_str())
             .map(str::to_owned)
     });
+    let schemes: Vec<(String, String)> = observer
+        .sandbox_schemes
+        .iter()
+        .filter(|scheme| scheme["enabled"].as_bool().unwrap_or(true))
+        .filter_map(|scheme| {
+            Some((
+                scheme["id"].as_str()?.to_owned(),
+                scheme["name"].as_str().unwrap_or_default().to_owned(),
+            ))
+        })
+        .collect();
     let options = [
         (
             "auto",
@@ -676,10 +991,8 @@ fn sandbox_selector(
         .anchor(Anchor::BottomLeft)
         .trigger(trigger(trigger_el))
         .content(move |_, _, cx| {
-            let popover = cx.entity();
-            let mut list = v_flex().id("composer-sandbox-list").w(px(260.)).gap(px(2.));
+            let mut list = v_flex().id("composer-sandbox-list").w(px(280.)).gap(px(2.));
             for (value, title, hint) in options.clone() {
-                let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
                 let session = session.clone();
                 let scheme = scheme.clone();
@@ -689,9 +1002,16 @@ fn sandbox_selector(
                     title,
                     hint,
                     is_selected,
-                    move |_, window, cx| {
-                        popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        let _ = observer_entity.update(cx, |this, _| {
+                    move |_, _, cx| {
+                        // Keep the panel open: Vue reveals the profile list in
+                        // the same panel right after the mode changes.
+                        observer_entity.update(cx, |this, cx| {
+                            this.sandbox_mode_draft = Some(value.to_owned());
+                            this.sandbox_scheme_draft = if value == "host_only" {
+                                None
+                            } else {
+                                scheme.clone()
+                            };
                             let _ = this.worker.commands.try_send(
                                 chatspeed_gpui_observer::types::Command::SetSandbox {
                                     session: session.clone(),
@@ -703,10 +1023,94 @@ fn sandbox_selector(
                                     },
                                 },
                             );
+                            cx.notify();
                         });
                     },
                     OptionColors::new(cx),
                 ));
+            }
+            // Vue only offers the profile list for the two sandboxed modes.
+            if current != "host_only" {
+                list = list.child(menu_section(
+                    t!("sandbox_config").to_string(),
+                    cx.theme().border,
+                    cx.theme().muted_foreground,
+                ));
+                if schemes.is_empty() {
+                    list = list.child(
+                        div()
+                            .px_2()
+                            .py_2()
+                            .text_size(px(11.))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("sandbox_empty").to_string()),
+                    );
+                }
+                for (id, name) in schemes.clone() {
+                    let observer_entity = observer_entity.clone();
+                    let session = session.clone();
+                    let mode = current.clone();
+                    let selected = scheme.as_deref() == Some(id.as_str());
+                    let refresh_id = id.clone();
+                    list = list.child(
+                        option_row(
+                            format!("composer-sandbox-scheme-{id}"),
+                            name,
+                            String::new(),
+                            selected,
+                            move |_, _, cx| {
+                                observer_entity.update(cx, |this, cx| {
+                                    this.sandbox_mode_draft = Some(mode.clone());
+                                    this.sandbox_scheme_draft = Some(refresh_id.clone());
+                                    let _ = this.worker.commands.try_send(Command::SetSandbox {
+                                        session: session.clone(),
+                                        mode: mode.clone(),
+                                        scheme: Some(refresh_id.clone()),
+                                    });
+                                    cx.notify();
+                                });
+                            },
+                            OptionColors::new(cx),
+                        )
+                        .into_any_element(),
+                    );
+                }
+                if !schemes.is_empty() {
+                    let observer_entity = observer_entity.clone();
+                    let session = session.clone();
+                    let mode = current.clone();
+                    let scheme = scheme.clone();
+                    list = list.child(
+                        h_flex()
+                            .id("composer-sandbox-refresh")
+                            .w_full()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(cx.theme().muted))
+                            .text_size(px(11.))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                Icon::new("refresh")
+                                    .size(12.)
+                                    .color(cx.theme().muted_foreground),
+                            )
+                            .child(t!("sandbox_refresh").to_string())
+                            .on_click(move |_, _, cx: &mut App| {
+                                observer_entity.update(cx, |this, cx| {
+                                    let _ = this.worker.commands.try_send(Command::SetSandbox {
+                                        session: session.clone(),
+                                        mode: mode.clone(),
+                                        scheme: scheme.clone(),
+                                    });
+                                    cx.notify();
+                                });
+                            }),
+                    );
+                }
             }
             list.into_any_element()
         })

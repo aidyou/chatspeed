@@ -184,6 +184,8 @@ pub enum Command {
     /// Creates a session and starts it with the first prompt.
     StartNew {
         prompt: String,
+        attached_context: Option<String>,
+        metadata: Option<Value>,
     },
     /// Loads a child session for an expanded sub-agent card.
     Child {
@@ -230,6 +232,27 @@ pub enum Command {
     SetApprovalLevel {
         session: String,
         level: String,
+    },
+    /// Toggles planning mode through the workflow phase.
+    SetPlanning {
+        session: String,
+        enabled: bool,
+    },
+    /// Replaces the workflow's personality (execution style).
+    SetPersonality {
+        session: String,
+        personality: String,
+    },
+    /// Enables skills and selects the workflow's skill names.
+    SetSkills {
+        session: String,
+        enabled: bool,
+        selected: Vec<String>,
+    },
+    /// Replaces the workflow's effective agent config (tools, MCP, plan approval).
+    SetAgentConfig {
+        session: String,
+        config: Value,
     },
     /// Searches the authorized roots for the `@` file panel.
     SearchFiles {
@@ -279,6 +302,7 @@ pub enum UpdateKind {
         models: Vec<Value>,
         skills: Vec<Value>,
         schemes: Vec<Value>,
+        tools: Vec<Value>,
     },
     /// Files matching the `@` query, keyed by the query they answered.
     Files {

@@ -17,6 +17,7 @@ use crate::ui::{status, Icon};
 use crate::{danger, Observer};
 
 mod footer;
+pub mod panels;
 pub mod suggestions;
 
 /// Vue's expanded box tops out at 540px; this window keeps its actions visible.
@@ -78,6 +79,65 @@ fn notice_line(notice: &str, _cx: &mut Context<Observer>) -> AnyElement {
         .child(Icon::new("approval").size(12.).color(danger()))
         .child(div().flex_1().min_w_0().child(notice.to_owned()))
         .into_any_element()
+}
+
+/// Attached images above the textarea, matching Vue's preview strip.
+fn attachment_row(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+    if observer.attachments.is_empty() {
+        return div().into_any_element();
+    }
+    let border = cx.theme().border;
+    let muted = cx.theme().muted_foreground;
+    let mut row = h_flex().w_full().flex_wrap().gap_2().px_3().pt_2();
+    for (index, attachment) in observer.attachments.iter().enumerate() {
+        row = row.child(
+            div()
+                .relative()
+                .flex_none()
+                .w(px(96.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(border)
+                .overflow_hidden()
+                .child(
+                    img(attachment.path.clone())
+                        .w_full()
+                        .h(px(54.))
+                        .object_fit(ObjectFit::Cover),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .px_1()
+                        .py(px(2.))
+                        .text_size(px(10.))
+                        .text_color(muted)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(attachment.name.clone()),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!("attachment-remove-{index}")))
+                        .absolute()
+                        .top(px(2.))
+                        .right(px(2.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .size(px(16.))
+                        .rounded_full()
+                        .bg(gpui_kit::black().opacity(0.55))
+                        .cursor_pointer()
+                        .child(Icon::new("close").size(9.).color(gpui_kit::white()))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.remove_attachment(index, cx)),
+                        ),
+                ),
+        );
+    }
+    row.into_any_element()
 }
 
 /// One outer shadow, matching the CSS `0 y blur spread color` shorthand.
@@ -162,6 +222,7 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             view.hover(move |style| style.border_color(accent.opacity(0.26)))
         })
         .when(expanded, |view| view.h(px(EXPANDED_HEIGHT)))
+        .child(attachment_row(observer, cx))
         .child(
             div()
                 .relative()

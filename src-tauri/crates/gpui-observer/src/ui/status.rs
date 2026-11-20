@@ -71,7 +71,13 @@ fn live_state(observer: &Observer) -> Option<Live> {
     let state = model.state.to_lowercase();
     let wait = model.wait_reason.to_lowercase();
     let running = observer.workflow_running();
-    let waiting_user = wait == "user_input" || state == "awaiting_user";
+    // A locally submitted answer already moved the card to its answered form;
+    // the runtime only reports the new phase when it resumes.
+    let answered = model
+        .awaiting_user_tool_call_id
+        .as_deref()
+        .is_some_and(|id| observer.ask_user_answered.contains_key(id));
+    let waiting_user = !answered && (wait == "user_input" || state == "awaiting_user");
     let waiting_approval =
         wait == "approval" || state == "awaiting_approval" || state == "awaiting_auto_approval";
     let terminal = matches!(
@@ -104,15 +110,18 @@ fn live_state(observer: &Observer) -> Option<Live> {
         .tool_order
         .last()
         .and_then(|id| model.tools.get(id).map(|tool| (id, tool)));
+    // An answered `ask_user` keeps its pending row until the runtime resumes;
+    // Vue already moved on, so the line must not fall back to "awaiting".
+    let answered_ask = answered && latest.is_some_and(|(_, tool)| tool_name(tool) == "ask_user");
 
     if let Some((id, tool)) = latest {
         let phase = tool_phase(tool);
-        if matches!(phase, "pending" | "running") {
+        if !answered_ask && matches!(phase, "pending" | "running") {
             return Some(tool_status(observer, id, tool, phase));
         }
     }
 
-    if waiting_approval {
+    if waiting_approval && !answered_ask {
         return Some(Live {
             text: t!("live_awaiting_approval").to_string(),
             icon: "warning",
@@ -134,7 +143,7 @@ fn live_state(observer: &Observer) -> Option<Live> {
             .tool_finished
             .get(id)
             .is_some_and(|at| at.elapsed() < COMPLETED_VISIBLE);
-        if fresh && tool_phase(tool) == "done" {
+        if fresh && !answered_ask && tool_phase(tool) == "done" {
             return Some(tool_status(observer, id, tool, "done"));
         }
     }
@@ -332,7 +341,7 @@ fn preview_segment(text: &str) -> String {
         return String::new();
     }
     let latest = cleaned
-        .rsplit(|c| matches!(c, '。' | '！' | '？' | '.' | '!' | '?'))
+        .rsplit(['。', '！', '？', '.', '!', '?'])
         .find(|segment| !segment.trim().is_empty())
         .unwrap_or(cleaned)
         .trim();
@@ -372,6 +381,18 @@ fn truncate(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{preview_segment, tool_phase, truncate};
+
+    #[test]
+    fn live_status_strings_interpolate_their_placeholders() {
+        for text in [
+            rust_i18n::t!("live_elapsed", text = "Run cargo test", seconds = 4).to_string(),
+            rust_i18n::t!("live_running_tool", tool = "grep").to_string(),
+            rust_i18n::t!("live_awaiting_bash_approval", command = "ls").to_string(),
+        ] {
+            assert!(!text.contains("%{"), "unresolved placeholder in {text}");
+            assert!(!text.contains("{{"), "vue-style placeholder in {text}");
+        }
+    }
 
     #[test]
     fn preview_keeps_the_latest_sentence_and_drops_reminders() {

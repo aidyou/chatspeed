@@ -36,6 +36,7 @@ use rust_i18n::t;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Mutex,
@@ -279,6 +280,151 @@ fn choice_option_live(
         .into_any_element()
 }
 
+/// One file the user attached to the next message.
+#[derive(Clone)]
+struct Attachment {
+    path: PathBuf,
+    name: String,
+}
+
+/// One answer this window submitted, kept locally until the runtime echoes it.
+#[derive(Clone)]
+struct LocalAskUserAnswer {
+    selected: Option<usize>,
+    other: bool,
+    supplement: String,
+}
+
+/// Configuration dialogs opened from the composer's quick actions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuickPanel {
+    Models,
+    Skills,
+    Mcp,
+    Tools,
+    Personality,
+}
+
+/// Pending skill changes; the panel edits this before the command lands.
+#[derive(Clone)]
+struct SkillsDraft {
+    enabled: bool,
+    selected: BTreeSet<String>,
+}
+
+impl SkillsDraft {
+    fn from_config(config: &Value) -> Self {
+        let enabled = config["skillEnabled"]
+            .as_bool()
+            .or_else(|| config["skill_enabled"].as_bool())
+            .unwrap_or(false);
+        let selected = config["selectedSkills"]
+            .as_array()
+            .or_else(|| config["selected_skills"].as_array())
+            .map(|skills| {
+                skills
+                    .iter()
+                    .filter_map(|skill| skill.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { enabled, selected }
+    }
+}
+
+/// Pending tool/MCP selections; they are written to the agent config as sets.
+#[derive(Clone, Default)]
+struct ToolDraft {
+    available: BTreeSet<String>,
+    auto_approve: BTreeSet<String>,
+    mcp_available: BTreeSet<String>,
+    mcp_auto_approve: BTreeSet<String>,
+    mcp_auto_expand: BTreeSet<String>,
+}
+
+impl ToolDraft {
+    fn from_config(config: &Value) -> Self {
+        let mcp = &config["mcpTools"];
+        Self {
+            available: string_set(&config["availableTools"]),
+            auto_approve: string_set(&config["autoApprove"]),
+            mcp_available: string_set(&mcp["available"]),
+            // `McpToolConfig` keeps its fields snake_case inside camelCase agents.
+            mcp_auto_approve: string_set(
+                &mcp.get("auto_approve")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .or_else(|| mcp.get("autoApprove").cloned())
+                    .unwrap_or(Value::Null),
+            ),
+            mcp_auto_expand: string_set(
+                &mcp.get("auto_expand")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .or_else(|| mcp.get("autoExpand").cloned())
+                    .unwrap_or(Value::Null),
+            ),
+        }
+    }
+}
+
+fn string_set(value: &Value) -> BTreeSet<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn is_image_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// The context note the runtime receives with the message.
+fn attachment_context(attachments: &[Attachment]) -> Option<String> {
+    if attachments.is_empty() {
+        return None;
+    }
+    let mut note = String::from("The user attached these image files:\n");
+    for attachment in attachments {
+        note.push_str(&format!(
+            "- {}: {}\n",
+            attachment.name,
+            attachment.path.to_string_lossy()
+        ));
+    }
+    Some(note)
+}
+
+/// Attachment metadata, in the shape the transcript renders.
+fn attachment_metadata(attachments: &[Attachment]) -> Option<Value> {
+    if attachments.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({
+        "attachments": attachments
+            .iter()
+            .map(|attachment| serde_json::json!({
+                "type": "image",
+                "name": attachment.name,
+                "path": attachment.path.to_string_lossy(),
+            }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
 struct Observer {
     worker: Worker,
     options: Options,
@@ -366,6 +512,25 @@ struct Observer {
     skills: Vec<serde_json::Value>,
     /// Sandbox schemes the execution-mode popover can pick from.
     sandbox_schemes: Vec<serde_json::Value>,
+    /// Runtime tools the tool/MCP configuration panels list.
+    tools: Vec<serde_json::Value>,
+    /// Proxy groups and aliases, used by the model selector for `id = 0` slots.
+    proxy_targets: Value,
+    /// Vue's planning-mode switch, applied through the workflow phase.
+    planning_mode: bool,
+    /// Optimistic sandbox choice; the workflow config confirms it afterwards.
+    sandbox_mode_draft: Option<String>,
+    sandbox_scheme_draft: Option<String>,
+    /// Answers this window submitted before the runtime echoed them back.
+    ask_user_answered: BTreeMap<String, Vec<LocalAskUserAnswer>>,
+    /// Which configuration dialog the quick actions opened, if any.
+    quick_panel: Option<QuickPanel>,
+    /// Slot being edited in the model configuration dialog.
+    model_config_slot: String,
+    skills_draft: Option<SkillsDraft>,
+    tool_draft: Option<ToolDraft>,
+    /// Image files attached to the next message, shown above the box.
+    attachments: Vec<Attachment>,
     /// The `@` query the file panel answered, so a stale list is never shown.
     file_query: String,
     file_results: Vec<serde_json::Value>,
@@ -510,6 +675,17 @@ impl Observer {
             models: Vec::new(),
             skills: Vec::new(),
             sandbox_schemes: Vec::new(),
+            tools: Vec::new(),
+            proxy_targets: Value::Null,
+            planning_mode: false,
+            sandbox_mode_draft: None,
+            sandbox_scheme_draft: None,
+            ask_user_answered: BTreeMap::new(),
+            quick_panel: None,
+            model_config_slot: "act".into(),
+            skills_draft: None,
+            tool_draft: None,
+            attachments: Vec::new(),
             file_query: String::new(),
             file_results: Vec::new(),
             task,
@@ -543,6 +719,14 @@ impl Observer {
         self.rows.clear();
         self.ask_user_choice.clear();
         self.ask_user_text.clear();
+        self.ask_user_answered.clear();
+        self.attachments.clear();
+        self.quick_panel = None;
+        self.sandbox_mode_draft = None;
+        self.sandbox_scheme_draft = None;
+        self.planning_mode = false;
+        self.skills_draft = None;
+        self.tool_draft = None;
         self.follow = true;
         self.switched = Some(Instant::now());
         self.scroll = ScrollHandle::new();
@@ -781,10 +965,15 @@ impl Observer {
             .find(|agent| agent["id"].as_str() == Some(id.as_str()))
     }
 
-    /// The model slot the composer edits: Vue uses `act` outside planning mode.
+    /// The model slot the composer edits: Vue uses `plan` in planning mode.
     fn active_model_config(&self) -> serde_json::Value {
         let models = self.agent_config()["models"].clone();
-        for key in ["act", "plan"] {
+        let slots: [&str; 2] = if self.planning_mode {
+            ["plan", "act"]
+        } else {
+            ["act", "plan"]
+        };
+        for key in slots {
             if models[key]["model"]
                 .as_str()
                 .is_some_and(|name| !name.is_empty())
@@ -813,11 +1002,16 @@ impl Observer {
         let Some(model) = config["model"].as_str().filter(|name| !name.is_empty()) else {
             return t!("model_placeholder").to_string();
         };
-        let provider = self.active_provider();
+        let prefix = if self.planning_mode { "Plan/" } else { "" };
         if config["id"].as_i64().unwrap_or_default() == 0 {
-            return model.to_owned();
+            // Proxy slots carry `group@alias`; Vue shows `alias(group)`.
+            return match model.split_once('@') {
+                Some((group, alias)) => format!("{prefix}{alias}({group})"),
+                None => format!("{prefix}{model}"),
+            };
         }
-        provider
+        let name = self
+            .active_provider()
             .and_then(|provider| {
                 provider["models"]
                     .as_array()?
@@ -826,10 +1020,23 @@ impl Observer {
                     .and_then(|entry| entry["name"].as_str())
                     .map(str::to_owned)
             })
-            .unwrap_or_else(|| model.to_owned())
+            .unwrap_or_else(|| model.to_owned());
+        format!("{prefix}{name}")
+    }
+
+    /// The workflow phase drives Vue's planning-mode switch.
+    fn sync_planning_mode(&mut self) {
+        let phase = self.agent_config()["phase"]
+            .as_str()
+            .unwrap_or("")
+            .to_lowercase();
+        self.planning_mode = phase == "planning";
     }
 
     fn sandbox_mode(&self) -> String {
+        if let Some(draft) = &self.sandbox_mode_draft {
+            return draft.clone();
+        }
         let config = self.agent_config();
         config["sandboxExecutionMode"]
             .as_str()
@@ -839,6 +1046,9 @@ impl Observer {
     }
 
     fn sandbox_scheme_id(&self) -> Option<String> {
+        if let Some(draft) = &self.sandbox_scheme_draft {
+            return Some(draft.clone());
+        }
         let config = self.agent_config();
         config["sandboxSchemeId"]
             .as_str()
@@ -883,7 +1093,7 @@ impl Observer {
     }
 
     fn auto_compress_enabled(&self) -> bool {
-        self.agent_bool("autoCompress", "auto_compress", true)
+        self.agent_bool("autoCompress", "auto_compress", false)
     }
 
     fn final_audit_enabled(&self) -> bool {
@@ -935,6 +1145,11 @@ impl Observer {
         self.child_rows.clear();
         self.ask_user_choice.clear();
         self.ask_user_text.clear();
+        self.ask_user_answered.clear();
+        self.attachments.clear();
+        self.sandbox_mode_draft = None;
+        self.sandbox_scheme_draft = None;
+        self.planning_mode = false;
         self.notice = None;
         self.follow = true;
         self.scroll_pending = true;
@@ -951,15 +1166,23 @@ impl Observer {
     /// Sends the composer text, creating the session first when none is selected.
     fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).value().trim().to_string();
-        if text.is_empty() || self.start_pending {
+        if (text.is_empty() && self.attachments.is_empty()) || self.start_pending {
             return;
         }
         self.notice = None;
+        let attachments = self.attachments.clone();
+        let attached_context = attachment_context(&attachments);
+        let metadata = attachment_metadata(&attachments);
         match self.selected.clone() {
             Some(id) => {
                 let _ = self.worker.commands.try_send(Command::Signal {
                     id,
-                    signal: serde_json::json!({"type": "user_message", "content": text}),
+                    signal: serde_json::json!({
+                        "type": "user_message",
+                        "content": text,
+                        "attached_context": attached_context,
+                        "metadata": metadata,
+                    }),
                 });
                 self.follow = true;
                 self.model.resume_follow();
@@ -967,15 +1190,76 @@ impl Observer {
             }
             None => {
                 self.start_pending = true;
-                let _ = self
-                    .worker
-                    .commands
-                    .try_send(Command::StartNew { prompt: text });
+                // A new workflow still needs a query for its list title; fall
+                // back to the attachment names when the user typed nothing.
+                let prompt = if text.is_empty() {
+                    attachments
+                        .iter()
+                        .map(|attachment| attachment.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                } else {
+                    text
+                };
+                let _ = self.worker.commands.try_send(Command::StartNew {
+                    prompt,
+                    attached_context,
+                    metadata,
+                });
             }
         }
+        self.attachments.clear();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         cx.notify();
+    }
+
+    /// Opens the platform image picker, like Vue's attachment dialog.
+    fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(SharedString::from(t!("add_attachment").to_string())),
+        });
+        cx.spawn(async move |this, cx| {
+            let picked = receiver
+                .await
+                .ok()
+                .and_then(|result| result.ok())
+                .flatten()
+                .unwrap_or_default();
+            if picked.is_empty() {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| this.add_attachments(picked, cx));
+        })
+        .detach();
+    }
+
+    fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for path in paths {
+            if !is_image_path(&path) {
+                self.notice = Some(t!("attachment_unsupported").to_string());
+                continue;
+            }
+            if self.attachments.iter().any(|item| item.path == path) {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+            self.attachments.push(Attachment { path, name });
+        }
+        cx.notify();
+    }
+
+    fn remove_attachment(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.attachments.len() {
+            self.attachments.remove(index);
+            cx.notify();
+        }
     }
 
     fn stop_workflow(&mut self, cx: &mut Context<Self>) {
@@ -987,6 +1271,30 @@ impl Observer {
 
     fn toggle_composer_expanded(&mut self, cx: &mut Context<Self>) {
         self.composer_expanded = !self.composer_expanded;
+        cx.notify();
+    }
+
+    /// Opens one of the configuration dialogs from the `+` menu.
+    fn open_quick_panel(&mut self, panel: QuickPanel, cx: &mut Context<Self>) {
+        let config = self.agent_config();
+        match panel {
+            QuickPanel::Skills => self.skills_draft = Some(SkillsDraft::from_config(&config)),
+            QuickPanel::Mcp | QuickPanel::Tools => {
+                self.tool_draft = Some(ToolDraft::from_config(&config));
+            }
+            QuickPanel::Models => {
+                self.model_config_slot = if self.planning_mode { "plan" } else { "act" }.into();
+            }
+            QuickPanel::Personality => {}
+        }
+        self.quick_panel = Some(panel);
+        cx.notify();
+    }
+
+    fn close_quick_panel(&mut self, cx: &mut Context<Self>) {
+        self.quick_panel = None;
+        self.skills_draft = None;
+        self.tool_draft = None;
         cx.notify();
     }
 
@@ -1052,9 +1360,77 @@ impl Observer {
             && self.model.awaiting_user_tool_call_id.as_deref() == Some(tool.tool_call_id.as_str())
     }
 
+    /// Answers submitted here and not yet echoed by the runtime.
+    fn ask_user_answered(&self, tool: &ToolView) -> Option<&[LocalAskUserAnswer]> {
+        self.ask_user_answered
+            .get(&tool.tool_call_id)
+            .map(Vec::as_slice)
+    }
+
+    /// The projection may already carry the echoed answer before the runtime
+    /// leaves its waiting phase (for example after reopening the window).
+    fn ask_user_projected_answer(tool: &ToolView) -> bool {
+        tool.choices
+            .iter()
+            .any(|group| group.selected.is_some() || group.other_selected || group.answer.is_some())
+    }
+
     fn set_ask_user_choice(&mut self, key: String, option: usize, cx: &mut Context<Self>) {
         self.ask_user_choice.insert(key, option);
         cx.notify();
+    }
+
+    /// Creates the free-text field Vue keeps under every group while it waits,
+    /// so the "Other" row and its text area read as one answer.
+    fn ensure_ask_user_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.model.awaiting_user_tool_call_id.clone() else {
+            return;
+        };
+        if self.ask_user_answered.contains_key(&id) {
+            return;
+        }
+        let keys: Vec<String> = self
+            .rows
+            .iter()
+            .find_map(|row| match row {
+                Row::Tool(tool) if tool.tool_call_id == id && !tool.choices.is_empty() => Some(
+                    (0..tool.choices.len())
+                        .map(|index| format!("{id}:{index}"))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default();
+        for key in keys {
+            if self.ask_user_text.contains_key(&key) {
+                continue;
+            }
+            let state = cx.new(|cx| {
+                TextareaState::new(window, cx)
+                    .auto_grow(1, 6)
+                    .placeholder(t!("ask_user_other_placeholder").to_string())
+            });
+            let event_key = key.clone();
+            cx.subscribe_in(&state, window, move |this, _, event: &InputEvent, _, cx| {
+                // Vue focuses the text area as soon as "Other" is picked and
+                // picks "Other" as soon as the field gains focus.
+                if !matches!(event, InputEvent::Focus | InputEvent::Change) {
+                    return;
+                }
+                let Some((_, index)) = event_key.rsplit_once(':') else {
+                    return;
+                };
+                let Ok(index) = index.parse::<usize>() else {
+                    return;
+                };
+                if !this.ask_user_choice.contains_key(&event_key) {
+                    this.ask_user_choice.insert(event_key.clone(), index);
+                    cx.notify();
+                }
+            })
+            .detach();
+            self.ask_user_text.insert(key, state);
+        }
     }
 
     /// Vue focuses the free-text field as soon as the "Other" row is picked.
@@ -1066,21 +1442,11 @@ impl Observer {
         cx: &mut Context<Self>,
     ) {
         self.ask_user_choice.insert(key.clone(), options);
-        let state = match self.ask_user_text.get(&key) {
-            Some(state) => state.clone(),
-            None => {
-                let state = cx.new(|cx| {
-                    TextareaState::new(window, cx)
-                        .auto_grow(1, 6)
-                        .placeholder(t!("ask_user_other_placeholder").to_string())
-                });
-                self.ask_user_text.insert(key, state.clone());
-                state
-            }
-        };
-        state.update(cx, |state, cx| {
-            state.focus_handle(cx).focus(window, cx);
-        });
+        if let Some(state) = self.ask_user_text.get(&key) {
+            state.update(cx, |state, cx| {
+                state.focus_handle(cx).focus(window, cx);
+            });
+        }
         cx.notify();
     }
 
@@ -1089,29 +1455,41 @@ impl Observer {
         let Some(session) = self.selected.clone() else {
             return;
         };
-        if !self.ask_user_active(&tool) {
+        if !self.ask_user_active(&tool) || self.ask_user_answered.contains_key(&tool.tool_call_id) {
             return;
         }
-        let supplements: Vec<String> = tool
-            .choices
+        let mut answers = Vec::with_capacity(tool.choices.len());
+        let mut choices = Vec::with_capacity(tool.choices.len());
+        let mut supplements = Vec::with_capacity(tool.choices.len());
+        for (index, group) in tool.choices.iter().enumerate() {
+            let key = format!("{}:{}", tool.tool_call_id, index);
+            let choice = self.ask_user_choice.get(&key).copied();
+            let supplement = self
+                .ask_user_text
+                .get(&key)
+                .map(|state| state.read(cx).value().to_string())
+                .unwrap_or_default();
+            let supplement = supplement.trim().to_owned();
+            let other_index = group.options.len();
+            // A filled text area without a radio choice is Vue's "Other" path.
+            let (choice, other) = match choice {
+                Some(choice) => (Some(choice), choice == other_index),
+                None if !supplement.is_empty() => (Some(other_index), true),
+                None => (None, false),
+            };
+            answers.push(LocalAskUserAnswer {
+                selected: choice.filter(|choice| *choice < other_index),
+                other,
+                supplement: supplement.clone(),
+            });
+            choices.push(choice);
+            supplements.push(supplement);
+        }
+        let drafts: Vec<presentation::AskUserDraft<'_>> = choices
             .iter()
             .enumerate()
-            .map(|(index, _)| {
-                self.ask_user_text
-                    .get(&format!("{}:{}", tool.tool_call_id, index))
-                    .map(|state| state.read(cx).value().to_string())
-                    .unwrap_or_default()
-            })
-            .collect();
-        let drafts: Vec<presentation::AskUserDraft<'_>> = tool
-            .choices
-            .iter()
-            .enumerate()
-            .map(|(index, _)| presentation::AskUserDraft {
-                choice: self
-                    .ask_user_choice
-                    .get(&format!("{}:{}", tool.tool_call_id, index))
-                    .copied(),
+            .map(|(index, choice)| presentation::AskUserDraft {
+                choice: *choice,
                 supplement: supplements[index].as_str(),
             })
             .collect();
@@ -1143,6 +1521,10 @@ impl Observer {
                 },
             }),
         });
+        // Switch the card to its answered form immediately; the runtime's
+        // persisted answer takes over on the next projection.
+        self.ask_user_answered
+            .insert(tool.tool_call_id.clone(), answers);
         self.notice = None;
         cx.notify();
     }
@@ -1243,11 +1625,13 @@ impl Observer {
                     models,
                     skills,
                     schemes,
+                    tools,
                 } => {
                     self.agents = agents;
                     self.models = models;
                     self.skills = skills;
                     self.sandbox_schemes = schemes;
+                    self.tools = tools;
                     cx.notify();
                 }
                 UpdateKind::Toast(message) => {
@@ -1288,6 +1672,7 @@ impl Observer {
                 }
                 UpdateKind::Snapshot(page) => {
                     self.model.page(page, false);
+                    self.sync_planning_mode();
                     self.auto_expand_first_root(cx);
                     if let Some(start) = self.switched.take() {
                         self.metrics.switch_samples += 1;
@@ -1389,6 +1774,7 @@ impl Observer {
             self.refresh_markdown(cx);
         }
         set_primary(config["primary_color"].as_str().unwrap_or("green"));
+        self.proxy_targets = config["chat_completion_proxy"].clone();
         self.adopt_window_size(config);
         self.theme_setting = config["theme"].as_str().unwrap_or("system").to_owned();
         self.refresh_palette(cx);
@@ -1851,8 +2237,15 @@ impl Observer {
         let pending = !tool.tool_call_id.is_empty()
             && (tool.status == presentation::ToolStatus::Pending
                 || self.model.pending_tool_ids.contains(&tool.tool_call_id));
-        let answering = self.ask_user_active(tool);
-        let open = pending || answering || self.expanded.contains(&tool.detail_key);
+        let answered =
+            self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool);
+        let answering = self.ask_user_active(tool) && !answered;
+        // Vue keeps `ask_user` cards open: their options are the body.
+        let open = pending
+            || answering
+            || answered
+            || !tool.choices.is_empty()
+            || self.expanded.contains(&tool.detail_key);
         let target_key = tool.detail_key.clone();
         let muted = cx.theme().muted_foreground;
         let foreground = cx.theme().foreground;
@@ -1977,9 +2370,9 @@ impl Observer {
                 }
                 body = body.child(summary);
             }
-        } else if pending {
+        } else if pending && tool.choices.is_empty() && tool.name != "ask_user" {
             // The approval card owns the diff/command/plan while pending, so the
-            // regular detail would only repeat it.
+            // regular detail would only repeat it. `ask_user` keeps its options.
             body = body.child(
                 div()
                     .w_full()
@@ -1996,7 +2389,9 @@ impl Observer {
 
     fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
         let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
-        let answering = self.ask_user_active(tool);
+        let answered =
+            self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool);
+        let answering = self.ask_user_active(tool) && !answered;
         if !tool.choices.is_empty() {
             let mut choices = v_flex().w_full().min_w_0().gap_3();
             for (index, group) in tool.choices.iter().enumerate() {
@@ -2383,9 +2778,52 @@ impl Observer {
         let mut options = v_flex().w_full().min_w_0().gap_1();
         let base = format!("{}:{}", tool.tool_call_id, index);
         let other_index = group.options.len();
-        for (option_index, option) in group.options.iter().enumerate() {
-            let label = format!("{}. {option}", option_index + 1);
-            if active {
+        let local = self
+            .ask_user_answered(tool)
+            .and_then(|answers| answers.get(index));
+        let read_only = !active || local.is_some();
+        if read_only {
+            // Vue's answered group keeps every option visible with the chosen
+            // one marked, then prints the free-text answer below it.
+            let selected = local
+                .map(|answer| answer.selected)
+                .unwrap_or(group.selected);
+            let other = local
+                .map(|answer| answer.other)
+                .unwrap_or(group.other_selected);
+            let answer = local
+                .map(|answer| answer.supplement.as_str())
+                .filter(|text| !text.trim().is_empty())
+                .or(group.answer.as_deref());
+            for (option_index, option) in group.options.iter().enumerate() {
+                options = options.child(choice_option(
+                    format!("{}. {option}", option_index + 1),
+                    selected == Some(option_index),
+                    cx,
+                ));
+            }
+            options = options.child(choice_option(
+                format!("{}. {}", other_index + 1, t!("ask_user_other")),
+                other,
+                cx,
+            ));
+            if let Some(answer) = answer {
+                options = options.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .mt_2()
+                        .px_3()
+                        .py_2()
+                        .rounded(px(6.))
+                        .bg(cx.theme().muted)
+                        .text_size(px(12.))
+                        .child(plain_text(answer, cx.theme().foreground)),
+                );
+            }
+        } else {
+            for (option_index, option) in group.options.iter().enumerate() {
+                let label = format!("{}. {option}", option_index + 1);
                 let key = base.clone();
                 options = options.child(choice_option_live(
                     label,
@@ -2396,16 +2834,8 @@ impl Observer {
                     }),
                     cx,
                 ));
-            } else {
-                options = options.child(choice_option(
-                    label,
-                    group.selected == Some(option_index),
-                    cx,
-                ));
             }
-        }
-        let other_label = format!("{}. {}", other_index + 1, t!("ask_user_other"));
-        if active {
+            let other_label = format!("{}. {}", other_index + 1, t!("ask_user_other"));
             let key = base.clone();
             options = options.child(choice_option_live(
                 other_label,
@@ -2416,21 +2846,27 @@ impl Observer {
                 }),
                 cx,
             ));
-            // Vue shows the free-text field under the picked "Other" row; the
-            // field is created the first time that row is pressed.
-            if self.ask_user_choice.get(&base).copied() == Some(other_index) {
-                if let Some(state) = self.ask_user_text.get(&base) {
-                    options = options.child(
+            // Vue always keeps the text area under the options while it waits;
+            // focusing it selects "Other" for the user.
+            if let Some(state) = self.ask_user_text.get(&base) {
+                options = options.child(
+                    div().w_full().pl(px(22.)).pt_1().child(
                         div()
                             .w_full()
-                            .pl(px(22.))
-                            .pt_1()
-                            .child(Textarea::new(state).appearance(false).h(px(34.))),
-                    );
-                }
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .px_2()
+                            .py_1()
+                            .child(
+                                Textarea::new(state)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .w_full(),
+                            ),
+                    ),
+                );
             }
-        } else {
-            options = options.child(choice_option(other_label, group.other_selected, cx));
         }
         v_flex()
             .w_full()
@@ -2444,20 +2880,6 @@ impl Observer {
                     .child(group.title.clone()),
             )
             .child(options)
-            .when_some(group.answer.as_ref(), |view, answer| {
-                view.child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .rounded(px(6.))
-                        .bg(cx.theme().muted)
-                        .px_3()
-                        .py_2()
-                        .text_size(px(12.))
-                        .text_color(cx.theme().foreground)
-                        .child(answer.clone()),
-                )
-            })
             .into_any_element()
     }
 
@@ -3041,6 +3463,10 @@ impl Render for Observer {
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
 
+        // The answer fields are entities, so they are created outside the row
+        // builder; Vue keeps them mounted under every waiting question.
+        self.ensure_ask_user_fields(window, cx);
+
         // The resize band owns the press; this frame follows the pointer while
         // it stays held, so the drag survives leaving the band.
         if let Some(drag) = self.sidebar_drag {
@@ -3210,7 +3636,7 @@ impl Render for Observer {
         // paints later siblings over earlier ones, so the shadow is a gradient
         // strip drawn after the body instead of a shadow on the bar itself.
         let shadow = ui::surfaces(self.appearance_dark).titlebar_border;
-        ui::frame::window_frame(
+        let frame = ui::frame::window_frame(
             v_flex()
                 .size_full()
                 .text_size(px(14.))
@@ -3257,7 +3683,14 @@ impl Render for Observer {
                 ),
             window,
             cx,
-        )
+        );
+        // Configuration dialogs float above the whole frame instead of growing
+        // the composer, like Vue's appended-to-body popovers.
+        let mut shell = div().size_full().relative().child(frame);
+        if self.quick_panel.is_some() {
+            shell = shell.child(ui::composer::panels::overlay(self, cx));
+        }
+        shell
     }
 }
 
@@ -3323,4 +3756,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cx.activate(true);
         });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{attachment_context, attachment_metadata, is_image_path, ToolDraft};
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    #[test]
+    fn tool_draft_accepts_both_mcp_serializations() {
+        let config = json!({
+            "availableTools": ["bash", "server__MCP__tool"],
+            "autoApprove": ["bash"],
+            "mcpTools": {
+                "available": ["server__MCP__tool"],
+                "auto_approve": ["server__MCP__tool"],
+                "auto_expand": ["server__MCP__tool"],
+            }
+        });
+        let draft = ToolDraft::from_config(&config);
+        assert!(draft.available.contains("bash"));
+        assert!(draft.auto_approve.contains("bash"));
+        assert!(draft.mcp_available.contains("server__MCP__tool"));
+        assert!(draft.mcp_auto_approve.contains("server__MCP__tool"));
+        assert!(draft.mcp_auto_expand.contains("server__MCP__tool"));
+    }
+
+    #[test]
+    fn attachments_accept_only_images_and_keep_their_paths() {
+        assert!(is_image_path(&PathBuf::from("/tmp/shot.PNG")));
+        assert!(!is_image_path(&PathBuf::from("/tmp/notes.txt")));
+
+        let attachments = vec![super::Attachment {
+            path: PathBuf::from("/tmp/shot.png"),
+            name: "shot.png".into(),
+        }];
+        let context = attachment_context(&attachments).expect("context");
+        assert!(context.contains("/tmp/shot.png"));
+        let metadata = attachment_metadata(&attachments).expect("metadata");
+        assert_eq!(metadata["attachments"][0]["name"], "shot.png");
+        assert!(attachment_context(&[]).is_none());
+    }
 }

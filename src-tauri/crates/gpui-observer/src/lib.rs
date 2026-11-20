@@ -29,4 +29,22 @@ mod locale_tests {
             "metrics_error"
         );
     }
+
+    #[test]
+    fn status_placeholders_use_rust_i18n_syntax() {
+        let locale = include_str!("../locales/observer.yml");
+        assert!(
+            !locale.contains("{{"),
+            "vue-style placeholder left in locale"
+        );
+        assert_eq!(
+            rust_i18n::t!(
+                "live_elapsed",
+                locale = "zh-Hans",
+                text = "运行",
+                seconds = 3
+            ),
+            "运行 ...(3秒)"
+        );
+    }
 }

@@ -1,7 +1,7 @@
 //! Isolated Tokio thread. Only list, snapshot, history-query and authenticated SSE are used.
 use crate::{model::Model, native, types::*};
 use chatspeed_runtime_client::RuntimeClient;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
@@ -215,7 +215,11 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
-            Command::StartNew { prompt } => {
+            Command::StartNew {
+                prompt,
+                attached_context,
+                metadata,
+            } => {
                 if options.demo {
                     if !send(
                         &tx,
@@ -228,7 +232,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                     continue;
                 }
-                match start_session(&options, &prompt).await {
+                match start_session(&options, &prompt, attached_context, metadata).await {
                     Ok(id) => {
                         if !send(&tx, 0, UpdateKind::Opened(id)).await {
                             return;
@@ -302,6 +306,11 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                         .ok()
                         .and_then(|value| value.as_array().cloned())
                         .unwrap_or_default();
+                let tools = native::data_command(&options, "get_available_tools", json!({}))
+                    .await
+                    .ok()
+                    .and_then(|value| value.as_array().cloned())
+                    .unwrap_or_default();
                 if !send(
                     &tx,
                     0,
@@ -310,6 +319,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                         models,
                         skills,
                         schemes,
+                        tools,
                     },
                 )
                 .await
@@ -460,6 +470,91 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
+            Command::SetPlanning { session, enabled } => {
+                if options.demo {
+                    continue;
+                }
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_phase",
+                    json!({
+                        "session_id": session,
+                        "phase": if enabled { "planning" } else { "standard" },
+                    }),
+                    Some(&idempotency_key("workflow-phase")),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::SetPersonality {
+                session,
+                personality,
+            } => {
+                if options.demo {
+                    continue;
+                }
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_personality",
+                    json!({"session_id": session, "personality": personality}),
+                    Some(&idempotency_key("personality")),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::SetSkills {
+                session,
+                enabled,
+                selected,
+            } => {
+                if options.demo {
+                    continue;
+                }
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_skills_config",
+                    json!({
+                        "session_id": session,
+                        "skill_enabled": enabled,
+                        "selected_skills": selected,
+                    }),
+                    Some(&idempotency_key("skills-config")),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::SetAgentConfig { session, config } => {
+                if options.demo {
+                    continue;
+                }
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_agent_config",
+                    json!({
+                        "session_id": session,
+                        "agent_config": serde_json::to_string(&config).unwrap_or_default(),
+                    }),
+                    Some(&idempotency_key("agent-config")),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
             Command::SearchFiles { paths, query } => {
                 if options.demo {
                     continue;
@@ -532,7 +627,12 @@ fn idempotency_key(command: &str) -> String {
 ///
 /// Matches the Vue new-workflow flow: create carries the query the list shows,
 /// start carries the first prompt the engine runs.
-async fn start_session(options: &Options, prompt: &str) -> Result<String, String> {
+async fn start_session(
+    options: &Options,
+    prompt: &str,
+    attached_context: Option<String>,
+    metadata: Option<Value>,
+) -> Result<String, String> {
     let client = native::connect(options)
         .await
         .ok_or_else(|| "runtime unavailable".to_string())?;
@@ -576,8 +676,8 @@ async fn start_session(options: &Options, prompt: &str) -> Result<String, String
                 "session_id": session_id,
                 "agent_id": agent_id,
                 "initial_prompt": prompt,
-                "initial_metadata": null,
-                "initial_attached_context": null,
+                "initial_metadata": metadata,
+                "initial_attached_context": attached_context,
                 "planning_mode": null,
             }),
         )
