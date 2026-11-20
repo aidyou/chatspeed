@@ -1,4 +1,36 @@
 _version: 2
+agent_placeholder:
+  en: "Select Agent"
+  zh-Hans: "选择代理"
+  zh-Hant: "選擇代理"
+approval_default:
+  en: "Default"
+  zh-Hans: "默认"
+  zh-Hant: "預設"
+approval_default_hint:
+  en: "Ask before every write and command"
+  zh-Hans: "每次写入和命令都先询问"
+  zh-Hant: "每次寫入和指令都先詢問"
+approval_full:
+  en: "Full access"
+  zh-Hans: "完全放行"
+  zh-Hant: "完全放行"
+approval_full_hint:
+  en: "Run tools without asking"
+  zh-Hans: "执行工具时不再询问"
+  zh-Hant: "執行工具時不再詢問"
+approval_level:
+  en: "Approval level"
+  zh-Hans: "审批级别"
+  zh-Hant: "審批級別"
+approval_smart:
+  en: "Smart"
+  zh-Hans: "智能"
+  zh-Hant: "智能"
+approval_smart_hint:
+  en: "Ask only for risky actions"
+  zh-Hans: "只对高风险操作询问"
+  zh-Hant: "只對高風險操作詢問"
 approve:
   en: Approve
   zh-Hans: 批准
@@ -27,6 +59,18 @@ ask_user_required:
   en: Pick an option for every question first
   zh-Hans: 请先为每个问题选择一个选项
   zh-Hant: 請先為每個問題選擇一個選項
+auto_compress_disabled:
+  en: "Auto compression off"
+  zh-Hans: "自动压缩：关闭"
+  zh-Hant: "自動壓縮：關閉"
+auto_compress_enabled:
+  en: "Auto compression on"
+  zh-Hans: "自动压缩：开启"
+  zh-Hant: "自動壓縮：開啟"
+auto_compress_hint:
+  en: "Roll up long context automatically"
+  zh-Hans: "自动汇总过长的上下文"
+  zh-Hant: "自動彙總過長的上下文"
 automation_empty:
   en: No automations yet
   zh-Hans: 暂无自动化
@@ -43,6 +87,18 @@ clear_context_divider:
   en: Start new session
   zh-Hans: 开始新会话
   zh-Hant: 開始新會話
+clear_context_failed:
+  en: "Failed to clear the context frame"
+  zh-Hans: "清空上下文失败"
+  zh-Hant: "清空上下文失敗"
+clear_context_frame_done:
+  en: "Context cleared for subsequent AI turns"
+  zh-Hans: "已为后续 AI 回合清空上下文"
+  zh-Hant: "已為後續 AI 回合清空上下文"
+clear_context_no_session:
+  en: "No task session available to clear"
+  zh-Hans: "没有可清空上下文的会话"
+  zh-Hant: "沒有可清空上下文的會話"
 click_to_expand:
   en: (click to expand)
   zh-Hans: （点击展开）
@@ -207,6 +263,14 @@ failed:
   en: Failed
   zh-Hans: 失败
   zh-Hant: 失敗
+final_audit_hint:
+  en: "Review the result before completion"
+  zh-Hans: "完成前先做最终审查"
+  zh-Hant: "完成前先做最終審查"
+final_audit_label:
+  en: "Final audit"
+  zh-Hans: "最终审查"
+  zh-Hant: "最終審查"
 finish_task:
   en: Task finished
   zh-Hans: 任务完成
@@ -255,10 +319,70 @@ group_use_tool:
   en: Use tool
   zh-Hans: 调用工具
   zh-Hant: 調用工具
+live_awaiting_approval:
+  en: Awaiting approval
+  zh-Hans: 等待审批
+  zh-Hant: 等待審批
+live_awaiting_bash_approval:
+  en: "Awaiting command approval: {{command}}"
+  zh-Hans: "等待命令审批：{{command}}"
+  zh-Hant: "等待指令審批：{{command}}"
+live_awaiting_edit_approval:
+  en: "Awaiting file edit approval: {{path}}"
+  zh-Hans: "等待文件修改审批：{{path}}"
+  zh-Hant: "等待檔案修改審批：{{path}}"
+live_awaiting_plan_approval:
+  en: Awaiting plan confirmation
+  zh-Hans: 等待计划确认
+  zh-Hant: 等待計劃確認
+live_awaiting_user:
+  en: Awaiting user reply
+  zh-Hans: 等待用户回复
+  zh-Hant: 等待用戶回覆
+live_awaiting_write_approval:
+  en: "Awaiting file creation approval: {{path}}"
+  zh-Hans: "等待文件创建审批：{{path}}"
+  zh-Hant: "等待檔案建立審批：{{path}}"
+live_elapsed:
+  en: "{{text}} ...({{seconds}}s)"
+  zh-Hans: "{{text}} ...({{seconds}}秒)"
+  zh-Hant: "{{text}} ...({{seconds}}秒)"
+live_file_created:
+  en: "File created: {{path}}"
+  zh-Hans: "文件已创建：{{path}}"
+  zh-Hant: "檔案已建立：{{path}}"
+live_file_edited:
+  en: "File edited: {{path}}"
+  zh-Hans: "文件已修改：{{path}}"
+  zh-Hant: "檔案已修改：{{path}}"
 live_overflow:
   en: Live preview limit reached — awaiting durable final
   zh-Hans: 实时预览已达上限 — 等待耐久正文
   zh-Hant: 實時預覽已達上限 — 等待耐久正文
+live_running_command:
+  en: "Running command: {{command}}"
+  zh-Hans: "正在执行命令：{{command}}"
+  zh-Hant: "正在執行指令：{{command}}"
+live_running_edit:
+  en: "Editing file: {{path}}"
+  zh-Hans: "正在修改文件：{{path}}"
+  zh-Hant: "正在修改檔案：{{path}}"
+live_running_tool:
+  en: "Running tool: {{tool}}"
+  zh-Hans: "正在运行工具：{{tool}}"
+  zh-Hant: "正在執行工具：{{tool}}"
+live_running_write:
+  en: "Creating file: {{path}}"
+  zh-Hans: "正在创建文件：{{path}}"
+  zh-Hant: "正在建立檔案：{{path}}"
+live_thinking:
+  en: Thinking...
+  zh-Hans: 思考中...
+  zh-Hant: 思考中...
+live_tool_completed:
+  en: "Tool completed: {{tool}}"
+  zh-Hans: "工具已完成：{{tool}}"
+  zh-Hant: "工具已完成：{{tool}}"
 manual_compress:
   en: Compress context
   zh-Hans: 压缩上下文
@@ -327,6 +451,10 @@ metrics_error:
   en: Metrics output unavailable
   zh-Hans: 无法写入性能指标
   zh-Hant: 無法寫入性能指標
+model_placeholder:
+  en: "Select Model"
+  zh-Hans: "选择模型"
+  zh-Hant: "選擇模型"
 new_task:
   en: New task
   zh-Hans: 新建任务
@@ -355,6 +483,10 @@ plugin_panel:
   en: Plugins
   zh-Hans: 插件
   zh-Hant: 外掛
+quick_runtime:
+  en: "Runtime"
+  zh-Hans: "运行时"
+  zh-Hant: "執行時"
 reject:
   en: Reject
   zh-Hans: 拒绝
@@ -367,6 +499,26 @@ root_filter_all:
   en: All directories
   zh-Hans: 全部目录
   zh-Hant: 全部目錄
+sandbox_mode_auto:
+  en: "Auto"
+  zh-Hans: "自动"
+  zh-Hant: "自動"
+sandbox_mode_auto_hint:
+  en: "Use host or sandbox rules by priority, then fall back to the common sandbox"
+  zh-Hans: "按优先级使用宿主机或沙箱规则，再回退到公共沙箱"
+  zh-Hant: "按優先級使用主機或沙箱規則，再回退到公共沙箱"
+sandbox_mode_host:
+  en: "Host only"
+  zh-Hans: "仅宿主机"
+  zh-Hant: "僅主機"
+sandbox_mode_only:
+  en: "Sandbox only"
+  zh-Hans: "仅沙箱"
+  zh-Hant: "僅沙箱"
+sandbox_mode_only_hint:
+  en: "Run Shell/CMD directly in the sandbox"
+  zh-Hans: "直接在沙箱中运行 Shell/CMD"
+  zh-Hant: "直接在沙箱中執行 Shell/CMD"
 search_sessions:
   en: Search conversations
   zh-Hans: 搜索会话

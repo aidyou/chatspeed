@@ -298,6 +298,8 @@ struct Observer {
     metrics: Metrics,
     switched: Option<Instant>,
     last_metrics: Instant,
+    /// Last repaint that refreshed the live status line's elapsed seconds.
+    last_tick: Instant,
     /// `theme` runtime setting: `system`, `light`, or `dark`.
     theme_setting: String,
     /// Last appearance the theme was resolved against, to catch system switches.
@@ -342,6 +344,8 @@ struct Observer {
     title_drag: bool,
     /// Multi-line composer state; sends read it and clear it.
     composer: Entity<TextareaState>,
+    /// Whether the composer owns focus, mirrored from its input events.
+    composer_focused: bool,
     /// Vue's fullscreen toggle: the box grows instead of the transcript.
     composer_expanded: bool,
     /// A new session is being created and started; further sends wait.
@@ -356,6 +360,15 @@ struct Observer {
     ask_user_text: BTreeMap<String, Entity<TextareaState>>,
     /// Child transcripts requested but not loaded yet.
     child_pending: BTreeSet<String>,
+    /// Agents, model providers and skills the composer selectors list.
+    agents: Vec<serde_json::Value>,
+    models: Vec<serde_json::Value>,
+    skills: Vec<serde_json::Value>,
+    /// Sandbox schemes the execution-mode popover can pick from.
+    sandbox_schemes: Vec<serde_json::Value>,
+    /// The `@` query the file panel answered, so a stale list is never shown.
+    file_query: String,
+    file_results: Vec<serde_json::Value>,
     task: Task<()>,
 }
 
@@ -390,10 +403,28 @@ impl Observer {
         cx.subscribe_in(
             &composer,
             window,
-            |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
-                    this.send_message(window, cx);
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { shift: false, .. } => {
+                    // Enter completes the open `@`/`/` panel before it sends.
+                    if !ui::composer::suggestions::apply_first(this, window, cx) {
+                        this.send_message(window, cx);
+                    }
                 }
+                InputEvent::Change => {
+                    ui::composer::suggestions::refresh(this, cx);
+                    cx.notify();
+                }
+                // The box paints its focus ring from this flag; querying the
+                // window during render missed the change on the first frame.
+                InputEvent::Focus => {
+                    this.composer_focused = true;
+                    cx.notify();
+                }
+                InputEvent::Blur => {
+                    this.composer_focused = false;
+                    cx.notify();
+                }
+                _ => {}
             },
         )
         .detach();
@@ -417,7 +448,7 @@ impl Observer {
                 break;
             }
         });
-        Self {
+        let observer = Self {
             worker,
             options,
             model: Model::default(),
@@ -439,6 +470,7 @@ impl Observer {
             },
             switched: None,
             last_metrics: Instant::now(),
+            last_tick: Instant::now(),
             theme_setting: "system".into(),
             appearance_dark: false,
             applied_primary: DEFAULT_PRIMARY,
@@ -466,6 +498,7 @@ impl Observer {
             files_auto_expanded: false,
             title_drag: false,
             composer,
+            composer_focused: false,
             composer_expanded: false,
             start_pending: false,
             notice: None,
@@ -473,8 +506,21 @@ impl Observer {
             ask_user_choice: BTreeMap::new(),
             ask_user_text: BTreeMap::new(),
             child_pending: BTreeSet::new(),
+            agents: Vec::new(),
+            models: Vec::new(),
+            skills: Vec::new(),
+            sandbox_schemes: Vec::new(),
+            file_query: String::new(),
+            file_results: Vec::new(),
             task,
-        }
+        };
+        observer.request_catalogue();
+        observer
+    }
+
+    /// Loads the agent, model, skill and sandbox lists the footer selectors use.
+    fn request_catalogue(&self) {
+        let _ = self.worker.commands.try_send(Command::Catalogue);
     }
 
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
@@ -640,13 +686,19 @@ impl Observer {
         action: chatspeed_runtime_client::desktop_menu::Action,
         cx: &mut Context<Self>,
     ) {
-        self.notice = self.worker.commands.try_send(Command::DesktopMenu(action)).err()
+        self.notice = self
+            .worker
+            .commands
+            .try_send(Command::DesktopMenu(action))
+            .err()
             .map(|_| t!("desktop_menu_unavailable").to_string());
         cx.notify();
     }
 
     fn sound_is_enabled(&self, chime: Chime) -> bool {
-        self.sound_pending.get(&chime).map_or_else(|| self.sound_enabled.contains(&chime), |muted| !muted)
+        self.sound_pending
+            .get(&chime)
+            .map_or_else(|| self.sound_enabled.contains(&chime), |muted| !muted)
     }
 
     fn set_sound_enabled(&mut self, chime: Chime, enabled: bool) {
@@ -662,7 +714,12 @@ impl Observer {
             return;
         }
         let muted = self.sound_is_enabled(chime);
-        if self.worker.commands.try_send(Command::SetSound { chime, muted }).is_ok() {
+        if self
+            .worker
+            .commands
+            .try_send(Command::SetSound { chime, muted })
+            .is_ok()
+        {
             self.sound_pending.insert(chime, muted);
         } else {
             self.notice = Some(t!("sound_save_failed").to_string());
@@ -690,16 +747,174 @@ impl Observer {
     }
 
     /// Composer footer: connection state plus the workflow state the runtime reports.
-    fn status_line(&self) -> String {
-        if !self.connected {
-            return t!("connecting").to_string();
+    /// The selected workflow's effective agent config.
+    ///
+    /// The list route serializes it as JSON text and the snapshot route as an
+    /// object, so both shapes are unwrapped here.
+    fn agent_config(&self) -> serde_json::Value {
+        let workflow = &self.model.workflow;
+        let raw = workflow
+            .get("agent_config")
+            .or_else(|| workflow.get("agentConfig"));
+        match raw {
+            Some(serde_json::Value::String(text)) => {
+                serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!({}))
+            }
+            Some(value) => value.clone(),
+            None => serde_json::json!({}),
         }
-        match self.model.state.as_str() {
-            "" => t!("connected").to_string(),
-            "executing" | "running" | "thinking" => t!("executing").to_string(),
-            "awaiting_approval" => t!("awaiting_approval").to_string(),
-            other => other.to_owned(),
+    }
+
+    fn current_agent_id(&self) -> Option<String> {
+        let workflow = &self.model.workflow;
+        workflow["agent_id"]
+            .as_str()
+            .or_else(|| workflow["agentId"].as_str())
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+    }
+
+    fn current_agent(&self) -> Option<&serde_json::Value> {
+        let id = self.current_agent_id()?;
+        self.agents
+            .iter()
+            .find(|agent| agent["id"].as_str() == Some(id.as_str()))
+    }
+
+    /// The model slot the composer edits: Vue uses `act` outside planning mode.
+    fn active_model_config(&self) -> serde_json::Value {
+        let models = self.agent_config()["models"].clone();
+        for key in ["act", "plan"] {
+            if models[key]["model"]
+                .as_str()
+                .is_some_and(|name| !name.is_empty())
+            {
+                return models[key].clone();
+            }
         }
+        serde_json::json!({})
+    }
+
+    fn model_configs(&self) -> serde_json::Value {
+        self.agent_config()["models"].clone()
+    }
+
+    /// Provider id of the active model: `0` means a ChatSpeed proxy alias.
+    fn active_provider(&self) -> Option<&serde_json::Value> {
+        let id = self.active_model_config()["id"].as_i64()?;
+        self.models
+            .iter()
+            .find(|provider| provider["id"].as_i64() == Some(id))
+    }
+
+    /// The model name Vue shows on the footer pill.
+    fn model_label(&self) -> String {
+        let config = self.active_model_config();
+        let Some(model) = config["model"].as_str().filter(|name| !name.is_empty()) else {
+            return t!("model_placeholder").to_string();
+        };
+        let provider = self.active_provider();
+        if config["id"].as_i64().unwrap_or_default() == 0 {
+            return model.to_owned();
+        }
+        provider
+            .and_then(|provider| {
+                provider["models"]
+                    .as_array()?
+                    .iter()
+                    .find(|entry| entry["id"].as_str() == Some(model))
+                    .and_then(|entry| entry["name"].as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| model.to_owned())
+    }
+
+    fn sandbox_mode(&self) -> String {
+        let config = self.agent_config();
+        config["sandboxExecutionMode"]
+            .as_str()
+            .or_else(|| config["sandbox_execution_mode"].as_str())
+            .unwrap_or("host_only")
+            .to_owned()
+    }
+
+    fn sandbox_scheme_id(&self) -> Option<String> {
+        let config = self.agent_config();
+        config["sandboxSchemeId"]
+            .as_str()
+            .or_else(|| config["sandbox_scheme_id"].as_str())
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+    }
+
+    /// Vue's `canSwitchCurrentWorkflowAgent`: a live session blocks switching,
+    /// and so does a workflow that already ran, unless the last turn cleared the
+    /// context frame.
+    fn can_switch_agent(&self) -> bool {
+        if self.selected.is_none() {
+            return true;
+        }
+        if self.workflow_running() {
+            return false;
+        }
+        let workflow = &self.model.workflow;
+        let has_query = workflow["user_query"]
+            .as_str()
+            .or_else(|| workflow["userQuery"].as_str())
+            .is_some_and(|query| !query.trim().is_empty());
+        let has_messages = !self.model.messages.is_empty();
+        let cleared = self
+            .model
+            .messages
+            .values()
+            .next_back()
+            .and_then(|message| message.message_subtype.as_deref())
+            == Some("manual_clear_context");
+        (!has_query && !has_messages) || cleared
+    }
+
+    /// A boolean agent-config switch, accepting both serializations.
+    fn agent_bool(&self, camel: &str, snake: &str, default: bool) -> bool {
+        let config = self.agent_config();
+        config[camel]
+            .as_bool()
+            .or_else(|| config[snake].as_bool())
+            .unwrap_or(default)
+    }
+
+    fn auto_compress_enabled(&self) -> bool {
+        self.agent_bool("autoCompress", "auto_compress", true)
+    }
+
+    fn final_audit_enabled(&self) -> bool {
+        self.agent_bool("finalAudit", "final_audit", false)
+    }
+
+    fn approval_level(&self) -> String {
+        let config = self.agent_config();
+        config["approvalLevel"]
+            .as_str()
+            .or_else(|| config["approval_level"].as_str())
+            .unwrap_or("default")
+            .to_owned()
+    }
+
+    /// Starts a new context frame for later turns, as Vue's clear-context does.
+    fn clear_context_frame(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.selected.clone() else {
+            self.notice = Some(t!("clear_context_no_session").to_string());
+            cx.notify();
+            return;
+        };
+        if self
+            .worker
+            .commands
+            .try_send(Command::ClearContext { session })
+            .is_err()
+        {
+            self.notice = Some(t!("clear_context_failed").to_string());
+        }
+        cx.notify();
     }
 
     /// Runtime states that accept a stop and show the running affordance.
@@ -986,7 +1201,11 @@ impl Observer {
                 UpdateKind::DesktopMenuUnavailable => {
                     self.notice = Some(t!("desktop_menu_unavailable").to_string());
                 }
-                UpdateKind::SoundSaved { chime, muted, saved } => {
+                UpdateKind::SoundSaved {
+                    chime,
+                    muted,
+                    saved,
+                } => {
                     self.sound_pending.remove(&chime);
                     if saved {
                         self.sound_saved_at = Some(Instant::now());
@@ -1018,6 +1237,29 @@ impl Observer {
                 UpdateKind::Error(message) => {
                     self.start_pending = false;
                     self.notice = Some(message);
+                }
+                UpdateKind::Catalogue {
+                    agents,
+                    models,
+                    skills,
+                    schemes,
+                } => {
+                    self.agents = agents;
+                    self.models = models;
+                    self.skills = skills;
+                    self.sandbox_schemes = schemes;
+                    cx.notify();
+                }
+                UpdateKind::Toast(message) => {
+                    self.notice = Some(message);
+                    cx.notify();
+                }
+                UpdateKind::Files { query, files } => {
+                    // Only the newest query may paint the `@` panel.
+                    if query == self.file_query {
+                        self.file_results = files;
+                    }
+                    cx.notify();
                 }
                 UpdateKind::Dir {
                     path,
@@ -1078,11 +1320,21 @@ impl Observer {
         if !self.model.compressing {
             self.compression_started = None;
         }
-        if self.sound_player.as_ref().is_some_and(|player| player.playback_failed()) {
+        if self
+            .sound_player
+            .as_ref()
+            .is_some_and(|player| player.playback_failed())
+        {
             self.notice = Some(t!("sound_playback_unavailable").to_string());
             cx.notify();
         }
         if self.copy_flash_expired() {
+            cx.notify();
+        }
+        // The live status line counts seconds; a running task needs a repaint
+        // even when no event arrives.
+        if self.workflow_running() && self.last_tick.elapsed() >= Duration::from_secs(1) {
+            self.last_tick = Instant::now();
             cx.notify();
         }
         if dirty {
@@ -1107,6 +1359,11 @@ impl Observer {
                 self.metrics.samples += 1;
             }
             self.last_metrics = Instant::now();
+            // The catalogue is fetched at startup, which can precede the
+            // runtime connection; keep asking until it answers.
+            if self.agents.is_empty() {
+                self.request_catalogue();
+            }
         }
     }
 
@@ -1114,7 +1371,10 @@ impl Observer {
     fn apply_config(&mut self, config: &Value, fetched_at: Instant, cx: &mut Context<Self>) {
         self.show_menu_button = config["show_menu_button"].as_bool().unwrap_or(true);
         // A poll already in flight when a save completed may contain old values.
-        if self.sound_saved_at.is_none_or(|saved_at| fetched_at > saved_at) {
+        if self
+            .sound_saved_at
+            .is_none_or(|saved_at| fetched_at > saved_at)
+        {
             for chime in Chime::ALL {
                 self.set_sound_enabled(chime, !chime.muted(config));
             }
@@ -2388,8 +2648,10 @@ impl Observer {
                     .child(t!("cost_partial").to_string()),
             );
         }
-        // Vue paints the rail with `inset 3px 0 0` instead of a column in the
-        // layout: a column shortens the gradient and leaves a seam beside it.
+        // Vue paints the rail with `inset 3px 0 0`, which CSS clips to the
+        // border radius. GPUI clips children to a square rect, so the rail
+        // squared off the card's left corners; the accent wash and border
+        // carry the same emphasis without breaking the radius.
         h_flex()
             .relative()
             .w_full()
@@ -2400,15 +2662,6 @@ impl Observer {
             .bg(cx.theme().muted)
             .overflow_hidden()
             .child(body)
-            .child(
-                div()
-                    .absolute()
-                    .left(px(0.))
-                    .top(px(0.))
-                    .bottom(px(0.))
-                    .w(px(3.))
-                    .bg(accent),
-            )
             .into_any_element()
     }
 
@@ -2799,9 +3052,8 @@ impl Render for Observer {
                         return;
                     }
                     let _ = entity.update(cx, |this, cx| {
-                        let width = (drag.start_width
-                            + f32::from(event.position.x - drag.start_x))
-                        .clamp(SIDEBAR_MIN_WIDTH, max_width);
+                        let width = (drag.start_width + f32::from(event.position.x - drag.start_x))
+                            .clamp(SIDEBAR_MIN_WIDTH, max_width);
                         if (this.sidebar_width - width).abs() > 0.5 {
                             this.sidebar_width = width;
                             cx.notify();
@@ -2977,7 +3229,7 @@ impl Render for Observer {
                         .w_full()
                         .child(ui::sidebar::sidebar(self, window, cx))
                         .when(!self.sidebar_collapsed, |row| {
-                            row.child(ui::sidebar::resize_band(cx))
+                            row.child(ui::sidebar::resize_band(self.sidebar_drag.is_some(), cx))
                         })
                         .child(
                             v_flex()

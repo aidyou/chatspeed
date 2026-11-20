@@ -159,7 +159,10 @@ pub struct Page {
 /// UI requests use generations to invalidate all old-selection results.
 pub enum Command {
     DesktopMenu(chatspeed_runtime_client::desktop_menu::Action),
-    SetSound { chime: crate::chimes::Chime, muted: bool },
+    SetSound {
+        chime: crate::chimes::Chime,
+        muted: bool,
+    },
     Metrics(crate::metrics::Metrics, Option<PathBuf>),
     Select {
         generation: u64,
@@ -191,6 +194,48 @@ pub enum Command {
     ListDir {
         path: String,
     },
+    /// Reloads the agents, models and skills the composer selectors list.
+    Catalogue,
+    /// Switches the selected workflow to another primary agent.
+    SetAgent {
+        session: String,
+        agent: String,
+    },
+    /// Replaces the workflow's per-slot model configs.
+    SetModelConfig {
+        session: String,
+        configs: Value,
+    },
+    /// Changes the workflow's sandbox execution mode and scheme.
+    SetSandbox {
+        session: String,
+        mode: String,
+        scheme: Option<String>,
+    },
+    /// Starts a new context frame so later turns ignore earlier history.
+    ClearContext {
+        session: String,
+    },
+    /// Toggles automatic rollup compression for the workflow.
+    SetAutoCompress {
+        session: String,
+        enabled: bool,
+    },
+    /// Toggles the final audit pass for the workflow.
+    SetFinalAudit {
+        session: String,
+        enabled: bool,
+    },
+    /// Sets the workflow's tool approval level (`default`, `smart`, `full`).
+    SetApprovalLevel {
+        session: String,
+        level: String,
+    },
+    /// Searches the authorized roots for the `@` file panel.
+    SearchFiles {
+        paths: Vec<String>,
+        query: String,
+    },
 }
 
 /// Ordered, bounded background-to-UI handoff; payloads are never logged.
@@ -211,7 +256,11 @@ pub enum UpdateKind {
     Connected(bool),
     /// Runtime configuration (`get_all_config`) for locale and appearance.
     Config(Value, Instant),
-    SoundSaved { chime: crate::chimes::Chime, muted: bool, saved: bool },
+    SoundSaved {
+        chime: crate::chimes::Chime,
+        muted: bool,
+        saved: bool,
+    },
     DesktopMenuUnavailable,
     Reconnect,
     Reset,
@@ -222,6 +271,20 @@ pub enum UpdateKind {
     Child(String, Page),
     /// A user-action failure worth showing above the composer.
     Error(String),
+    /// A user-action success worth showing above the composer.
+    Toast(String),
+    /// Agent, model and skill catalogues for the composer selectors.
+    Catalogue {
+        agents: Vec<Value>,
+        models: Vec<Value>,
+        skills: Vec<Value>,
+        schemes: Vec<Value>,
+    },
+    /// Files matching the `@` query, keyed by the query they answered.
+    Files {
+        query: String,
+        files: Vec<Value>,
+    },
     /// Children of a directory the authorized-path tree expanded.
     Dir {
         path: String,

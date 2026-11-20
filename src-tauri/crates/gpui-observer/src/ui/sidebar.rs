@@ -426,8 +426,12 @@ fn root_filter(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                     muted
                 })),
         ))
-        .content(move |_, _, cx| {
+        .content(move |_, window, cx| {
             let popover = cx.entity();
+            // The trigger sits near the top of the window, so the menu may only
+            // use half of it; longer root lists scroll instead of running off
+            // screen, which is what Element Plus does for the Vue dropdown.
+            let max_height = (window.viewport_size().height.as_f32() * 0.5).max(160.);
             let mut list = v_flex().id("root-filter-list").w(px(200.)).gap(px(2.));
             for (label, value) in entries.clone() {
                 let popover = popover.clone();
@@ -472,14 +476,22 @@ fn root_filter(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                         }),
                 );
             }
-            list.into_any_element()
+            v_flex()
+                .id("root-filter-scroll")
+                .w(px(200.))
+                .max_h(px(max_height))
+                .overflow_y_scroll()
+                .child(list)
+                .into_any_element()
         })
         .into_any_element()
 }
 
 /// The 4px band on the panel's trailing edge; the window follows the drag.
-pub fn resize_band(cx: &mut Context<Observer>) -> AnyElement {
-    let dragging = cx.entity().read(cx).sidebar_drag.is_some();
+///
+/// The caller passes whether a drag is running: reading the observer here
+/// would re-enter the entity the window is already rendering.
+pub fn resize_band(dragging: bool, cx: &mut Context<Observer>) -> AnyElement {
     let accent = cx.theme().primary;
     div()
         .id("sidebar-resize")

@@ -13,10 +13,11 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::ui::Icon;
-use crate::{danger, success, Observer};
+use crate::ui::{status, Icon};
+use crate::{danger, Observer};
 
 mod footer;
+pub mod suggestions;
 
 /// Vue's expanded box tops out at 540px; this window keeps its actions visible.
 const EXPANDED_HEIGHT: f32 = 420.;
@@ -35,8 +36,29 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     if let Some(notice) = &observer.notice {
         column = column.child(notice_line(notice, cx));
     }
-    column = column.child(status_line(observer, cx));
-    column = column.child(box_body(observer, cx));
+    column = column.child(status::status(observer, cx));
+    let draft = observer.composer.read(cx).value().to_string();
+    let panel =
+        suggestions::trigger(&draft).and_then(|trigger| suggestions::panel(observer, &trigger, cx));
+    // Vue floats the panel above the box instead of pushing the transcript up.
+    let mut frame = v_flex()
+        .relative()
+        .w_full()
+        .items_center()
+        .child(box_body(observer, cx));
+    if let Some(panel) = panel {
+        frame = frame.child(
+            h_flex()
+                .absolute()
+                .bottom(relative(1.))
+                .left(px(0.))
+                .right(px(0.))
+                .mb(px(6.))
+                .justify_center()
+                .child(panel),
+        );
+    }
+    column = column.child(frame);
     column.into_any_element()
 }
 
@@ -58,39 +80,17 @@ fn notice_line(notice: &str, _cx: &mut Context<Observer>) -> AnyElement {
         .into_any_element()
 }
 
-/// Vue's `StatusNotifier`: the runtime state between transcript and box.
-fn status_line(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
-    let muted = cx.theme().muted_foreground;
-    let accent = cx.theme().primary;
-    let running = observer.workflow_running();
-    h_flex()
-        .w_full()
-        .max_w(px(780.))
-        .items_center()
-        .gap_2()
-        .px_1()
-        .text_size(px(11.))
-        .text_color(muted)
-        .child(
-            div()
-                .flex_none()
-                .w(px(6.))
-                .h(px(6.))
-                .rounded_full()
-                .bg(if running {
-                    accent
-                } else {
-                    Hsla::from(success())
-                }),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_ellipsis()
-                .child(observer.status_line()),
-        )
-        .into_any_element()
+/// One outer shadow, matching the CSS `0 y blur spread color` shorthand.
+///
+/// gpui-kit does not re-export `box_shadow`, so the struct is built here.
+fn drop_shadow(y: f32, blur: f32, spread: f32, color: Hsla) -> BoxShadow {
+    BoxShadow {
+        offset: point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset: false,
+        color,
+    }
 }
 
 /// The framed box: the textarea, its expand toggle and the footer.
@@ -99,6 +99,9 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let hover = cx.theme().muted;
     let muted = cx.theme().muted_foreground;
     let expanded = observer.composer_expanded;
+    let accent = cx.theme().primary;
+    let foreground = cx.theme().foreground;
+    let focused = observer.composer_focused;
 
     let textarea = Textarea::new(&observer.composer)
         .appearance(false)
@@ -112,14 +115,52 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         textarea
     };
 
+    // Vue's `.input`: a flat input surface with a hairline border and a soft
+    // drop shadow, turning into the accent edge plus a 3px halo on focus. The
+    // web stylesheet also stacks a faint gradient, which reads as a heavy wash
+    // on a native surface, so the flat `--cs-input-bg-color` is used instead.
+    let input_bg = if observer.appearance_dark {
+        rgb(0x282b2d)
+    } else {
+        rgb(0xe5e6e5)
+    };
+    let (edge, shadows) = if focused {
+        (
+            accent.opacity(0.68),
+            vec![
+                drop_shadow(0., 0., 3., accent.opacity(0.12)),
+                drop_shadow(12., 30., 0., foreground.opacity(0.07)),
+            ],
+        )
+    } else {
+        (
+            border,
+            vec![drop_shadow(10., 28., 0., foreground.opacity(0.05))],
+        )
+    };
+
     v_flex()
+        .id("composer-box")
         .w_full()
         .max_w(px(780.))
         .max_h(px(EXPANDED_HEIGHT))
         .rounded(px(12.))
         .border_1()
-        .border_color(border)
-        .bg(cx.theme().background)
+        .border_color(edge)
+        .bg(input_bg)
+        .shadow(shadows)
+        // Vue's frame focuses the textarea when the padding around it is
+        // clicked, not only the text itself.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                let composer = this.composer.clone();
+                composer.update(cx, |state, cx| state.focus(window, cx));
+            }),
+        )
+        .when(!focused, |view| {
+            view.hover(move |style| style.border_color(accent.opacity(0.26)))
+        })
         .when(expanded, |view| view.h(px(EXPANDED_HEIGHT)))
         .child(
             div()

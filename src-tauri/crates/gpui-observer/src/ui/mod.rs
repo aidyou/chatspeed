@@ -138,4 +138,5 @@ pub mod composer;
 pub mod file_tree;
 pub mod frame;
 pub mod sidebar;
+pub mod status;
 pub mod titlebar;

@@ -47,10 +47,7 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
 
     // Vue spaces titlebar buttons with `.left/.right { gap: 4px }` plus
     // `.icon-btn { margin-right: 4px }`, so an 8px gap matches the web bar.
-    let mut left = h_flex()
-        .flex_none()
-        .items_center()
-        .gap(px(8.));
+    let mut left = h_flex().flex_none().items_center().gap(px(8.));
     if observer.show_menu_button {
         left = left.child(menu(observer, secondary, cx));
     }
@@ -207,21 +204,51 @@ fn menu(observer: &Observer, secondary: Hsla, cx: &mut Context<Observer>) -> Any
     let groups: [&[(&str, &str, &str, Action)]; 4] = [
         &[
             ("menu-chat", "skill-chat-square", "menu_chat", Action::Chat),
-            ("menu-assistant", "assistant", "menu_assistant", Action::Assistant),
-            ("menu-workflow", "skill-plan3", "menu_workflow", Action::Workflow),
+            (
+                "menu-assistant",
+                "assistant",
+                "menu_assistant",
+                Action::Assistant,
+            ),
+            (
+                "menu-workflow",
+                "skill-plan3",
+                "menu_workflow",
+                Action::Workflow,
+            ),
             ("menu-note", "note", "menu_note", Action::Note),
-            ("menu-proxy-switcher", "switch", "menu_proxy_switcher", Action::ProxySwitcher),
+            (
+                "menu-proxy-switcher",
+                "switch",
+                "menu_proxy_switcher",
+                Action::ProxySwitcher,
+            ),
         ],
         &[
-            ("menu-settings", "setting", "menu_settings", Action::Settings),
+            (
+                "menu-settings",
+                "setting",
+                "menu_settings",
+                Action::Settings,
+            ),
             ("menu-model", "model", "menu_model", Action::Model),
             ("menu-agent", "agent", "menu_agent", Action::Agent),
             ("menu-proxy", "proxy", "menu_proxy", Action::Proxy),
-            ("menu-chat-hub", "connected", "menu_chat_hub", Action::ChatHub),
+            (
+                "menu-chat-hub",
+                "connected",
+                "menu_chat_hub",
+                Action::ChatHub,
+            ),
             ("menu-mcp", "mcp", "menu_mcp", Action::Mcp),
             ("menu-skill", "skill", "menu_skill", Action::Skill),
         ],
-        &[("menu-scraper", "extract", "menu_scraper", Action::ScraperTest)],
+        &[(
+            "menu-scraper",
+            "extract",
+            "menu_scraper",
+            Action::ScraperTest,
+        )],
         &[
             ("menu-about", "about", "menu_about", Action::About),
             ("menu-quit", "quit", "menu_quit", Action::Quit),
@@ -252,10 +279,16 @@ fn menu(observer: &Observer, secondary: Hsla, cx: &mut Context<Observer>) -> Any
                 for &(id, icon, label, action) in *group {
                     let popover = popover.clone();
                     let weak = weak.clone();
-                    list = list.child(menu_row(id, icon, t!(label).to_string(), foreground, hover,
+                    list = list.child(menu_row(
+                        id,
+                        icon,
+                        t!(label).to_string(),
+                        foreground,
+                        hover,
                         move |_, window, cx| {
                             let _ = popover.update(cx, |state, cx| state.dismiss(window, cx));
-                            let _ = weak.update(cx, |this, cx| this.desktop_menu_action(action, cx));
+                            let _ =
+                                weak.update(cx, |this, cx| this.desktop_menu_action(action, cx));
                         },
                     ));
                 }
@@ -376,7 +409,11 @@ fn sound_menu(
 ) -> AnyElement {
     let approval_on = observer.sound_is_enabled(Chime::Approval);
     let completion_on = observer.sound_is_enabled(Chime::Completion);
-    let icon = if approval_on || completion_on { "unmute" } else { "mute" };
+    let icon = if approval_on || completion_on {
+        "unmute"
+    } else {
+        "mute"
+    };
     let accent = cx.theme().primary;
     let foreground = cx.theme().foreground;
     let weak = cx.entity().downgrade();

@@ -161,7 +161,7 @@ pub fn tool_name(tool: &Value) -> &str {
         .unwrap_or("")
 }
 
-fn tool_arguments(tool: &Value) -> Value {
+pub fn tool_arguments(tool: &Value) -> Value {
     let tool = primary_tool(tool);
     let call = tool.get("tool_call").unwrap_or(tool);
     let function = call.get("function").unwrap_or(call);
@@ -712,7 +712,7 @@ fn tool_call_id(message: &Message) -> Option<&str> {
 // Tool titles, summaries and details
 // ---------------------------------------------------------------------------
 
-fn format_display_path(path: &str, roots: &[String]) -> String {
+pub fn format_display_path(path: &str, roots: &[String]) -> String {
     if path.is_empty() {
         return String::new();
     }

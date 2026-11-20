@@ -60,6 +60,32 @@ pub async fn control_post(options: &Options, path: &str, body: Value) -> Result<
         .map_err(|error| error.to_string())
 }
 
+/// Runs one allowlisted workflow command.
+///
+/// Mutating commands require an idempotency key the server checks before it
+/// replays anything, so the caller supplies a stable one per user action.
+pub async fn workflow_command(
+    options: &Options,
+    command: &str,
+    params: Value,
+    idempotency_key: Option<&str>,
+) -> Result<Value, String> {
+    let client = connect(options)
+        .await
+        .ok_or_else(|| "runtime unavailable".to_string())?;
+    let path = format!("/control/v1/workflow-commands/{command}");
+    match idempotency_key {
+        Some(key) => client
+            .post_with_idempotency(&path, &params, key)
+            .await
+            .map_err(|error| error.to_string()),
+        None => client
+            .post(&path, &params)
+            .await
+            .map_err(|error| error.to_string()),
+    }
+}
+
 /// The runtime configuration the desktop settings UI writes.
 pub async fn config(options: &Options) -> Result<Value, String> {
     data_command(options, "get_all_config", json!({})).await

@@ -2,6 +2,7 @@
 use crate::types::{Message, Page};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 pub const PAGE_LIMIT: usize = 300;
 pub const LIVE_BYTES_LIMIT: usize = 1024 * 1024;
@@ -28,9 +29,16 @@ pub struct Model {
     pub awaiting_user_tool_call_id: Option<String>,
     /// Tool calls the runtime lists as awaiting a decision.
     pub pending_tool_ids: BTreeSet<String>,
+    /// When each live tool call was first seen running, for the elapsed label.
+    pub tool_started: BTreeMap<String, Instant>,
+    /// When each live tool call finished, so a completion stays visible briefly.
+    pub tool_finished: BTreeMap<String, Instant>,
     /// Authorized roots of the selected workflow, used to shorten tool paths
     /// and to fill the authorized-paths tab.
     pub roots: Vec<String>,
+    /// Last workflow payload, which carries `agent_config` for the composer's
+    /// agent, model and sandbox selectors.
+    pub workflow: Value,
 }
 
 impl Model {
@@ -53,6 +61,9 @@ impl Model {
         }
         if !page.status.is_empty() {
             self.state = page.status.clone();
+        }
+        if !page.workflow.is_null() {
+            self.workflow = page.workflow.clone();
         }
         // Older-message pages may omit the workflow payload; keep the roots the
         // snapshot established instead of clearing them on every page.
@@ -116,6 +127,8 @@ impl Model {
             self.live = Message::default();
             self.tools.clear();
             self.tool_order.clear();
+            self.tool_started.clear();
+            self.tool_finished.clear();
         } else {
             for row in self.messages.values() {
                 if let Some(id) = row.metadata["tool_call_id"].as_str() {
@@ -151,6 +164,8 @@ impl Model {
         self.live = Message::default();
         self.tools.clear();
         self.tool_order.clear();
+        self.tool_started.clear();
+        self.tool_finished.clear();
         self.live_overflow = false;
     }
 
@@ -221,6 +236,23 @@ impl Model {
                             let oldest = self.tool_order.remove(0);
                             self.tools.remove(&oldest);
                         }
+                    }
+                    // The live status line reports the elapsed time of the tool
+                    // it names, so the start and finish moments are tracked here.
+                    if kind == "tool_started" {
+                        self.tool_started
+                            .entry(id.to_owned())
+                            .or_insert_with(Instant::now);
+                        self.tool_finished.remove(id);
+                    } else {
+                        self.tool_started.remove(id);
+                        self.tool_finished.insert(id.to_owned(), Instant::now());
+                    }
+                    while self.tool_started.len() > 32 {
+                        self.tool_started.pop_first();
+                    }
+                    while self.tool_finished.len() > 32 {
+                        self.tool_finished.pop_first();
                     }
                 }
             }

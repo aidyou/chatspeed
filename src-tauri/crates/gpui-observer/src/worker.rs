@@ -139,7 +139,10 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 let accepted = if options.demo {
                     false
                 } else if let Ok(discovery) = try_discovery_path(options.discovery.as_deref()) {
-                    let dir = discovery.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+                    let dir = discovery
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .unwrap_or_else(|| std::path::Path::new("."));
                     desktop_menu::request(dir, action).await.is_ok()
                 } else {
                     false
@@ -149,12 +152,25 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 }
             }
             Command::SetSound { chime, muted } => {
-                let saved = options.demo || native::data_command(
-                    &options,
-                    "set_config",
-                    json!({"key": chime.config_key(), "value": muted}),
-                ).await.is_ok();
-                if !send(&tx, 0, UpdateKind::SoundSaved { chime, muted, saved }).await {
+                let saved = options.demo
+                    || native::data_command(
+                        &options,
+                        "set_config",
+                        json!({"key": chime.config_key(), "value": muted}),
+                    )
+                    .await
+                    .is_ok();
+                if !send(
+                    &tx,
+                    0,
+                    UpdateKind::SoundSaved {
+                        chime,
+                        muted,
+                        saved,
+                    },
+                )
+                .await
+                {
                     return;
                 }
             }
@@ -261,6 +277,207 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     .await;
                 });
             }
+            Command::Catalogue => {
+                if options.demo {
+                    continue;
+                }
+                let agents = native::control_get(&options, "/control/v1/agents")
+                    .await
+                    .ok()
+                    .and_then(|value| value.as_array().cloned())
+                    .unwrap_or_default();
+                let models = native::data_command(&options, "get_all_ai_models", json!({}))
+                    .await
+                    .ok()
+                    .and_then(|value| value.as_array().cloned())
+                    .unwrap_or_default();
+                let schemes = native::data_command(&options, "get_sandbox_schemes", json!({}))
+                    .await
+                    .ok()
+                    .and_then(|value| value.as_array().cloned())
+                    .unwrap_or_default();
+                let skills =
+                    native::workflow_command(&options, "get_system_skills", json!({}), None)
+                        .await
+                        .ok()
+                        .and_then(|value| value.as_array().cloned())
+                        .unwrap_or_default();
+                if !send(
+                    &tx,
+                    0,
+                    UpdateKind::Catalogue {
+                        agents,
+                        models,
+                        skills,
+                        schemes,
+                    },
+                )
+                .await
+                {
+                    return;
+                }
+            }
+            Command::SetAgent { session, agent } => {
+                if options.demo {
+                    continue;
+                }
+                let command = "update_workflow_agent_id";
+                let params = json!({"session_id": session, "agent_id": agent});
+                let result = native::workflow_command(
+                    &options,
+                    command,
+                    params,
+                    Some(&idempotency_key(command)),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::SetModelConfig { session, configs } => {
+                if options.demo {
+                    continue;
+                }
+                let command = "update_workflow_model_config";
+                let params = json!({"session_id": session, "configs": configs});
+                let result = native::workflow_command(
+                    &options,
+                    command,
+                    params,
+                    Some(&idempotency_key(command)),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::SetSandbox {
+                session,
+                mode,
+                scheme,
+            } => {
+                if options.demo {
+                    continue;
+                }
+                let command = "update_workflow_sandbox_config";
+                let params = json!({
+                    "session_id": session,
+                    "execution_mode": mode,
+                    "sandbox_scheme_id": scheme,
+                });
+                let result = native::workflow_command(
+                    &options,
+                    command,
+                    params,
+                    Some(&idempotency_key(command)),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::ClearContext { session } => {
+                if options.demo {
+                    continue;
+                }
+                let command = "workflow_begin_new_context_frame";
+                let params = json!({"session_id": session});
+                let result = native::workflow_command(
+                    &options,
+                    command,
+                    params,
+                    Some(&idempotency_key(command)),
+                )
+                .await;
+                match result {
+                    Ok(_) => {
+                        let toast = rust_i18n::t!("clear_context_frame_done").to_string();
+                        if !send(&tx, 0, UpdateKind::Toast(toast)).await {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if !send(&tx, 0, UpdateKind::Error(error)).await {
+                            return;
+                        }
+                    }
+                }
+            }
+            Command::SetAutoCompress { session, enabled } => {
+                if options.demo {
+                    continue;
+                }
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_auto_compress",
+                    json!({"session_id": session, "auto_compress": enabled}),
+                    Some(&idempotency_key("auto-compress")),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::SetFinalAudit { session, enabled } => {
+                if options.demo {
+                    continue;
+                }
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_final_audit",
+                    json!({"session_id": session, "final_audit": enabled}),
+                    Some(&idempotency_key("final-audit")),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::SetApprovalLevel { session, level } => {
+                if options.demo {
+                    continue;
+                }
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_approval_level",
+                    json!({"session_id": session, "approval_level": level}),
+                    Some(&idempotency_key("approval-level")),
+                )
+                .await;
+                if let Err(error) = result {
+                    if !send(&tx, 0, UpdateKind::Error(error)).await {
+                        return;
+                    }
+                }
+            }
+            Command::SearchFiles { paths, query } => {
+                if options.demo {
+                    continue;
+                }
+                let files = native::workflow_command(
+                    &options,
+                    "search_workspace_files",
+                    json!({"paths": paths, "query": query}),
+                    None,
+                )
+                .await
+                .ok()
+                .and_then(|value| value.as_array().cloned())
+                .unwrap_or_default();
+                if !send(&tx, 0, UpdateKind::Files { query, files }).await {
+                    return;
+                }
+            }
             Command::Older {
                 generation,
                 id,
@@ -300,6 +517,15 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
     if let Some(task) = selection {
         task.abort();
     }
+}
+
+/// A unique idempotency key for one user-initiated workflow command.
+fn idempotency_key(command: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    format!("gpui-{command}-{nanos}")
 }
 
 /// Creates a workflow session on the primary agent and starts it with `prompt`.
