@@ -15,6 +15,14 @@ ask_user_other:
   en: Other
   zh-Hans: 其他
   zh-Hant: 其他
+ask_user_other_placeholder:
+  en: Type your answer
+  zh-Hans: 输入你的回答
+  zh-Hant: 輸入你的回答
+ask_user_other_required:
+  en: Type your own answer for the “Other” option
+  zh-Hans: 请为「其他」填写回答内容
+  zh-Hant: 請為「其他」填寫回答內容
 ask_user_required:
   en: Pick an option for every question first
   zh-Hans: 请先为每个问题选择一个选项
@@ -63,6 +71,10 @@ connecting:
   en: Disconnected — retrying discovery
   zh-Hans: 未连接 — 正在重试发现
   zh-Hant: 未連接 — 正在重試發現
+continue_workflow:
+  en: Continue
+  zh-Hans: 继续
+  zh-Hant: 繼續
 copied:
   en: Copied
   zh-Hans: 已复制
@@ -247,6 +259,10 @@ live_overflow:
   en: Live preview limit reached — awaiting durable final
   zh-Hans: 实时预览已达上限 — 等待耐久正文
   zh-Hant: 實時預覽已達上限 — 等待耐久正文
+manual_compress:
+  en: Compress context
+  zh-Hans: 压缩上下文
+  zh-Hant: 壓縮上下文
 menu_about:
   en: About
   zh-Hans: 关于
@@ -347,6 +363,14 @@ rejected_label:
   en: Rejected
   zh-Hans: 已拒绝
   zh-Hant: 已拒絕
+root_filter_all:
+  en: All directories
+  zh-Hans: 全部目录
+  zh-Hant: 全部目錄
+search_sessions:
+  en: Search conversations
+  zh-Hans: 搜索会话
+  zh-Hant: 搜尋工作階段
 select:
   en: Select a workflow session
   zh-Hans: 请选择工作流会话

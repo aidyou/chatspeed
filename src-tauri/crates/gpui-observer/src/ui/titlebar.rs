@@ -126,6 +126,9 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
             skin.hover,
             cx.listener(|this, _, _, cx| this.not_implemented(t!("delete_last_message"), cx)),
         ))
+        // Vue tilts the pin 45° while the window is not pinned. GPUI only
+        // transforms SVG elements, so the glyph cannot carry that tilt; the
+        // button still reports the state it toggles.
         .child(icon_button(
             "pin-window",
             "pin",

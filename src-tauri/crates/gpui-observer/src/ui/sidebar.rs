@@ -7,13 +7,16 @@
 //! with the tasks/automation and authorized-paths tabs; the collapsed column
 //! moves the active and recent conversations between those two icon groups.
 
+use gpui_kit::component::input::Input;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 
+use crate::ui::trigger;
 use crate::ui::Icon;
-use crate::ui::{surfaces, Surfaces, RAIL_WIDTH, SIDEBAR_COLLAPSED_WIDTH, SIDEBAR_WIDTH};
+use crate::ui::{surfaces, Surfaces, RAIL_WIDTH, SIDEBAR_COLLAPSED_WIDTH};
 use crate::{accent, danger, info, success, violet, warning, Observer};
 use chatspeed_gpui_observer::types::{root_name, Session};
 
@@ -115,6 +118,27 @@ fn root_label(session: &Session) -> Option<String> {
     session
         .primary_root()
         .map(|root| root_name(&root).to_owned())
+}
+
+/// Vue filters on the title, then the user query, then the untitled label, and
+/// narrows the list to one primary root before the text search applies.
+fn matches_filters(session: &Session, query: &str, root: Option<&str>) -> bool {
+    if let Some(root) = root {
+        if root_label(session).as_deref() != Some(root) {
+            return false;
+        }
+    }
+    if query.is_empty() {
+        return true;
+    }
+    if session.title.to_lowercase().contains(query)
+        || session.user_query.to_lowercase().contains(query)
+    {
+        return true;
+    }
+    session.title.trim().is_empty()
+        && session.user_query.trim().is_empty()
+        && t!("untitled").to_lowercase().contains(query)
 }
 
 /// Renders the sidebar for the current collapse state.
@@ -326,7 +350,7 @@ fn panel(observer: &Observer, skin: &Surfaces, cx: &mut Context<Observer>) -> An
 
     v_flex()
         .id("sidebar-panel")
-        .w(px(SIDEBAR_WIDTH))
+        .w(px(observer.sidebar_width))
         .h_full()
         .flex_none()
         .min_w_0()
@@ -334,7 +358,143 @@ fn panel(observer: &Observer, skin: &Surfaces, cx: &mut Context<Observer>) -> An
         .border_color(border)
         .bg(background)
         .child(strip)
+        .when(active != SidebarTab::Files, |panel| {
+            panel.child(search_header(observer, cx))
+        })
         .child(body)
+        .into_any_element()
+}
+
+/// Vue's round search field with the primary-root filter in its suffix.
+fn search_header(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    h_flex()
+        .w_full()
+        .flex_none()
+        .px(px(16.))
+        .py_2()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .rounded_full()
+                .bg(cx.theme().muted)
+                .child(
+                    Input::new(&observer.session_search)
+                        .appearance(false)
+                        .bordered(false)
+                        .h(px(30.))
+                        .prefix(Icon::new("search").size(13.).color(muted))
+                        .suffix(root_filter(observer, cx)),
+                ),
+        )
+        .into_any_element()
+}
+
+/// The caret-down menu that narrows the list to one primary authorized root.
+fn root_filter(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+    let selected = observer.session_root_filter.clone();
+    let active = selected.is_some();
+    let muted = cx.theme().muted_foreground;
+    let primary = cx.theme().primary;
+    let hover = surfaces(observer.appearance_dark).hover;
+    let mut roots: Vec<String> = observer.sessions.iter().filter_map(root_label).collect();
+    roots.sort_by_key(|root| root.to_lowercase());
+    roots.dedup();
+
+    let entries: Vec<(String, Option<String>)> =
+        std::iter::once((t!("root_filter_all").to_string(), None))
+            .chain(roots.into_iter().map(|root| (root.clone(), Some(root))))
+            .collect();
+    let observer_entity = cx.entity();
+
+    Popover::new("session-root-filter")
+        .trigger(trigger(
+            div()
+                .id("session-root-filter-trigger")
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(20.))
+                .rounded_full()
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(Icon::new("caret-down").size(12.).color(if active {
+                    primary
+                } else {
+                    muted
+                })),
+        ))
+        .content(move |_, _, cx| {
+            let popover = cx.entity();
+            let mut list = v_flex().id("root-filter-list").w(px(200.)).gap(px(2.));
+            for (label, value) in entries.clone() {
+                let popover = popover.clone();
+                let value = value.clone();
+                let selected = selected == value;
+                list = list.child(
+                    h_flex()
+                        .id(SharedString::from(format!("root-filter-{label}")))
+                        .w_full()
+                        .min_w_0()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(cx.theme().muted))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_size(px(12.))
+                                .text_color(if selected {
+                                    cx.theme().primary
+                                } else {
+                                    cx.theme().foreground
+                                })
+                                .child(label),
+                        )
+                        .when(selected, |row| {
+                            row.child(Icon::new("check").size(12.).color(cx.theme().primary))
+                        })
+                        .on_click({
+                            let observer_entity = observer_entity.clone();
+                            move |_, window, cx: &mut App| {
+                                popover.update(cx, |state, cx| state.dismiss(window, cx));
+                                observer_entity.update(cx, |this, cx| {
+                                    this.set_session_root_filter(value.clone(), cx)
+                                });
+                            }
+                        }),
+                );
+            }
+            list.into_any_element()
+        })
+        .into_any_element()
+}
+
+/// The 4px band on the panel's trailing edge; the window follows the drag.
+pub fn resize_band(cx: &mut Context<Observer>) -> AnyElement {
+    let dragging = cx.entity().read(cx).sidebar_drag.is_some();
+    let accent = cx.theme().primary;
+    div()
+        .id("sidebar-resize")
+        .flex_none()
+        .h_full()
+        .w(px(4.))
+        .cursor_col_resize()
+        .when(dragging, |band| band.bg(accent.opacity(0.35)))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                this.begin_sidebar_drag(event.position.x, cx);
+                window.prevent_default();
+            }),
+        )
         .into_any_element()
 }
 
@@ -378,11 +538,22 @@ fn tab_button(
 
 /// Active and recent transcripts, grouped the way Vue lists them.
 fn session_list(observer: &Observer, skin: &Surfaces, cx: &mut Context<Observer>) -> AnyElement {
-    let active: Vec<&Session> = observer.sessions.iter().filter(|s| is_active(s)).collect();
+    let query = observer
+        .session_search
+        .read(cx)
+        .value()
+        .trim()
+        .to_lowercase();
+    let filter = observer.session_root_filter.as_deref();
+    let active: Vec<&Session> = observer
+        .sessions
+        .iter()
+        .filter(|session| matches_filters(session, &query, filter) && is_active(session))
+        .collect();
     let recent: Vec<&Session> = observer
         .sessions
         .iter()
-        .filter(|session| !is_active(session))
+        .filter(|session| matches_filters(session, &query, filter) && !is_active(session))
         .collect();
 
     let mut list = v_flex()

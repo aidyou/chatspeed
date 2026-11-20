@@ -1724,18 +1724,54 @@ fn sub_agent_view(
     })
 }
 
+/// One question's draft answer: a picked option, or the free text typed for
+/// the "Other" row that Vue appends after the listed options.
+#[derive(Clone, Copy, Default)]
+pub struct AskUserDraft<'a> {
+    pub choice: Option<usize>,
+    pub supplement: &'a str,
+}
+
+/// Why a draft cannot be submitted yet, so the window can name the gap.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AskUserDraftError {
+    Required,
+    OtherRequired,
+}
+
 /// Builds the hidden `<ask_user_response>` payload the engine reads back.
 ///
 /// The shape matches Vue's `buildAskUserResponse`: one entry per question with
 /// the resolved option text, so a partial draft produces no message at all.
-pub fn ask_user_response(groups: &[ChoiceGroupView], choices: &[Option<usize>]) -> Option<String> {
-    if groups.is_empty() || groups.len() != choices.len() {
-        return None;
+/// Picking the row after the listed options submits the typed text with
+/// `source: "other"`, the index Vue gives that row.
+pub fn ask_user_response(
+    groups: &[ChoiceGroupView],
+    drafts: &[AskUserDraft<'_>],
+) -> Result<String, AskUserDraftError> {
+    if groups.is_empty() || groups.len() != drafts.len() {
+        return Err(AskUserDraftError::Required);
     }
     let mut selections = Vec::new();
-    for (group, choice) in groups.iter().zip(choices) {
-        let index = (*choice)?;
-        let text = group.options.get(index)?;
+    for (group, draft) in groups.iter().zip(drafts) {
+        let index = draft.choice.ok_or(AskUserDraftError::Required)?;
+        if index == group.options.len() {
+            let supplement = draft.supplement.trim();
+            if supplement.is_empty() {
+                return Err(AskUserDraftError::OtherRequired);
+            }
+            selections.push(serde_json::json!({
+                "title": group.title,
+                "choice_index": index + 1,
+                "choice": supplement,
+                "source": "other",
+            }));
+            continue;
+        }
+        let text = group
+            .options
+            .get(index)
+            .ok_or(AskUserDraftError::Required)?;
         selections.push(serde_json::json!({
             "title": group.title,
             "choice_index": index + 1,
@@ -1743,9 +1779,9 @@ pub fn ask_user_response(groups: &[ChoiceGroupView], choices: &[Option<usize>]) 
             "source": "option",
         }));
     }
-    Some(format!(
+    Ok(format!(
         "<ask_user_response>\n{}\n</ask_user_response>",
-        serde_json::to_string_pretty(&selections).ok()?
+        serde_json::to_string_pretty(&selections).map_err(|_| AskUserDraftError::Required)?
     ))
 }
 
@@ -2480,13 +2516,99 @@ mod tests {
                 ..ChoiceGroupView::default()
             },
         ];
-        assert_eq!(ask_user_response(&groups, &[Some(1)]), None);
-        assert_eq!(ask_user_response(&groups, &[None, Some(0)]), None);
-        assert_eq!(ask_user_response(&groups, &[Some(0), Some(4)]), None);
+        assert_eq!(
+            ask_user_response(&groups, &[AskUserDraft::default()]).unwrap_err(),
+            AskUserDraftError::Required
+        );
+        assert_eq!(
+            ask_user_response(
+                &groups,
+                &[
+                    AskUserDraft {
+                        choice: Some(1),
+                        supplement: "",
+                    },
+                    AskUserDraft::default(),
+                ],
+            )
+            .unwrap_err(),
+            AskUserDraftError::Required
+        );
+        assert_eq!(
+            ask_user_response(
+                &groups,
+                &[
+                    AskUserDraft {
+                        choice: Some(0),
+                        supplement: "",
+                    },
+                    AskUserDraft {
+                        choice: Some(4),
+                        supplement: "",
+                    },
+                ],
+            )
+            .unwrap_err(),
+            AskUserDraftError::Required
+        );
+        // The row after the options is "Other", and it needs typed text.
+        assert_eq!(
+            ask_user_response(
+                &groups,
+                &[
+                    AskUserDraft {
+                        choice: Some(2),
+                        supplement: "  ",
+                    },
+                    AskUserDraft {
+                        choice: Some(0),
+                        supplement: "",
+                    },
+                ],
+            )
+            .unwrap_err(),
+            AskUserDraftError::OtherRequired
+        );
 
-        let payload = ask_user_response(&groups, &[Some(1), Some(0)]).expect("complete draft");
+        let payload = ask_user_response(
+            &groups,
+            &[
+                AskUserDraft {
+                    choice: Some(2),
+                    supplement: "Balanced",
+                },
+                AskUserDraft {
+                    choice: Some(0),
+                    supplement: "",
+                },
+            ],
+        )
+        .expect("complete draft");
         assert!(payload.starts_with("<ask_user_response>\n"));
         assert!(payload.ends_with("\n</ask_user_response>"));
+        let body = payload
+            .trim_start_matches("<ask_user_response>\n")
+            .trim_end_matches("\n</ask_user_response>");
+        let parsed: Value = serde_json::from_str(body).expect("json body");
+        assert_eq!(parsed[0]["choice_index"], 3);
+        assert_eq!(parsed[0]["choice"], "Balanced");
+        assert_eq!(parsed[0]["source"], "other");
+        assert_eq!(parsed[1]["title"], "Style");
+
+        let payload = ask_user_response(
+            &groups,
+            &[
+                AskUserDraft {
+                    choice: Some(1),
+                    supplement: "",
+                },
+                AskUserDraft {
+                    choice: Some(0),
+                    supplement: "",
+                },
+            ],
+        )
+        .expect("complete draft");
         let body = payload
             .trim_start_matches("<ask_user_response>\n")
             .trim_end_matches("\n</ask_user_response>");

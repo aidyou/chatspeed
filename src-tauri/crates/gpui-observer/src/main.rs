@@ -25,7 +25,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     component::{
         h_flex,
-        input::{InputEvent, TextareaState},
+        input::{InputEvent, InputState, Textarea, TextareaState},
         text::{TextView, TextViewState},
         theme::{Theme, ThemeMode},
         v_flex, ActiveTheme,
@@ -315,6 +315,13 @@ struct Observer {
     /// Tab shown in the expanded sidebar, and the rail entry that selects it.
     sidebar_tab: ui::sidebar::SidebarTab,
     rail_tab: ui::sidebar::RailTab,
+    /// Session search box and the primary-root filter beside it.
+    session_search: Entity<InputState>,
+    session_root_filter: Option<String>,
+    /// Draggable width of the expanded panel, matching Vue's 200px floor.
+    sidebar_width: f32,
+    /// Pointer that started dragging the sidebar edge, while it is held.
+    sidebar_drag: Option<SidebarDrag>,
     show_menu_button: bool,
     sound_enabled: BTreeSet<Chime>,
     sound_pending: BTreeMap<Chime, bool>,
@@ -335,6 +342,8 @@ struct Observer {
     title_drag: bool,
     /// Multi-line composer state; sends read it and clear it.
     composer: Entity<TextareaState>,
+    /// Vue's fullscreen toggle: the box grows instead of the transcript.
+    composer_expanded: bool,
     /// A new session is being created and started; further sends wait.
     start_pending: bool,
     /// Last action failure, shown above the composer until the next send.
@@ -343,6 +352,8 @@ struct Observer {
     child_rows: BTreeMap<String, Vec<Row>>,
     /// Selected option per `ask_user` group, keyed by `tool_call_id:group`.
     ask_user_choice: BTreeMap<String, usize>,
+    /// Free text typed for an `ask_user` "Other" row, by the same key.
+    ask_user_text: BTreeMap<String, Entity<TextareaState>>,
     /// Child transcripts requested but not loaded yet.
     child_pending: BTreeSet<String>,
     task: Task<()>,
@@ -355,6 +366,16 @@ struct CopyFlash {
     at: Instant,
 }
 
+/// Sidebar edge drag: where the pointer went down and the width it started at.
+#[derive(Clone, Copy)]
+struct SidebarDrag {
+    start_x: Pixels,
+    start_width: f32,
+}
+
+/// Vue clamps the expanded panel between 200px and half the window.
+const SIDEBAR_MIN_WIDTH: f32 = 200.;
+
 const COPY_FLASH: Duration = Duration::from_secs(3);
 
 impl Observer {
@@ -362,7 +383,7 @@ impl Observer {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder(t!("composer_placeholder").to_string())
-                .auto_grow(1, 6)
+                .auto_grow(1, 10)
         });
         // Enter sends, like the Vue input; Shift+Enter keeps the newline the
         // textarea just inserted.
@@ -372,6 +393,19 @@ impl Observer {
             |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
                     this.send_message(window, cx);
+                }
+            },
+        )
+        .detach();
+        let session_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("search_sessions").to_string()));
+        // The list filters while the query changes, so every edit repaints it.
+        cx.subscribe_in(
+            &session_search,
+            window,
+            |_, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
                 }
             },
         )
@@ -415,6 +449,10 @@ impl Observer {
             sidebar_collapsed: false,
             sidebar_tab: ui::sidebar::SidebarTab::Tasks,
             rail_tab: ui::sidebar::RailTab::Tasks,
+            session_search,
+            session_root_filter: None,
+            sidebar_width: ui::SIDEBAR_WIDTH,
+            sidebar_drag: None,
             show_menu_button: true,
             sound_enabled: BTreeSet::new(),
             sound_pending: BTreeMap::new(),
@@ -428,10 +466,12 @@ impl Observer {
             files_auto_expanded: false,
             title_drag: false,
             composer,
+            composer_expanded: false,
             start_pending: false,
             notice: None,
             child_rows: BTreeMap::new(),
             ask_user_choice: BTreeMap::new(),
+            ask_user_text: BTreeMap::new(),
             child_pending: BTreeSet::new(),
             task,
         }
@@ -455,6 +495,8 @@ impl Observer {
         self.markdown.clear();
         self.expanded.clear();
         self.rows.clear();
+        self.ask_user_choice.clear();
+        self.ask_user_text.clear();
         self.follow = true;
         self.switched = Some(Instant::now());
         self.scroll = ScrollHandle::new();
@@ -476,6 +518,10 @@ impl Observer {
 
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_collapsed = !self.sidebar_collapsed;
+        // Vue drops the root filter when the panel collapses.
+        if self.sidebar_collapsed {
+            self.session_root_filter = None;
+        }
         cx.notify();
     }
 
@@ -491,6 +537,19 @@ impl Observer {
 
     fn select_sidebar_tab(&mut self, tab: ui::sidebar::SidebarTab, cx: &mut Context<Self>) {
         self.sidebar_tab = tab;
+        cx.notify();
+    }
+
+    fn set_session_root_filter(&mut self, root: Option<String>, cx: &mut Context<Self>) {
+        self.session_root_filter = root;
+        cx.notify();
+    }
+
+    fn begin_sidebar_drag(&mut self, start_x: Pixels, cx: &mut Context<Self>) {
+        self.sidebar_drag = Some(SidebarDrag {
+            start_x,
+            start_width: self.sidebar_width,
+        });
         cx.notify();
     }
 
@@ -659,6 +718,8 @@ impl Observer {
         self.markdown.clear();
         self.expanded.clear();
         self.child_rows.clear();
+        self.ask_user_choice.clear();
+        self.ask_user_text.clear();
         self.notice = None;
         self.follow = true;
         self.scroll_pending = true;
@@ -709,6 +770,44 @@ impl Observer {
         }
     }
 
+    fn toggle_composer_expanded(&mut self, cx: &mut Context<Self>) {
+        self.composer_expanded = !self.composer_expanded;
+        cx.notify();
+    }
+
+    /// Vue's "Continue" is offered for paused, failed, cancelled and errored
+    /// workflows; the runtime resumes from that signal.
+    fn can_continue(&self) -> bool {
+        self.selected.is_some()
+            && matches!(
+                self.model.state.as_str(),
+                "paused" | "error" | "failed" | "cancelled"
+            )
+    }
+
+    fn continue_workflow(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected.clone() {
+            let _ = self.worker.commands.try_send(Command::Signal {
+                id,
+                signal: serde_json::json!({"type": "continue"}),
+            });
+            self.follow = true;
+            self.model.resume_follow();
+            self.scroll_pending = true;
+            cx.notify();
+        }
+    }
+
+    fn manual_compress(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected.clone() {
+            let _ = self.worker.commands.try_send(Command::Signal {
+                id,
+                signal: serde_json::json!({"type": "manual_compress"}),
+            });
+            cx.notify();
+        }
+    }
+
     /// Answers the approval the runtime is waiting on (`id` is the tool call).
     fn submit_approval(
         &mut self,
@@ -743,6 +842,33 @@ impl Observer {
         cx.notify();
     }
 
+    /// Vue focuses the free-text field as soon as the "Other" row is picked.
+    fn ask_user_supplement(
+        &mut self,
+        key: String,
+        options: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ask_user_choice.insert(key.clone(), options);
+        let state = match self.ask_user_text.get(&key) {
+            Some(state) => state.clone(),
+            None => {
+                let state = cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .auto_grow(1, 6)
+                        .placeholder(t!("ask_user_other_placeholder").to_string())
+                });
+                self.ask_user_text.insert(key, state.clone());
+                state
+            }
+        };
+        state.update(cx, |state, cx| {
+            state.focus_handle(cx).focus(window, cx);
+        });
+        cx.notify();
+    }
+
     /// Submits the drafted answer as the hidden `user_message` the engine reads.
     fn submit_ask_user(&mut self, tool: ToolView, cx: &mut Context<Self>) {
         let Some(session) = self.selected.clone() else {
@@ -751,20 +877,44 @@ impl Observer {
         if !self.ask_user_active(&tool) {
             return;
         }
-        let choices: Vec<Option<usize>> = tool
+        let supplements: Vec<String> = tool
             .choices
             .iter()
             .enumerate()
             .map(|(index, _)| {
-                self.ask_user_choice
+                self.ask_user_text
                     .get(&format!("{}:{}", tool.tool_call_id, index))
-                    .copied()
+                    .map(|state| state.read(cx).value().to_string())
+                    .unwrap_or_default()
             })
             .collect();
-        let Some(content) = presentation::ask_user_response(&tool.choices, &choices) else {
-            self.notice = Some(t!("ask_user_required").to_string());
-            cx.notify();
-            return;
+        let drafts: Vec<presentation::AskUserDraft<'_>> = tool
+            .choices
+            .iter()
+            .enumerate()
+            .map(|(index, _)| presentation::AskUserDraft {
+                choice: self
+                    .ask_user_choice
+                    .get(&format!("{}:{}", tool.tool_call_id, index))
+                    .copied(),
+                supplement: supplements[index].as_str(),
+            })
+            .collect();
+        let content = match presentation::ask_user_response(&tool.choices, &drafts) {
+            Ok(content) => content,
+            Err(error) => {
+                self.notice = Some(
+                    match error {
+                        presentation::AskUserDraftError::OtherRequired => {
+                            t!("ask_user_other_required")
+                        }
+                        presentation::AskUserDraftError::Required => t!("ask_user_required"),
+                    }
+                    .to_string(),
+                );
+                cx.notify();
+                return;
+            }
         };
         let _ = self.worker.commands.try_send(Command::Signal {
             id: session,
@@ -1064,10 +1214,14 @@ impl Observer {
     }
 
     /// Vue resumes following once the reader is within 60px of the tail.
+    ///
+    /// `ScrollHandle` reports the distance scrolled as a negative offset, so
+    /// the remaining distance is `max + offset`; subtracting would count the
+    /// whole transcript and never report the tail.
     fn near_bottom(&self) -> bool {
         let max = self.scroll.max_offset();
         let offset = self.scroll.offset();
-        (max.y - offset.y) <= px(60.)
+        (max.y + offset.y) <= px(60.)
     }
 
     fn copy_flash_expired(&self) -> bool {
@@ -1200,6 +1354,11 @@ impl Observer {
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
         if !self.expanded.remove(&key) {
             self.expanded.insert(key);
+        }
+        // Expanding a card grows the transcript under the pointer, so Vue keeps
+        // the newly revealed body visible; following the tail is the same move.
+        if self.follow {
+            self.scroll_pending = true;
         }
         self.refresh_markdown(cx);
         cx.notify();
@@ -1963,6 +2122,7 @@ impl Observer {
     ) -> AnyElement {
         let mut options = v_flex().w_full().min_w_0().gap_1();
         let base = format!("{}:{}", tool.tool_call_id, index);
+        let other_index = group.options.len();
         for (option_index, option) in group.options.iter().enumerate() {
             let label = format!("{}. {option}", option_index + 1);
             if active {
@@ -1984,12 +2144,33 @@ impl Observer {
                 ));
             }
         }
-        if !active {
-            options = options.child(choice_option(
-                format!("{}. {}", group.options.len() + 1, t!("ask_user_other")),
-                group.other_selected,
+        let other_label = format!("{}. {}", other_index + 1, t!("ask_user_other"));
+        if active {
+            let key = base.clone();
+            options = options.child(choice_option_live(
+                other_label,
+                self.ask_user_choice.get(&base).copied() == Some(other_index),
+                SharedString::from(format!("{base}:other")),
+                cx.listener(move |this, _, window, cx| {
+                    this.ask_user_supplement(key.clone(), other_index, window, cx)
+                }),
                 cx,
             ));
+            // Vue shows the free-text field under the picked "Other" row; the
+            // field is created the first time that row is pressed.
+            if self.ask_user_choice.get(&base).copied() == Some(other_index) {
+                if let Some(state) = self.ask_user_text.get(&base) {
+                    options = options.child(
+                        div()
+                            .w_full()
+                            .pl(px(22.))
+                            .pt_1()
+                            .child(Textarea::new(state).appearance(false).h(px(34.))),
+                    );
+                }
+            }
+        } else {
+            options = options.child(choice_option(other_label, group.other_selected, cx));
         }
         v_flex()
             .w_full()
@@ -2207,16 +2388,27 @@ impl Observer {
                     .child(t!("cost_partial").to_string()),
             );
         }
+        // Vue paints the rail with `inset 3px 0 0` instead of a column in the
+        // layout: a column shortens the gradient and leaves a seam beside it.
         h_flex()
+            .relative()
             .w_full()
             .min_w_0()
-            .rounded(px(16.))
+            .rounded(px(12.))
             .border_1()
             .border_color(accent.opacity(0.24))
             .bg(cx.theme().muted)
             .overflow_hidden()
-            .child(div().w(px(3.)).bg(accent))
             .child(body)
+            .child(
+                div()
+                    .absolute()
+                    .left(px(0.))
+                    .top(px(0.))
+                    .bottom(px(0.))
+                    .w(px(3.))
+                    .bg(accent),
+            )
             .into_any_element()
     }
 
@@ -2596,6 +2788,37 @@ impl Render for Observer {
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
 
+        // The resize band owns the press; this frame follows the pointer while
+        // it stays held, so the drag survives leaving the band.
+        if let Some(drag) = self.sidebar_drag {
+            let max_width = (f32::from(window.bounds().size.width) * 0.5).max(SIDEBAR_MIN_WIDTH);
+            let entity = cx.entity().downgrade();
+            window.on_mouse_event(
+                move |event: &MouseMoveEvent, _phase, _window, cx: &mut App| {
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        return;
+                    }
+                    let _ = entity.update(cx, |this, cx| {
+                        let width = (drag.start_width
+                            + f32::from(event.position.x - drag.start_x))
+                        .clamp(SIDEBAR_MIN_WIDTH, max_width);
+                        if (this.sidebar_width - width).abs() > 0.5 {
+                            this.sidebar_width = width;
+                            cx.notify();
+                        }
+                    });
+                },
+            );
+            let entity = cx.entity().downgrade();
+            window.on_mouse_event(move |_: &MouseUpEvent, _phase, _window, cx: &mut App| {
+                let _ = entity.update(cx, |this, cx| {
+                    if this.sidebar_drag.take().is_some() {
+                        cx.notify();
+                    }
+                });
+            });
+        }
+
         let mut content = v_flex()
             .id("history")
             .flex_1()
@@ -2753,6 +2976,9 @@ impl Render for Observer {
                         .min_h_0()
                         .w_full()
                         .child(ui::sidebar::sidebar(self, window, cx))
+                        .when(!self.sidebar_collapsed, |row| {
+                            row.child(ui::sidebar::resize_band(cx))
+                        })
                         .child(
                             v_flex()
                                 .flex_1()
