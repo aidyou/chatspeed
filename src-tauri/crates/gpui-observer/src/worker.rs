@@ -285,47 +285,53 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 if options.demo {
                     continue;
                 }
-                let agents = native::control_get(&options, "/control/v1/agents")
-                    .await
-                    .ok()
-                    .and_then(|value| value.as_array().cloned())
-                    .unwrap_or_default();
-                let models = native::data_command(&options, "get_all_ai_models", json!({}))
-                    .await
-                    .ok()
-                    .and_then(|value| value.as_array().cloned())
-                    .unwrap_or_default();
-                let schemes = native::data_command(&options, "get_sandbox_schemes", json!({}))
-                    .await
-                    .ok()
-                    .and_then(|value| value.as_array().cloned())
-                    .unwrap_or_default();
-                let skills =
-                    native::workflow_command(&options, "get_system_skills", json!({}), None)
+                // Never let a slow catalogue endpoint delay Select/StartNew;
+                // the command loop must stay responsive.
+                let options = options.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let agents = native::control_get(&options, "/control/v1/agents")
                         .await
                         .ok()
                         .and_then(|value| value.as_array().cloned())
                         .unwrap_or_default();
-                let tools = native::data_command(&options, "get_available_tools", json!({}))
-                    .await
-                    .ok()
-                    .and_then(|value| value.as_array().cloned())
-                    .unwrap_or_default();
-                if !send(
-                    &tx,
-                    0,
-                    UpdateKind::Catalogue {
-                        agents,
-                        models,
-                        skills,
-                        schemes,
-                        tools,
-                    },
-                )
-                .await
-                {
-                    return;
+                    let models = native::data_command(&options, "get_all_ai_models", json!({}))
+                        .await
+                        .ok()
+                        .and_then(|value| value.as_array().cloned())
+                        .unwrap_or_default();
+                    let schemes = native::data_command(&options, "get_sandbox_schemes", json!({}))
+                        .await
+                        .ok()
+                        .and_then(|value| value.as_array().cloned())
+                        .unwrap_or_default();
+                    let skills =
+                        native::workflow_command(&options, "get_system_skills", json!({}), None)
+                            .await
+                            .ok()
+                            .and_then(|value| value.as_array().cloned())
+                            .unwrap_or_default();
+                    // The task ends here, so a closed channel needs no branch.
+                    let _ = send(
+                        &tx,
+                        0,
+                        UpdateKind::Catalogue {
+                            agents,
+                            models,
+                            skills,
+                            schemes,
+                        },
+                    )
+                    .await;
+                });
+            }
+            Command::Tools => {
+                if options.demo {
+                    continue;
                 }
+                let options = options.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move { fetch_tools(options, tx).await });
             }
             Command::SetAgent { session, agent } => {
                 if options.demo {
@@ -612,6 +618,23 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
     if let Some(task) = selection {
         task.abort();
     }
+}
+
+/// Fetches the tool catalogue without holding up workflow commands.
+///
+/// `get_available_tools` may wait on MCP discovery, so it gets its own bounded
+/// request and never runs on the command loop.
+async fn fetch_tools(options: Options, tx: mpsc::Sender<Update>) {
+    let tools = tokio::time::timeout(
+        Duration::from_secs(8),
+        native::data_command(&options, "get_available_tools", json!({})),
+    )
+    .await
+    .ok()
+    .and_then(|result| result.ok())
+    .and_then(|value| value.as_array().cloned())
+    .unwrap_or_default();
+    let _ = send(&tx, 0, UpdateKind::Tools(tools)).await;
 }
 
 /// A unique idempotency key for one user-initiated workflow command.

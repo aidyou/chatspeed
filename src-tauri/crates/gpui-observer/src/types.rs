@@ -198,6 +198,8 @@ pub enum Command {
     },
     /// Reloads the agents, models and skills the composer selectors list.
     Catalogue,
+    /// Fetches the native and MCP tool catalogue on demand.
+    Tools,
     /// Switches the selected workflow to another primary agent.
     SetAgent {
         session: String,
@@ -302,8 +304,9 @@ pub enum UpdateKind {
         models: Vec<Value>,
         skills: Vec<Value>,
         schemes: Vec<Value>,
-        tools: Vec<Value>,
     },
+    /// Native and MCP tools for the configuration panels.
+    Tools(Vec<Value>),
     /// Files matching the `@` query, keyed by the query they answered.
     Files {
         query: String,

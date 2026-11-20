@@ -1281,6 +1281,9 @@ impl Observer {
             QuickPanel::Skills => self.skills_draft = Some(SkillsDraft::from_config(&config)),
             QuickPanel::Mcp | QuickPanel::Tools => {
                 self.tool_draft = Some(ToolDraft::from_config(&config));
+                if self.tools.is_empty() {
+                    let _ = self.worker.commands.try_send(Command::Tools);
+                }
             }
             QuickPanel::Models => {
                 self.model_config_slot = if self.planning_mode { "plan" } else { "act" }.into();
@@ -1625,12 +1628,14 @@ impl Observer {
                     models,
                     skills,
                     schemes,
-                    tools,
                 } => {
                     self.agents = agents;
                     self.models = models;
                     self.skills = skills;
                     self.sandbox_schemes = schemes;
+                    cx.notify();
+                }
+                UpdateKind::Tools(tools) => {
                     self.tools = tools;
                     cx.notify();
                 }
