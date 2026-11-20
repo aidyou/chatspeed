@@ -180,11 +180,10 @@ pub async fn mcp_add_server(
 ) -> CapResult<Mcp> {
     let descriptor = install_descriptor(name, description, config)?;
     let installed = post_idempotent(supervisor, MCP_INSTALL_ROUTE, &descriptor, &new_key()).await?;
-    let id = mutated_id(&installed)?;
-    if !disabled {
-        // The record is intentionally kept when the start fails: the user can see
-        // it disabled and retry, which is safer than deleting a config they just
-        // typed. The service records the failed start as durable drift (AC-9).
+    let (id, enable) = mcp_install_follow_up(installed, name, disabled)?;
+    if enable {
+        // Keep registration and start as separate, auditable operations. If
+        // start fails, the record remains available for inspection or retry.
         post_idempotent(
             supervisor,
             MCP_ENABLE_ROUTE,
@@ -376,14 +375,36 @@ fn decode<T: DeserializeOwned>(value: Value) -> CapResult<T> {
     })
 }
 
-/// Reads the stored id a mutation result reported.
-fn mutated_id(result: &Value) -> CapResult<i64> {
-    result.get("id").and_then(Value::as_i64).ok_or_else(|| {
+/// Only a newly registered record can be enabled by the add form. A duplicate
+/// may refer to a different configuration and must not be started implicitly.
+fn mcp_install_follow_up(response: Value, name: &str, disabled: bool) -> CapResult<(i64, bool)> {
+    #[derive(serde::Deserialize)]
+    struct InstallResponse {
+        result: InstallResult,
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "status", rename_all = "snake_case")]
+    enum InstallResult {
+        Registered { id: i64 },
+        AlreadyRegistered,
+    }
+
+    let invalid_response = || {
         CapabilityError::new(
             code::INTERNAL,
-            "the runtime mutation result lost the record id",
+            rust_i18n::t!("mcp.error.invalid_install_response").to_string(),
         )
-    })
+    };
+    let response: InstallResponse = serde_json::from_value(response).map_err(|_| invalid_response())?;
+    match response.result {
+        InstallResult::Registered { id } if id > 0 => Ok((id, !disabled)),
+        InstallResult::Registered { .. } => Err(invalid_response()),
+        InstallResult::AlreadyRegistered => Err(CapabilityError::new(
+            code::REFUSED,
+            rust_i18n::t!("db.already_exists", error = name).to_string(),
+        )),
+    }
 }
 
 /// Per-command idempotency key.
@@ -506,6 +527,48 @@ mod tests {
         assert_eq!(descriptor["type"], "stdio");
         assert_eq!(descriptor["command"], "node");
         assert_eq!(descriptor["args"], json!(["server.js"]));
+    }
+
+    #[test]
+    fn mcp_add_reads_the_nested_id_and_respects_the_disabled_switch() {
+        for replayed in [false, true] {
+            let response = json!({
+                "operation_id": "op-1",
+                "replayed": replayed,
+                "result": { "status": "registered", "id": 42, "disabled": true }
+            });
+            assert_eq!(
+                mcp_install_follow_up(response.clone(), "browser", false).expect("enable plan"),
+                (42, true)
+            );
+            assert_eq!(
+                mcp_install_follow_up(response, "browser", true).expect("disabled plan"),
+                (42, false)
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_add_refuses_to_start_an_existing_record() {
+        let response = json!({
+            "operation_id": "op-2",
+            "replayed": false,
+            "result": { "status": "already_registered", "server": { "id": 42 } }
+        });
+        let error = mcp_install_follow_up(response, "browser", false).expect_err("duplicate");
+        assert_eq!(error.code(), code::REFUSED);
+    }
+
+    #[test]
+    fn mcp_add_fails_closed_when_the_registration_id_is_missing_or_invalid() {
+        for response in [
+            json!({ "id": 42, "result": { "status": "registered" } }),
+            json!({ "result": { "status": "registered", "id": -1 } }),
+            json!({ "result": { "status": "unknown", "id": 42 } }),
+        ] {
+            let error = mcp_install_follow_up(response, "browser", false).expect_err("bad result");
+            assert_eq!(error.code(), code::INTERNAL);
+        }
     }
 
     #[test]
