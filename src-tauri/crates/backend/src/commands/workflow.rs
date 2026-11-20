@@ -89,6 +89,11 @@ use rusqlite::params;
 const UI_WORKFLOW_MESSAGE_PAGE_SIZE: usize = 300;
 
 #[cfg(not(feature = "desktop"))]
+fn workflow_message_page_size(limit: Option<usize>) -> usize {
+    limit.unwrap_or(UI_WORKFLOW_MESSAGE_PAGE_SIZE).clamp(1, 500)
+}
+
+#[cfg(not(feature = "desktop"))]
 fn serialize_workflow_message_page_cursor(before_message_id: Option<i64>) -> Option<String> {
     before_message_id.map(|message_id| message_id.to_string())
 }
@@ -2894,6 +2899,7 @@ async fn finalize_manual_clear_context_state(
 pub(crate) async fn get_workflow_snapshot_core(
     svc: &WorkflowApplicationService,
     session_id: String,
+    limit: Option<usize>,
 ) -> Result<Value, ApplicationError> {
     let main_store = svc.main_store.clone();
     let recovery_store = main_store.clone();
@@ -2919,7 +2925,10 @@ pub(crate) async fn get_workflow_snapshot_core(
             .get_workflow_for_ui(&snapshot_session_id)
             .map_err(|e| e.to_string())?;
         let message_page = store
-            .get_recent_workflow_message_page(&snapshot_session_id, UI_WORKFLOW_MESSAGE_PAGE_SIZE)
+            .get_recent_workflow_message_page(
+                &snapshot_session_id,
+                workflow_message_page_size(limit),
+            )
             .map_err(|e| e.to_string())?;
         normalize_workflow_agent_config_in_memory(&store, &mut workflow)?;
         Ok((
@@ -5455,6 +5464,7 @@ struct ApprovePlanParams {
 struct MessagePageParams {
     session_id: String,
     before_message_id: String,
+    limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -5755,6 +5765,7 @@ pub(crate) async fn get_earlier_workflow_message_page_core(
     svc: &WorkflowApplicationService,
     session_id: String,
     before_message_id: String,
+    limit: Option<usize>,
 ) -> Result<Value, ApplicationError> {
     let before_message_id = parse_workflow_message_page_cursor(&before_message_id)?;
     let page = {
@@ -5763,7 +5774,7 @@ pub(crate) async fn get_earlier_workflow_message_page_core(
             .get_earlier_workflow_message_page(
                 &session_id,
                 before_message_id,
-                UI_WORKFLOW_MESSAGE_PAGE_SIZE,
+                workflow_message_page_size(limit),
             )
             .map_err(|e| e.to_string())?
     };
@@ -6783,7 +6794,8 @@ pub(crate) async fn workflow_command_core(
         }
         "get_earlier_workflow_message_page" => {
             let p: MessagePageParams = parse_command_params(params)?;
-            get_earlier_workflow_message_page_core(svc, p.session_id, p.before_message_id).await
+            get_earlier_workflow_message_page_core(svc, p.session_id, p.before_message_id, p.limit)
+                .await
         }
         "get_earlier_workflow_messages" => {
             let p: MessagePageParams = parse_command_params(params)?;

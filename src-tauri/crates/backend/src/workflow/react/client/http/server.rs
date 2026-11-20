@@ -1652,11 +1652,17 @@ async fn create_workflow(
     .await
 }
 
+#[derive(serde::Deserialize)]
+struct WorkflowSnapshotQuery {
+    limit: Option<usize>,
+}
+
 async fn get_workflow(
     State(state): State<ControlPlaneState>,
     Path(session_id): Path<String>,
+    Query(query): Query<WorkflowSnapshotQuery>,
 ) -> Response {
-    match state.svc.workflow_snapshot(&session_id).await {
+    match state.svc.workflow_snapshot(&session_id, query.limit).await {
         Ok(snapshot) => snake_json_response(Ok(snapshot)),
         Err(error) => dto::application_error_response(&error),
     }

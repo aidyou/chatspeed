@@ -25,6 +25,7 @@ pub(crate) fn row(window: &Observer, row: &Row, cx: &mut Context<Observer>) -> A
 
 pub(crate) fn activity_group(
     group: &ActivityView,
+    shimmer: bool,
     items: Option<Vec<AnyElement>>,
     on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
@@ -41,10 +42,16 @@ pub(crate) fn activity_group(
         .pl_2()
         .rounded(px(6.))
         .cursor_pointer()
-        .hover(|style| style.bg(cx.theme().muted))
+        .hover(|style| style.bg(cx.theme().muted));
+    let primary = cx.theme().primary;
+    let mut title = h_flex()
+        .relative()
+        .overflow_hidden()
+        .min_w_0()
+        .gap_2()
         .child(Icon::new(group.icon).size(15.).color(muted));
     if group.thought_count > 0 {
-        header = header.child(pill(
+        title = title.child(pill(
             format!("{} x{}", t!("thought"), group.thought_count),
             accent(),
             Some(accent().opacity(0.12)),
@@ -52,7 +59,7 @@ pub(crate) fn activity_group(
     }
     if group.error_count > 0 {
         // Vue tints group errors into the background instead of shouting in red.
-        header = header.child(
+        title = title.child(
             div()
                 .flex_none()
                 .px_2()
@@ -65,23 +72,52 @@ pub(crate) fn activity_group(
                 .child(format!("{} x{}", t!("error"), group.error_count)),
         );
     }
+    title = title.child(
+        div()
+            .flex_shrink_1()
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
+            .text_size(px(12.))
+            .line_height(px(18.))
+            .text_color(if group.ongoing {
+                cx.theme().foreground
+            } else {
+                muted
+            })
+            .child(crate::ui::chrome_label(group.summary.clone())),
+    );
+    if shimmer {
+        let clear = primary.opacity(0.);
+        let peak = primary.opacity(0.27);
+        title = title.child(
+            h_flex()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .w(relative(0.45))
+                .child(div().w(relative(0.5)).h_full().bg(linear_gradient(
+                    90.,
+                    linear_color_stop(clear, 0.),
+                    linear_color_stop(peak, 1.),
+                )))
+                .child(div().w(relative(0.5)).h_full().bg(linear_gradient(
+                    90.,
+                    linear_color_stop(peak, 0.),
+                    linear_color_stop(clear, 1.),
+                )))
+                .with_animation(
+                    "activity-sweep",
+                    Animation::new(std::time::Duration::from_secs(3))
+                        .repeat()
+                        .with_easing(ease_in_out),
+                    |band, phase| band.left(relative(phase * 1.45 - 0.45)),
+                ),
+        );
+    }
     header = header
-        .child(
-            div()
-                .flex_shrink_1()
-                .min_w_0()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .text_size(px(13.))
-                .line_height(px(26.))
-                .text_color(if group.ongoing {
-                    cx.theme().foreground
-                } else {
-                    muted
-                })
-                .child(group.summary.clone()),
-        )
+        .child(title)
         .child(
             div()
                 .id("activity-caret")
@@ -90,9 +126,13 @@ pub(crate) fn activity_group(
                 .invisible()
                 .group_hover("activity-header", |style| style.visible())
                 .child(
-                    Icon::new(if items.is_some() { "caret-down" } else { "caret-right" })
-                        .size(14.)
-                        .color(muted),
+                    Icon::new(if items.is_some() {
+                        "caret-down"
+                    } else {
+                        "caret-right"
+                    })
+                    .size(14.)
+                    .color(muted),
                 ),
         )
         .on_click(on_toggle);

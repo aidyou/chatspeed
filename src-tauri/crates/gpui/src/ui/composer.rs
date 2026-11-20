@@ -14,17 +14,17 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::ui::{status, Icon};
-use crate::{danger, Observer};
+use crate::Observer;
 
 mod footer;
-mod message_queue;
+pub(crate) mod message_queue;
 pub mod panels;
 pub mod suggestions;
 
 /// Vue's expanded box tops out at 540px; this window keeps its actions visible.
 const EXPANDED_HEIGHT: f32 = 420.;
 
-/// Renders the notice line, the state line, the prompt box and its footer.
+/// Renders the state line, the prompt box and its footer.
 pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let mut column = v_flex()
         .flex_none()
@@ -35,9 +35,6 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .pt_2()
         .gap_2();
 
-    if let Some(notice) = &observer.notice {
-        column = column.child(notice_line(notice, cx));
-    }
     // A local answer takes effect before the runtime reports its next phase.
     let answered = observer
         .model
@@ -50,9 +47,6 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         answered,
         cx,
     ));
-    if !observer.model.queued_messages.is_empty() {
-        column = column.child(message_queue::render(&observer.model.queued_messages, cx));
-    }
     let draft = observer.composer.read(cx).value().to_string();
     let panel =
         suggestions::trigger(&draft).and_then(|trigger| suggestions::panel(observer, &trigger, cx));
@@ -76,24 +70,6 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     }
     column = column.child(frame);
     column.into_any_element()
-}
-
-/// The last action failure, shown above the box until the next send.
-fn notice_line(notice: &str, _cx: &mut Context<Observer>) -> AnyElement {
-    h_flex()
-        .w_full()
-        .max_w(px(780.))
-        .items_center()
-        .gap_2()
-        .px_3()
-        .py_2()
-        .rounded(px(8.))
-        .bg(danger().opacity(0.12))
-        .text_size(px(11.))
-        .text_color(danger())
-        .child(Icon::new("approval").size(12.).color(danger()))
-        .child(div().flex_1().min_w_0().child(notice.to_owned()))
-        .into_any_element()
 }
 
 /// Attached images above the textarea, matching Vue's preview strip.

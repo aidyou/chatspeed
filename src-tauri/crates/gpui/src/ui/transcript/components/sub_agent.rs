@@ -35,6 +35,7 @@ pub(crate) fn sub_agent_card(
     let muted = cx.theme().muted_foreground;
     let header = h_flex()
         .id(SharedString::from(card.key.clone()))
+        .group("sub-agent-header")
         .w_full()
         .min_w_0()
         .items_center()
@@ -44,25 +45,37 @@ pub(crate) fn sub_agent_card(
         .cursor_pointer()
         .hover(|style| style.bg(cx.theme().muted))
         .child(Icon::new("skill-relation-chart").size(15.).color(muted))
-        .child(pill(
-            card.status_label.clone(),
-            status_color,
-            Some(status_color.opacity(0.12)),
-        ))
+        .child(
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap_1()
+                .when(card.status.is_running(), |row| {
+                    row.child(
+                        Icon::new("loading")
+                            .size(12.)
+                            .color(status_color)
+                            .spin("sub-agent-running"),
+                    )
+                })
+                .child(pill(
+                    card.status_label.clone(),
+                    status_color,
+                    Some(status_color.opacity(0.12)),
+                )),
+        )
         .child(
             div()
-                .flex_1()
+                .flex_shrink_1()
                 .min_w_0()
                 .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
                 .text_size(px(13.))
                 .text_color(cx.theme().foreground)
                 .child(card.agent.clone()),
         )
-        .child(
-            Icon::new(if open { "caret-down" } else { "caret-right" })
-                .size(14.)
-                .color(muted),
-        )
+        .child(crate::ui::disclosure_caret("sub-agent-header", open, muted))
         .on_click(on_toggle);
     let mut body = v_flex().w_full().min_w_0().child(header);
     if let Some(SubAgentDetails {

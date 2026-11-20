@@ -4,9 +4,44 @@
 //! with a single private-use character. This module is the native equivalent so
 //! call sites pick a size and color instead of rebuilding the same div.
 
+use std::{borrow::Cow, time::Duration};
+
 use gpui_kit::*;
 
 use crate::icons;
+
+gpui_kit::assets::icon_assets!(ExtraIcons, [Brain]);
+
+pub(crate) struct IconAssets;
+
+impl AssetSource for IconAssets {
+    fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        match ExtraIcons.load(path)? {
+            Some(icon) => Ok(Some(icon)),
+            None => gpui_kit::assets::Assets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut paths = gpui_kit::assets::Assets.list(path)?;
+        paths.extend(ExtraIcons.list(path)?);
+        Ok(paths)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IconAssets;
+    use gpui_kit::AssetSource;
+
+    #[test]
+    fn animated_icons_are_available_with_the_default_assets() {
+        for path in ["icons/brain.svg", "icons/loader-circle.svg"] {
+            let svg = IconAssets.load(path).unwrap().unwrap();
+            assert!(svg.starts_with(b"<svg"), "{path}");
+        }
+    }
+}
 
 /// A single icon-font glyph.
 ///
@@ -32,6 +67,7 @@ pub struct Icon {
     name: &'static str,
     size: Option<f32>,
     color: Option<Hsla>,
+    spin: Option<ElementId>,
 }
 
 impl Icon {
@@ -40,6 +76,7 @@ impl Icon {
             name,
             size: None,
             color: None,
+            spin: None,
         }
     }
 
@@ -55,6 +92,12 @@ impl Icon {
         self.color = Some(color.into());
         self
     }
+
+    /// Animate an active indicator using its caller's stable element ID.
+    pub fn spin(mut self, id: impl Into<ElementId>) -> Self {
+        self.spin = Some(id.into());
+        self
+    }
 }
 
 impl RenderOnce for Icon {
@@ -64,6 +107,27 @@ impl RenderOnce for Icon {
             .size
             .unwrap_or_else(|| f32::from(inherited.font_size.to_pixels(window.rem_size())));
         let color = self.color.unwrap_or(inherited.color);
+        // GPUI transforms SVGs, but not text glyphs. Static icons still use the font.
+        let animated_path = match self.name {
+            "reasoning" => Some("icons/brain.svg"),
+            "loading" => Some("icons/loader-circle.svg"),
+            _ => None,
+        };
+        if let (Some(id), Some(path)) = (self.spin, animated_path) {
+            return svg()
+                .path(path)
+                .size(px(size))
+                .flex_none()
+                .text_color(color)
+                .with_animation(
+                    id,
+                    Animation::new(Duration::from_secs(2)).repeat(),
+                    |icon, phase| {
+                        icon.with_transformation(Transformation::rotate(percentage(phase)))
+                    },
+                )
+                .into_any_element();
+        }
 
         div()
             .flex_none()
@@ -80,5 +144,6 @@ impl RenderOnce for Icon {
             .line_height(px(size))
             .text_color(color)
             .child(icons::glyph(self.name))
+            .into_any_element()
     }
 }

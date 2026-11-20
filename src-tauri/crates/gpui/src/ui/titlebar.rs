@@ -11,7 +11,7 @@
 //! rectangle the full height of the bar, which paints over the frame's rounded
 //! top-right corner.
 
-use chatspeed_gpui::chimes::Chime;
+use chatspeed_gpui::chimes::{Chime, DecisionKind, PendingDecision};
 use chatspeed_runtime_client::desktop_menu::Action;
 use gpui_kit::base::InteractiveElementExt;
 use gpui_kit::component::popover::Popover;
@@ -300,7 +300,7 @@ fn menu(observer: &Observer, secondary: Hsla, cx: &mut Context<Observer>) -> Any
 
 /// The approval queue: only rendered while the runtime waits on a decision.
 fn approval_queue(
-    pending: Vec<(String, String)>,
+    pending: Vec<(PendingDecision, String)>,
     secondary: Hsla,
     accent: Hsla,
     hover: Hsla,
@@ -351,10 +351,25 @@ fn approval_queue(
         .anchor(Anchor::TopLeft)
         .offset(px(6.))
         .trigger(trigger(button))
-        .content(move |_, _, _| {
-            let mut list = v_flex().w(px(240.)).gap(px(2.));
-            for (index, (id, name)) in pending.iter().enumerate() {
+        .content(move |_, window, cx| {
+            let popover = cx.entity();
+            let mut list = v_flex()
+                .id("decision-list")
+                .w(px(240.))
+                .gap(px(2.))
+                .max_h((window.viewport_size().height - px(TITLEBAR_HEIGHT + 48.)).max(px(0.)))
+                .overflow_y_scroll();
+            for (index, (entry, title)) in pending.iter().enumerate() {
                 let weak = weak.clone();
+                let popover = popover.clone();
+                let target = entry.target.clone();
+                let (icon, label) = match &entry.kind {
+                    DecisionKind::Question => ("ask_user", t!("status_awaiting_user").to_string()),
+                    DecisionKind::Approval(name) if !name.is_empty() => ("approval", name.clone()),
+                    DecisionKind::Approval(_) => {
+                        ("approval", t!("status_awaiting_approval").to_string())
+                    }
+                };
                 list = list.child(
                     v_flex()
                         .id(("approval", index))
@@ -369,25 +384,24 @@ fn approval_queue(
                             h_flex()
                                 .items_center()
                                 .gap_2()
-                                .child(Icon::new("approval").size(14.).color(accent))
+                                .child(Icon::new(icon).size(14.).color(accent))
                                 .child(
                                     div()
                                         .text_size(px(13.))
                                         .text_color(foreground)
-                                        .child(name.clone()),
+                                        .child(super::chrome_label(label)),
                                 ),
                         )
                         .child(
                             div()
                                 .text_size(px(11.))
                                 .text_color(secondary)
-                                .child(id.clone()),
+                                .child(title.clone()),
                         )
-                        .on_click(move |_, _, cx| {
-                            // The decision card sits inline at the tail of the
-                            // transcript: bring the reader back to it.
+                        .on_click(move |_, window, cx| {
+                            let _ = popover.update(cx, |state, cx| state.dismiss(window, cx));
                             let _ = weak.update(cx, |this, cx| {
-                                this.reveal_latest(cx);
+                                this.open_pending_decision(target.clone(), cx);
                             });
                         }),
                 );
@@ -503,7 +517,7 @@ fn menu_row(
         .text_color(text)
         .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(14.).color(text))
-        .child(div().text_size(px(13.)).child(label))
+        .child(div().text_size(px(13.)).child(super::chrome_label(label)))
         .on_click(run)
         .into_any_element()
 }
@@ -534,7 +548,12 @@ fn switch_row(
                 .size(14.)
                 .color(if enabled { accent } else { secondary }),
         )
-        .child(div().text_size(px(13.)).text_color(foreground).child(label))
+        .child(
+            div()
+                .text_size(px(13.))
+                .text_color(foreground)
+                .child(super::chrome_label(label)),
+        )
         .on_click(move |_, window, cx| run(window, cx))
         .into_any_element()
 }

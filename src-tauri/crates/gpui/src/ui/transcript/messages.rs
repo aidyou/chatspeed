@@ -8,8 +8,10 @@ use crate::{plain_text, ui::Icon};
 use chatspeed_gpui::presentation::{user_message_lines, UserView};
 
 const USER_MESSAGE_LINES: usize = 4;
-// Four 1.6-line-height rows at 14px, plus room for the corner toggle.
-const USER_MESSAGE_COLLAPSED_HEIGHT: f32 = 114.;
+const USER_MESSAGE_FONT_SIZE: f32 = 14.;
+const USER_MESSAGE_LINE_HEIGHT: f32 = 22.;
+const USER_MESSAGE_COLLAPSED_TEXT_HEIGHT: f32 =
+    USER_MESSAGE_LINES as f32 * USER_MESSAGE_LINE_HEIGHT;
 
 pub(crate) fn user_bubble(
     view: &UserView,
@@ -19,6 +21,19 @@ pub(crate) fn user_bubble(
     cx: &App,
 ) -> AnyElement {
     let expandable = user_message_lines(&view.text) > USER_MESSAGE_LINES;
+    let collapsed = expandable && !expanded;
+    let surface = cx.theme().muted;
+    let text = div()
+        .w_full()
+        .min_w_0()
+        .text_size(px(USER_MESSAGE_FONT_SIZE))
+        .line_height(px(USER_MESSAGE_LINE_HEIGHT))
+        .text_color(cx.theme().foreground)
+        .when(collapsed, |text| {
+            text.max_h(px(USER_MESSAGE_COLLAPSED_TEXT_HEIGHT))
+                .overflow_hidden()
+        })
+        .child(view.text.clone());
     let toggle = h_flex()
         .id(SharedString::from(toggle_key))
         .absolute()
@@ -53,20 +68,27 @@ pub(crate) fn user_bubble(
                 .rounded(px(16.))
                 .border_1()
                 .border_color(cx.theme().border)
-                .bg(cx.theme().muted)
+                .bg(surface)
                 .px_4()
                 .py_3()
-                .text_size(px(14.))
-                .when(expandable && !expanded, |bubble| {
-                    // Reserve the corner so the toggle never covers the text.
-                    bubble
-                        .max_h(px(USER_MESSAGE_COLLAPSED_HEIGHT))
-                        .overflow_hidden()
-                        .pr(px(28.))
-                        .pb(px(28.))
-                })
-                .when(expandable, |bubble| bubble.child(toggle))
-                .child(plain_text(&view.text, cx.theme().foreground)),
+                // Keep the toggle entirely in the reserved space below the text.
+                .when(expandable, |bubble| bubble.pb(px(28.)))
+                .child(div().relative().child(text).when(collapsed, |body| {
+                    body.child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(12.))
+                            .bg(linear_gradient(
+                                180.,
+                                linear_color_stop(surface.opacity(0.), 0.),
+                                linear_color_stop(surface, 1.),
+                            )),
+                    )
+                }))
+                .when(expandable, |bubble| bubble.child(toggle)),
         )
         .into_any_element()
 }
@@ -87,6 +109,7 @@ pub(crate) fn thought(
         .child(
             h_flex()
                 .id(SharedString::from(key))
+                .group("thought-header")
                 .w_full()
                 .min_w_0()
                 .items_center()
@@ -102,16 +125,12 @@ pub(crate) fn thought(
                         .whitespace_nowrap()
                         .text_ellipsis()
                         .text_size(px(13.))
-                        .line_height(px(24.))
+                        .line_height(px(18.))
                         .text_color(muted)
                         .italic()
-                        .child(title),
+                        .child(crate::ui::chrome_label(title)),
                 )
-                .child(
-                    Icon::new(if open { "caret-down" } else { "caret-right" })
-                        .size(12.)
-                        .color(muted),
-                )
+                .child(crate::ui::disclosure_caret("thought-header", open, muted))
                 .on_click(on_toggle),
         )
         .when(open, |view| {

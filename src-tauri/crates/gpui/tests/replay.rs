@@ -28,7 +28,7 @@ fn replay_is_ordered_and_window_drop_joins_worker() {
             match update.kind {
                 UpdateKind::Snapshot(page) => {
                     assert_eq!(update.generation, 9);
-                    assert_eq!(page.messages.len(), 300);
+                    assert_eq!(page.messages.len(), 500);
                     snapshot = true;
                 }
                 UpdateKind::Event(_) => {
@@ -113,8 +113,8 @@ fn demo_switching_and_older_pages_stay_local() {
             if let Ok(update) = worker.updates.try_recv() {
                 if update.generation == generation {
                     if let UpdateKind::Older(page) = update.kind {
-                        assert_eq!(page.messages[0].id, 301);
-                        assert_eq!(page.messages.last().unwrap().id, 600);
+                        assert_eq!(page.messages[0].id, 1);
+                        assert_eq!(page.messages.last().unwrap().id, 400);
                         older = true;
                         break;
                     }
@@ -182,7 +182,7 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
             let frame = |seq, payload| {
                 format!(
                     "data: {}\n\n",
-                    json!({"schema_version":1,"server_instance_id":"mock","sequence":seq,"session_id":"session","payload":payload})
+                    json!({"schema_version":1,"server_instance_id":"mock","sequence":seq,"session_id":"subagent_transcript","payload":payload})
                 )
             };
             let (content_type, body) = if path == "/control/v1/meta" {
@@ -192,7 +192,21 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                 held_streams.push(socket);
                 continue;
             } else if path == "/control/v1/workflows" {
-                ("application/json", json!([{"id":"session","title":"Session","status":"executing"}]).to_string())
+                (
+                    "application/json",
+                    json!([{"id":"background","title":"Background","status":"awaiting_user"}])
+                        .to_string(),
+                )
+            } else if path == "/control/v1/workflows/background/stream" {
+                let body = "data: {\"schema_version\":1,\"server_instance_id\":\"mock\",\"sequence\":1,\"session_id\":\"background\",\"payload\":{\"type\":\"sub_agent_progress\",\"sub_agent_id\":\"subagent_question\",\"wait_reason\":\"user_input\"}}\n\n";
+                let _ = socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n", body.len()).as_bytes());
+                held_streams.push(socket);
+                continue;
+            } else if path == "/control/v1/workflows/background" {
+                (
+                    "application/json",
+                    json!({"workflow":{"status":"awaiting_user"}}).to_string(),
+                )
             } else if path.ends_with("/stream") {
                 streams += 1;
                 let body = match streams {
@@ -219,7 +233,7 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                     }
                 };
                 ("text/event-stream", body)
-            } else if path == "/control/v1/workflows/session" {
+            } else if path == "/control/v1/workflows/subagent_transcript?limit=500" {
                 snapshots += 1;
                 ("application/json", if snapshots == 1 { json!({"messages":[],"status":"executing"}) } else { json!({"messages":[{"id":7,"role":"assistant","message":"durable final"}],"workflow":{"status":"completed"}}) }.to_string())
             } else {
@@ -240,13 +254,24 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
         demo: false,
     })
     .unwrap();
+    let mut background_question = false;
+    let mut child_question = false;
     let list_deadline = Instant::now() + Duration::from_secs(4);
     let mut listed = false;
     while Instant::now() < list_deadline {
         if let Ok(update) = worker.updates.try_recv() {
-            if let UpdateKind::Sessions(sessions) = update.kind {
-                listed = sessions.iter().any(|session| session.id == "session");
-                break;
+            match update.kind {
+                UpdateKind::Sessions(sessions) => {
+                    listed = sessions.iter().any(|session| session.id == "background");
+                    break;
+                }
+                UpdateKind::Decisions { owner, pending, .. } if owner == "background" => {
+                    background_question |= pending.iter().any(|entry| entry.target == "background");
+                    child_question |= pending
+                        .iter()
+                        .any(|entry| entry.target == "subagent_question");
+                }
+                _ => {}
             }
         } else {
             std::thread::sleep(Duration::from_millis(5));
@@ -258,7 +283,7 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
         .commands
         .try_send(Command::Select {
             generation,
-            id: "session".into(),
+            id: "subagent_transcript".into(),
         })
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(18);
@@ -269,6 +294,15 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
     while Instant::now() < deadline {
         if let Ok(update) = worker.updates.try_recv() {
             if update.generation != generation {
+                if let UpdateKind::Decisions { owner, pending, .. } = update.kind {
+                    if owner == "background" {
+                        background_question |=
+                            pending.iter().any(|entry| entry.target == "background");
+                        child_question |= pending
+                            .iter()
+                            .any(|entry| entry.target == "subagent_question");
+                    }
+                }
                 continue;
             }
             match update.kind {
@@ -307,7 +341,11 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
     done.store(true, Ordering::Relaxed);
     server.join().unwrap();
     std::fs::remove_file(discovery).unwrap();
-    assert!(listed, "sidebar list must arrive while settings are stalled");
+    assert!(
+        listed,
+        "sidebar list must arrive while settings are stalled"
+    );
+    assert!(background_question && child_question, "existing background questions and live child questions must both appear outside the selected transcript");
     assert!(partial, "resume must not duplicate partial delta");
     assert!(reset, "client reset must clear transient state");
     assert!(

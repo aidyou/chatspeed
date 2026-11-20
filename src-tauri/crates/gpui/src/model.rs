@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-pub const PAGE_LIMIT: usize = 300;
+pub const PAGE_LIMIT: usize = 500;
 pub const LIVE_BYTES_LIMIT: usize = 1024 * 1024;
 
 /// One selected session; history grows only through explicit pagination and live events.
@@ -49,6 +49,10 @@ pub struct QueuedMessage {
     #[serde(rename = "queued_user_message_id")]
     pub id: String,
     pub content: String,
+    #[serde(default)]
+    pub metadata: Value,
+    #[serde(skip)]
+    pub provisional: bool,
 }
 
 impl Model {
@@ -152,6 +156,14 @@ impl Model {
         }
     }
 
+    /// A transport failure can race with a runtime acknowledgement.
+    pub fn reject_queue_submission(&mut self, id: &str) -> bool {
+        let before = self.queued_messages.len();
+        self.queued_messages
+            .retain(|item| item.id != id || !item.provisional);
+        self.queued_messages.len() != before
+    }
+
     fn finish_queued_message(&mut self, id: &str) {
         self.finished_queue_ids.insert(id.to_owned());
         self.queued_messages.retain(|item| item.id != id);
@@ -159,30 +171,56 @@ impl Model {
 
     fn reconcile_queue(&mut self, context: &Value, messages: &[Message]) {
         for id in context["removed_queued_user_message_ids"]
-            .as_array().into_iter().flatten().filter_map(Value::as_str)
-            .chain(messages.iter().filter(|row| row.role == "user").filter_map(|row| {
-                row.metadata["queued_user_message_id"].as_str()
-            }))
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .chain(
+                messages
+                    .iter()
+                    .filter(|row| row.role == "user")
+                    .filter_map(|row| {
+                        row.metadata["queued_user_message_id"]
+                            .as_str()
+                            .or_else(|| row.metadata["client_message_id"].as_str())
+                    }),
+            )
         {
             self.finish_queued_message(id);
         }
         let items = if context.is_null() {
             Vec::new()
         } else if let Some(items) = context["queued_user_messages"].as_array() {
-            items.iter().filter_map(|item| serde_json::from_value::<QueuedMessage>(item.clone()).ok()).collect()
+            items
+                .iter()
+                .filter_map(|item| serde_json::from_value::<QueuedMessage>(item.clone()).ok())
+                .collect()
         } else {
             Vec::new()
         };
         let mut ids = BTreeSet::new();
-        let mut queue: Vec<_> = items.into_iter().filter(|item| {
-            !item.id.is_empty() && !self.finished_queue_ids.contains(&item.id) && ids.insert(item.id.clone())
-        }).collect();
+        let mut queue: Vec<_> = items
+            .into_iter()
+            .filter(|item| {
+                !item.id.is_empty()
+                    && !self.finished_queue_ids.contains(&item.id)
+                    && ids.insert(item.id.clone())
+            })
+            .collect();
         // An accepted input can be visible on SSE before it reaches the persisted queue.
-        queue.extend(std::mem::take(&mut self.queued_messages).into_iter().filter(|item| {
-            !ids.contains(&item.id) && !self.snapshot_queue_ids.contains(&item.id)
-                && !self.finished_queue_ids.contains(&item.id)
-                && !matches!(self.state.as_str(), "completed" | "failed" | "cancelled" | "error" | "stopped")
-        }));
+        queue.extend(
+            std::mem::take(&mut self.queued_messages)
+                .into_iter()
+                .filter(|item| {
+                    !ids.contains(&item.id)
+                        && !self.snapshot_queue_ids.contains(&item.id)
+                        && !self.finished_queue_ids.contains(&item.id)
+                        && !matches!(
+                            self.state.as_str(),
+                            "completed" | "failed" | "cancelled" | "error" | "stopped"
+                        )
+                }),
+        );
         self.snapshot_queue_ids = ids;
         self.queued_messages = queue;
     }
@@ -249,13 +287,28 @@ impl Model {
             }
             "message" => {
                 if event["role"] == "user" {
-                    if let Some(id) = event["metadata"]["queued_user_message_id"].as_str().filter(|id| !id.is_empty()) {
+                    if let Some(id) = event["metadata"]["queued_user_message_id"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                    {
                         if event["metadata"]["queue_status"] == "queued" {
-                            if !self.finished_queue_ids.contains(id) && !self.queued_messages.iter().any(|item| item.id == id) {
-                                self.queued_messages.push(QueuedMessage {
+                            if !self.finished_queue_ids.contains(id) {
+                                let confirmed = QueuedMessage {
                                     id: id.to_owned(),
-                                    content: event["content"].as_str().unwrap_or_default().to_owned(),
-                                });
+                                    content: event["content"]
+                                        .as_str()
+                                        .unwrap_or_default()
+                                        .to_owned(),
+                                    metadata: event["metadata"].clone(),
+                                    provisional: false,
+                                };
+                                if let Some(item) =
+                                    self.queued_messages.iter_mut().find(|item| item.id == id)
+                                {
+                                    *item = confirmed;
+                                } else {
+                                    self.queued_messages.push(confirmed);
+                                }
                             }
                             return;
                         }
@@ -268,6 +321,11 @@ impl Model {
                     .as_str()
                     .and_then(|s| s.parse::<i64>().ok())
                 {
+                    if event["role"] == "user" {
+                        if let Some(client_id) = event["metadata"]["client_message_id"].as_str() {
+                            self.finish_queued_message(client_id);
+                        }
+                    }
                     let row = Message {
                         id,
                         role: event["role"].as_str().unwrap_or_default().to_owned(),
@@ -327,9 +385,11 @@ impl Model {
             }
             "state" => {
                 self.state = event["state"].as_str().unwrap_or_default().to_owned();
-                if let Some(reason) = event["wait_reason"].as_str() {
-                    self.wait_reason = reason.to_owned();
-                }
+                self.wait_reason = event["wait_reason"].as_str().unwrap_or_default().to_owned();
+                self.awaiting_user_tool_call_id = event["awaiting_user_tool_call_id"]
+                    .as_str()
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned);
             }
             "compression_status" => {
                 self.compressing = event["is_compressing"].as_bool().unwrap_or(false);
@@ -346,7 +406,7 @@ impl Model {
     pub fn demo_history(session: &str, before: i64) -> Page {
         let mut page = Self::demo_page();
         let end = (before - 1).max(0);
-        let start = (end - 299).max(1);
+        let start = (end - PAGE_LIMIT as i64 + 1).max(1);
         page.messages.retain(|row| row.id <= end - start + 1);
         for row in &mut page.messages {
             row.id += start - 1;
@@ -361,7 +421,7 @@ impl Model {
 
     pub fn demo_page() -> Page {
         Page {
-            messages: (1..=300).map(|id| Message {
+            messages: (1..=PAGE_LIMIT as i64).map(|id| Message {
                 id,
                 role: "assistant".into(),
                 message: format!("## Replay {id}\n\nA deterministic **Markdown** row.\n\n```rust\nlet answer = 42;\n```\n\n- first\n- second"),
@@ -391,7 +451,14 @@ mod tests {
         model.event(queued.clone());
         model.event(queued);
         model.page(snapshot(), false);
-        assert_eq!(model.queued_messages.iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(
+            model
+                .queued_messages
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
         assert!(model.messages.is_empty());
         model.event(json!({"type":"queued_user_message_removed","queued_user_message_id":"a"}));
         model.page(snapshot(), false);
@@ -433,23 +500,23 @@ mod tests {
         model.page(Model::demo_page(), false);
         assert!(!model.pause_for_scroll(0.0));
         assert!(!model.pause_for_scroll(-12.0));
-        for id in 301..=303 {
+        for id in 501..=503 {
             model.event(json!({"type":"message","message_id":id.to_string(),"role":"assistant","content":"latest"}));
             assert!(model.messages.contains_key(&id));
             assert!(!model.reading_history);
         }
         assert!(model.pause_for_scroll(12.0));
         model.event(
-            json!({"type":"message","message_id":"304","role":"assistant","content":"background"}),
+            json!({"type":"message","message_id":"504","role":"assistant","content":"background"}),
         );
         let anchor = model.visible().next().map(|m| m.id);
-        assert!(model.messages.contains_key(&304));
+        assert!(model.messages.contains_key(&504));
         model.resume_follow();
         assert!(!model.reading_history);
-        assert_eq!(model.visible().last().map(|m| m.id), Some(304));
+        assert_eq!(model.visible().last().map(|m| m.id), Some(504));
         assert_eq!(model.visible().next().map(|m| m.id), anchor);
-        model.event(json!({"type":"message","message_id":"305","role":"assistant","content":"following again"}));
-        assert!(model.messages.contains_key(&305));
+        model.event(json!({"type":"message","message_id":"505","role":"assistant","content":"following again"}));
+        assert!(model.messages.contains_key(&505));
     }
 
     #[test]
@@ -476,16 +543,44 @@ mod tests {
         m.page(Model::demo_page(), false);
         assert_eq!(m.live.message, "partial");
         let mut page = Model::demo_page();
+        let final_id = PAGE_LIMIT as i64 + 1;
         page.messages.push(Message {
-            id: 301,
+            id: final_id,
             role: "assistant".into(),
             message: "final".into(),
             ..Message::default()
         });
         m.page(page, false);
         assert!(m.live.message.is_empty());
-        assert_eq!(m.messages[&301].message, "final");
+        assert_eq!(m.messages[&final_id].message, "final");
         assert_eq!(m.messages.len(), PAGE_LIMIT + 1);
+    }
+
+    #[test]
+    fn provisional_queue_recovers_from_failure_and_accepts_authoritative_result() {
+        let mut model = Model::default();
+        let provisional = || QueuedMessage {
+            id: "local".into(),
+            content: "next".into(),
+            metadata: Value::Null,
+            provisional: true,
+        };
+        model.queued_messages.push(provisional());
+        model.page(Page::default(), false);
+        assert!(model.queued_messages[0].provisional);
+        assert!(model.reject_queue_submission("local"));
+        assert!(model.queued_messages.is_empty());
+        model.queued_messages.push(provisional());
+        model.event(json!({"type":"message","role":"user","content":"next","metadata":{"queue_status":"queued","queued_user_message_id":"local"}}));
+        assert_eq!(model.queued_messages.len(), 1);
+        assert!(!model.queued_messages[0].provisional);
+        assert!(!model.reject_queue_submission("local"));
+        model.event(json!({"type":"message","role":"user","message_id":"42","content":"next","metadata":{"client_message_id":"local"}}));
+        assert!(model.queued_messages.is_empty());
+        assert!(model.messages.contains_key(&42));
+        let previous = model.generation;
+        model.select();
+        assert!(!model.accepts(previous));
     }
 
     #[test]
@@ -513,7 +608,7 @@ mod tests {
         assert_eq!(m.visible().next().map(|m| m.id), Some(1));
         assert!(m.reading_history);
         m.resume_follow();
-        assert_eq!(m.visible().last().map(|m| m.id), Some(300));
+        assert_eq!(m.visible().last().map(|m| m.id), Some(PAGE_LIMIT as i64));
     }
 
     #[test]
@@ -564,32 +659,22 @@ mod tests {
     }
 
     #[test]
-    fn older_pages_prepend_three_hundred_without_replacing_loaded_history() {
+    fn older_pages_prepend_without_replacing_loaded_history() {
         let mut model = Model::default();
-        let mut latest = Model::demo_page();
-        for row in &mut latest.messages {
-            row.id += 600;
-        }
-        latest.message_window_before_id = Some("601".into());
-        latest.hidden_earlier_message_count = 600;
-        model.page(latest, false);
-        model.page(Model::demo_history("session", 601), true);
-        assert_eq!(model.messages.len(), 600);
-        assert_eq!(model.visible().next().map(|row| row.id), Some(301));
-        assert_eq!(model.visible().last().map(|row| row.id), Some(900));
-        assert_eq!(model.before.as_deref(), Some("301"));
-        let mut snapshot = Model::demo_page();
-        for row in &mut snapshot.messages {
-            row.id += 600;
-        }
-        model.page(snapshot, false);
-        assert_eq!(model.messages.len(), 600);
-        assert_eq!(model.before.as_deref(), Some("301"));
-        model.page(Model::demo_history("session", 301), true);
-        assert_eq!(model.messages.len(), 900);
+        model.page(Model::demo_history("session", 1201), false);
+        model.page(Model::demo_history("session", 701), true);
+        assert_eq!(model.messages.len(), 1000);
+        assert_eq!(model.visible().next().map(|row| row.id), Some(201));
+        assert_eq!(model.visible().last().map(|row| row.id), Some(1200));
+        assert_eq!(model.before.as_deref(), Some("201"));
+        model.page(Model::demo_history("session", 1201), false);
+        assert_eq!(model.messages.len(), 1000);
+        assert_eq!(model.before.as_deref(), Some("201"));
+        model.page(Model::demo_history("session", 201), true);
+        assert_eq!(model.messages.len(), 1200);
         assert_eq!(model.hidden, 0);
         model.resume_follow();
-        assert_eq!(model.messages.len(), 900);
+        assert_eq!(model.messages.len(), 1200);
     }
 
     #[test]

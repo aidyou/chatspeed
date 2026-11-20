@@ -5,9 +5,12 @@
 //! `src/styles/workflow/messages.scss`: a CLI-style tool transcript, grouped
 //! tool activity, collapsible snapshots and delegated-task cards.
 
-use crate::ui::Icon;
+use crate::ui::{
+    toast::{Toast, ToastKind},
+    Icon,
+};
 use chatspeed_gpui::{
-    chimes::Chime,
+    chimes::{self, Chime, DecisionKind, PendingDecision, Reminder},
     icons,
     metrics::Metrics,
     model::Model,
@@ -388,6 +391,7 @@ struct Observer {
     options: Options,
     model: Model,
     sessions: Vec<Session>,
+    pending_decisions: BTreeMap<String, Vec<PendingDecision>>,
     selected: Option<String>,
     connected: bool,
     timeline_scroll: TimelineScroll,
@@ -450,8 +454,8 @@ struct Observer {
     composer_expanded: bool,
     /// A new session is being created and started; further sends wait.
     start_pending: bool,
-    /// Last action failure, shown above the composer until the next send.
-    notice: Option<String>,
+    /// Transient action feedback shown below the titlebar.
+    toast: Option<Toast>,
     /// Child transcripts loaded for expanded sub-agent cards, by task id.
     child_rows: BTreeMap<String, Vec<Row>>,
     /// Selected option per `ask_user` group, keyed by `tool_call_id:group`.
@@ -572,6 +576,7 @@ impl Observer {
             options,
             model: Model::default(),
             sessions: Vec::new(),
+            pending_decisions: BTreeMap::new(),
             selected: None,
             connected: false,
             timeline_scroll: TimelineScroll {
@@ -623,7 +628,7 @@ impl Observer {
             composer_focused: false,
             composer_expanded: false,
             start_pending: false,
-            notice: None,
+            toast: None,
             child_rows: BTreeMap::new(),
             ask_user_choice: BTreeMap::new(),
             ask_user_text: BTreeMap::new(),
@@ -812,22 +817,48 @@ impl Observer {
         self.load_dir(root, cx);
     }
 
-    /// Pending decisions of the selected workflow: (tool call, tool name).
-    fn pending_approvals(&self) -> Vec<(String, String)> {
-        self.model
-            .pending_tool_ids
+    /// Pending decisions from all watched workflows, with a selected-session
+    /// question fallback until the notification stream has hydrated.
+    fn pending_approvals(&self) -> Vec<(PendingDecision, String)> {
+        let mut pending = Vec::new();
+        for (owner, entries) in &self.pending_decisions {
+            let title = self.session_heading(owner);
+            pending.extend(entries.iter().cloned().map(|entry| (entry, title.clone())));
+        }
+        if let Some(selected) = &self.selected {
+            if chimes::waiting_for_user(&self.model.state, &self.model.wait_reason)
+                && !pending.iter().any(|(entry, _)| {
+                    entry.target == *selected && entry.kind == DecisionKind::Question
+                })
+            {
+                pending.push((
+                    PendingDecision {
+                        target: selected.clone(),
+                        kind: DecisionKind::Question,
+                    },
+                    self.session_heading(selected),
+                ));
+            }
+        }
+        pending.sort_by_key(|(entry, _)| self.selected.as_deref() != Some(entry.target.as_str()));
+        pending
+    }
+
+    fn session_heading(&self, id: &str) -> String {
+        self.sessions
             .iter()
-            .chain(
-                self.model
-                    .awaiting_user_tool_call_id
-                    .as_ref()
-                    .filter(|id| !self.model.pending_tool_ids.contains(*id)),
-            )
-            .filter_map(|id| {
-                let tool = self.model.tools.get(id)?;
-                Some((id.clone(), presentation::tool_name(tool).to_owned()))
-            })
-            .collect()
+            .find(|session| session.id == id)
+            .map(Session::heading)
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| t!("untitled").to_string())
+    }
+
+    fn open_pending_decision(&mut self, target: String, cx: &mut Context<Self>) {
+        if self.selected.as_deref() == Some(target.as_str()) {
+            self.reveal_latest(cx);
+        } else {
+            self.select(target, cx);
+        }
     }
 
     fn desktop_menu_action(
@@ -835,13 +866,18 @@ impl Observer {
         action: chatspeed_runtime_client::desktop_menu::Action,
         cx: &mut Context<Self>,
     ) {
-        self.notice = self
+        if self
             .worker
             .commands
             .try_send(Command::DesktopMenu(action))
-            .err()
-            .map(|_| t!("desktop_menu_unavailable").to_string());
-        cx.notify();
+            .is_err()
+        {
+            self.show_toast(
+                ToastKind::Warning,
+                t!("desktop_menu_unavailable").to_string(),
+                cx,
+            );
+        }
     }
 
     fn sound_is_enabled(&self, chime: Chime) -> bool {
@@ -871,7 +907,7 @@ impl Observer {
         {
             self.sound_pending.insert(chime, muted);
         } else {
-            self.notice = Some(t!("sound_save_failed").to_string());
+            self.show_toast(ToastKind::Error, t!("sound_save_failed").to_string(), cx);
         }
         cx.notify();
     }
@@ -880,19 +916,23 @@ impl Observer {
         self.pinned = !self.pinned;
         // GPUI exposes no always-on-top request, so the switch only reports the
         // state the titlebar is asked for.
-        self.notice = self
-            .pinned
-            .then(|| format!("{} · {}", t!("pin"), t!("not_supported_native")));
+        if self.pinned {
+            self.not_implemented(t!("pin"), cx);
+        }
+        cx.notify();
+    }
+
+    fn show_toast(&mut self, kind: ToastKind, message: String, cx: &mut Context<Self>) {
+        self.toast = Some(Toast::new(kind, message, Instant::now(), kind.duration()));
         cx.notify();
     }
 
     fn not_implemented(&mut self, feature: impl Into<String>, cx: &mut Context<Self>) {
-        self.notice = Some(format!(
-            "{} · {}",
-            feature.into(),
-            t!("not_supported_native")
-        ));
-        cx.notify();
+        self.show_toast(
+            ToastKind::Info,
+            format!("{} · {}", feature.into(), t!("not_supported_native")),
+            cx,
+        );
     }
 
     /// Composer footer: connection state plus the workflow state the runtime reports.
@@ -1077,7 +1117,11 @@ impl Observer {
     /// Starts a new context frame for later turns, as Vue's clear-context does.
     fn clear_context_frame(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.selected.clone() else {
-            self.notice = Some(t!("clear_context_no_session").to_string());
+            self.show_toast(
+                ToastKind::Info,
+                t!("clear_context_no_session").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
@@ -1087,7 +1131,7 @@ impl Observer {
             .try_send(Command::ClearContext { session })
             .is_err()
         {
-            self.notice = Some(t!("clear_context_failed").to_string());
+            self.show_toast(ToastKind::Error, t!("clear_context_failed").to_string(), cx);
         }
         cx.notify();
     }
@@ -1115,7 +1159,6 @@ impl Observer {
         self.sandbox_mode_draft = None;
         self.sandbox_scheme_draft = None;
         self.planning_mode = false;
-        self.notice = None;
         self.timeline_scroll.follow = true;
         self.timeline_scroll.scroll_pending = true;
         self.clear_dir_state();
@@ -1134,21 +1177,67 @@ impl Observer {
         if (text.is_empty() && self.attachments.is_empty()) || self.start_pending {
             return;
         }
-        self.notice = None;
         let attachments = self.attachments.clone();
         let attached_context = attachment_context(&attachments);
         let metadata = attachment_metadata(&attachments);
         match self.selected.clone() {
             Some(id) => {
-                let _ = self.worker.commands.try_send(Command::Signal {
-                    id,
-                    signal: serde_json::json!({
-                        "type": "user_message",
-                        "content": text,
-                        "attached_context": attached_context,
-                        "metadata": metadata,
-                    }),
+                let queue = (self.workflow_running()
+                    || matches!(self.model.wait_reason.as_str(), "approval" | "sub_agent"))
+                    && !matches!(
+                        self.model.wait_reason.as_str(),
+                        "user_input" | "confirmation"
+                    );
+                let mut signal = serde_json::json!({
+                    "type": "user_message",
+                    "content": text,
+                    "attached_context": attached_context,
+                    "metadata": metadata,
                 });
+                let result = if queue {
+                    static NEXT: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(0);
+                    let nanos = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos();
+                    let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+                    let queue_id = format!("gpui-{}-{nanos}-{sequence}", std::process::id());
+                    signal["queued_user_message_id"] = serde_json::json!(queue_id);
+                    let mut correlation = metadata.unwrap_or_else(|| serde_json::json!({}));
+                    correlation["client_message_id"] = serde_json::json!(queue_id);
+                    signal["metadata"] = correlation.clone();
+                    self.worker
+                        .commands
+                        .try_send(Command::SubmitQueuedMessage {
+                            generation: self.model.generation,
+                            session: id,
+                            queue_id: queue_id.clone(),
+                            signal,
+                        })
+                        .map(|()| {
+                            self.model
+                                .queued_messages
+                                .push(chatspeed_gpui::model::QueuedMessage {
+                                    id: queue_id,
+                                    content: text,
+                                    metadata: correlation,
+                                    provisional: true,
+                                });
+                        })
+                } else {
+                    self.worker
+                        .commands
+                        .try_send(Command::Signal { id, signal })
+                };
+                if result.is_err() {
+                    self.show_toast(
+                        ToastKind::Error,
+                        t!("queued_message_send_failed").to_string(),
+                        cx,
+                    );
+                    return;
+                }
                 self.timeline_scroll.follow = true;
                 self.model.resume_follow();
                 self.timeline_scroll.scroll_pending = true;
@@ -1205,7 +1294,11 @@ impl Observer {
     fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         for path in paths {
             if !is_image_path(&path) {
-                self.notice = Some(t!("attachment_unsupported").to_string());
+                self.show_toast(
+                    ToastKind::Warning,
+                    t!("attachment_unsupported").to_string(),
+                    cx,
+                );
                 continue;
             }
             if self.attachments.iter().any(|item| item.path == path) {
@@ -1218,6 +1311,24 @@ impl Observer {
             self.attachments.push(Attachment { path, name });
         }
         cx.notify();
+    }
+
+    fn remove_queued_message(&mut self, generation: u64, id: &str, cx: &mut Context<Self>) {
+        if !self.model.accepts(generation)
+            || !self.model.queued_messages.iter().any(|item| item.id == id)
+        {
+            return;
+        }
+        let Some(session) = self.selected.clone() else {
+            return;
+        };
+        // Leave the row visible until the runtime confirms removal or applies it.
+        if self.worker.commands.try_send(Command::Signal {
+            id: session,
+            signal: serde_json::json!({"type": "remove_queued_user_message", "queued_user_message_id": id}),
+        }).is_err() {
+            self.show_toast(ToastKind::Error, t!("queued_message_remove_failed").to_string(), cx);
+        }
     }
 
     fn remove_attachment(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -1464,7 +1575,8 @@ impl Observer {
         let content = match presentation::ask_user_response(&tool.choices, &drafts) {
             Ok(content) => content,
             Err(error) => {
-                self.notice = Some(
+                self.show_toast(
+                    ToastKind::Warning,
                     match error {
                         presentation::AskUserDraftError::OtherRequired => {
                             t!("ask_user_other_required")
@@ -1472,8 +1584,8 @@ impl Observer {
                         presentation::AskUserDraftError::Required => t!("ask_user_required"),
                     }
                     .to_string(),
+                    cx,
                 );
-                cx.notify();
                 return;
             }
         };
@@ -1493,7 +1605,6 @@ impl Observer {
         // persisted answer takes over on the next projection.
         self.ask_user_answered
             .insert(tool.tool_call_id.clone(), answers);
-        self.notice = None;
         cx.notify();
     }
 
@@ -1562,7 +1673,11 @@ impl Observer {
                     self.apply_config(&config, fetched_at, cx);
                 }
                 UpdateKind::DesktopMenuUnavailable => {
-                    self.notice = Some(t!("desktop_menu_unavailable").to_string());
+                    self.show_toast(
+                        ToastKind::Warning,
+                        t!("desktop_menu_unavailable").to_string(),
+                        cx,
+                    );
                 }
                 UpdateKind::SoundSaved {
                     chime,
@@ -1574,19 +1689,39 @@ impl Observer {
                         self.sound_saved_at = Some(Instant::now());
                         self.set_sound_enabled(chime, !muted);
                     } else {
-                        self.notice = Some(t!("sound_save_failed").to_string());
+                        self.show_toast(ToastKind::Error, t!("sound_save_failed").to_string(), cx);
                     }
                 }
-                UpdateKind::Chime(chime) => {
-                    if self.sound_is_enabled(chime) {
+                UpdateKind::Decisions {
+                    owner,
+                    pending,
+                    reminder,
+                } => {
+                    let sound = match reminder {
+                        Some(Reminder::Sound(chime)) => Some(chime),
+                        Some(Reminder::BackgroundQuestion)
+                            if self.selected.as_deref() != Some(&owner) =>
+                        {
+                            Some(Chime::Approval)
+                        }
+                        _ => None,
+                    };
+                    if pending.is_empty() {
+                        self.pending_decisions.remove(&owner);
+                    } else {
+                        self.pending_decisions.insert(owner, pending);
+                    }
+                    if let Some(chime) = sound.filter(|chime| self.sound_is_enabled(*chime)) {
                         if let Some(player) = &self.sound_player {
                             player.play(chime);
                         } else {
-                            self.notice = Some(t!("sound_playback_unavailable").to_string());
-                            cx.notify();
+                            self.show_toast(
+                                ToastKind::Warning,
+                                t!("sound_playback_unavailable").to_string(),
+                                cx,
+                            );
                         }
                     }
-                    continue;
                 }
                 UpdateKind::Opened(id) => {
                     self.start_pending = false;
@@ -1599,7 +1734,7 @@ impl Observer {
                 }
                 UpdateKind::Error(message) => {
                     self.start_pending = false;
-                    self.notice = Some(message);
+                    self.show_toast(ToastKind::Error, message, cx);
                 }
                 UpdateKind::Catalogue {
                     agents,
@@ -1618,8 +1753,7 @@ impl Observer {
                     cx.notify();
                 }
                 UpdateKind::Toast(message) => {
-                    self.notice = Some(message);
-                    cx.notify();
+                    self.show_toast(ToastKind::Success, message, cx);
                 }
                 UpdateKind::Files { query, files } => {
                     // Only the newest query may paint the `@` panel.
@@ -1652,6 +1786,11 @@ impl Observer {
                 UpdateKind::Reset => {
                     self.metrics.resets += 1;
                     self.model.reset_live();
+                }
+                UpdateKind::QueueSubmissionFailed { queue_id, message } => {
+                    if self.model.reject_queue_submission(&queue_id) {
+                        self.show_toast(ToastKind::Error, message, cx);
+                    }
                 }
                 UpdateKind::Snapshot(page) => {
                     self.model.page(page, false);
@@ -1696,7 +1835,19 @@ impl Observer {
             .as_ref()
             .is_some_and(|player| player.playback_failed())
         {
-            self.notice = Some(t!("sound_playback_unavailable").to_string());
+            self.show_toast(
+                ToastKind::Warning,
+                t!("sound_playback_unavailable").to_string(),
+                cx,
+            );
+            cx.notify();
+        }
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.expired(Instant::now()))
+        {
+            self.toast = None;
             cx.notify();
         }
         if self.copy_flash_expired() {
@@ -1832,6 +1983,7 @@ impl Observer {
             theme.colors.primary_active = accent.opacity(0.8);
             theme.colors.ring = accent.opacity(0.45);
             theme.colors.background = background.into();
+            theme.colors.popover = background.into();
             theme.colors.muted = muted.into();
             theme.colors.border = border.into();
             theme.colors.sidebar = muted.into();
@@ -2279,6 +2431,22 @@ impl Observer {
 
     fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
         let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
+        if tool.status == presentation::ToolStatus::Running {
+            detail = detail.child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        Icon::new("loading")
+                            .size(14.)
+                            .color(accent())
+                            .spin(SharedString::from(format!("{}:running", tool.detail_key))),
+                    )
+                    .child(t!("executing").to_string()),
+            );
+        }
         let answered =
             self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool);
         let answering = self.ask_user_active(tool) && !answered;
@@ -2404,7 +2572,13 @@ impl Observer {
                 .collect()
         });
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
-        ui::transcript::activity_group(group, details, on_toggle, cx)
+        let shimmer = self.workflow_running()
+            && group.ongoing
+            && self
+                .rows
+                .last()
+                .is_some_and(|row| matches!(row, Row::Activity(tail) if tail.key == group.key));
+        ui::transcript::activity_group(group, shimmer, details, on_toggle, cx)
     }
 
     fn activity_item(&self, item: &ActivityItem, cx: &mut Context<Self>) -> AnyElement {
@@ -2901,6 +3075,9 @@ impl Render for Observer {
                     .child(self.row(row, cx)),
             );
         }
+        if !self.model.queued_messages.is_empty() {
+            content = content.child(ui::composer::message_queue::render(self, cx));
+        }
         if self.model.live_overflow {
             content = content.child(
                 div()
@@ -2985,7 +3162,11 @@ impl Render for Observer {
                                         .min_h_0()
                                         .min_w_0()
                                         .child(content)
-                                        .child(self.timeline_scroll.scrollbar_input.overlay(&self.timeline_scroll.scroll)),
+                                        .child(
+                                            self.timeline_scroll
+                                                .scrollbar_input
+                                                .overlay(&self.timeline_scroll.scroll),
+                                        ),
                                 )
                                 .child(ui::composer::composer(self, cx)),
                         ),
@@ -3013,6 +3194,9 @@ impl Render for Observer {
         if self.quick_panel.is_some() {
             shell = shell.child(ui::composer::panels::overlay(self, cx));
         }
+        if let Some(toast) = &self.toast {
+            shell = shell.child(toast.render(cx));
+        }
         shell
     }
 }
@@ -3023,7 +3207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = Options::parse();
     let worker = Worker::start(options.clone())?;
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(ui::IconAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             cx.set_app_identity("ai.aidyou.chatspeed", "ChatSpeed");

@@ -138,7 +138,7 @@ fn pill(id: &'static str, label: String, caret: bool, hover: Hsla, color: Hsla) 
                 .max_w(px(160.))
                 .overflow_hidden()
                 .text_ellipsis()
-                .child(label),
+                .child(crate::ui::chrome_label(label)),
         )
         .when(caret, |row| {
             row.child(Icon::new("caret-down").size(10.).color(color))
@@ -185,7 +185,7 @@ fn option_row(
                         .text_ellipsis()
                         .text_size(px(12.))
                         .text_color(if selected { primary } else { foreground })
-                        .child(label),
+                        .child(crate::ui::chrome_label(label)),
                 )
                 .when(selected, |row| {
                     row.child(Icon::new("check").size(12.).color(primary))
@@ -249,7 +249,10 @@ fn agent_selector(
     }
     let selected = current.clone();
     let observer_entity = cx.entity();
-    MenuPopover::new("composer-agent-popover", trigger_el, move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
+    MenuPopover::new(
+        "composer-agent-popover",
+        trigger_el,
+        move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
             let popover = cx.entity();
             let mut list = v_flex().id("composer-agent-list").w(px(240.)).gap(px(2.));
             for (id, name, description) in agents.clone() {
@@ -278,8 +281,9 @@ fn agent_selector(
                 ));
             }
             list
-        })
-        .into_any_element()
+        },
+    )
+    .into_any_element()
 }
 
 /// One selectable model, either a provider entry or a proxy alias.
@@ -447,7 +451,10 @@ fn model_selector(
     let base_config = config.clone();
     let all_configs = observer.model_configs();
     let observer_entity = cx.entity();
-    MenuPopover::new("composer-model-popover", trigger_el, move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
+    MenuPopover::new(
+        "composer-model-popover",
+        trigger_el,
+        move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
             let popover = cx.entity();
             let mut list = v_flex().id("composer-model-list").w(px(260.)).gap(px(2.));
             if !group.is_empty() {
@@ -482,8 +489,9 @@ fn model_selector(
                 ));
             }
             list
-        })
-        .into_any_element()
+        },
+    )
+    .into_any_element()
 }
 
 fn model_group_label(label: String, cx: &App) -> AnyElement {
@@ -494,7 +502,7 @@ fn model_group_label(label: String, cx: &App) -> AnyElement {
         .text_size(px(10.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(cx.theme().muted_foreground)
-        .child(label)
+        .child(crate::ui::chrome_label(label))
         .into_any_element()
 }
 
@@ -552,7 +560,10 @@ fn quick_actions(
     };
     let approval = observer.approval_level();
     let observer_entity = cx.entity();
-    MenuPopover::new("composer-quick-popover", trigger_el, move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
+    MenuPopover::new(
+        "composer-quick-popover",
+        trigger_el,
+        move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
             let popover = cx.entity();
             let observer_entity = observer_entity.clone();
             let session = session.clone();
@@ -805,8 +816,9 @@ fn quick_actions(
                 ));
             }
             list
-        })
-        .into_any_element()
+        },
+    )
+    .into_any_element()
 }
 
 /// One quick-action row: icon, label, optional hint and the current check.
@@ -865,7 +877,7 @@ fn menu_row(
                         .text_ellipsis()
                         .text_size(px(12.))
                         .text_color(text_color)
-                        .child(label),
+                        .child(crate::ui::chrome_label(label)),
                 )
                 .when(checked, |row| {
                     row.child(Icon::new("check").size(12.).color(accent))
@@ -933,7 +945,7 @@ fn sandbox_selector(
         .text_size(px(11.))
         .text_color(color)
         .child(Icon::new("sandbox").size(13.).color(color))
-        .child(div().child(label))
+        .child(div().child(crate::ui::chrome_label(label)))
         .into_any_element();
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
@@ -976,7 +988,10 @@ fn sandbox_selector(
     ];
     let current = mode.clone();
     let observer_entity = cx.entity();
-    MenuPopover::new("composer-sandbox-popover", trigger_el, move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
+    MenuPopover::new(
+        "composer-sandbox-popover",
+        trigger_el,
+        move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
             let mut list = v_flex().id("composer-sandbox-list").w(px(280.)).gap(px(2.));
             for (value, title, hint) in options.clone() {
                 let observer_entity = observer_entity.clone();
@@ -1099,8 +1114,9 @@ fn sandbox_selector(
                 }
             }
             list
-        })
-        .into_any_element()
+        },
+    )
+    .into_any_element()
 }
 
 /// Clears the context frame, which Vue only allows between turns.

@@ -7,6 +7,47 @@ mod icon;
 mod menu_popover;
 
 pub use icon::Icon;
+pub(crate) use icon::IconAssets;
+
+/// A compact label next to an icon. Keep its optical adjustment out of the row layout.
+#[derive(IntoElement)]
+pub(crate) struct ChromeLabel(SharedString);
+
+pub(crate) fn chrome_label(text: impl Into<SharedString>) -> ChromeLabel {
+    ChromeLabel(text.into())
+}
+
+impl RenderOnce for ChromeLabel {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let style = window.text_style();
+        let size = style.font_size.to_pixels(window.rem_size());
+        let fonts = cx.text_system();
+        let font = fonts.resolve_font(&style.font());
+        let offset = if self.0.contains('\n') {
+            px(0.)
+        } else {
+            let ink_height = (fonts.cap_height(font, size) + fonts.x_height(font, size)) / 2.;
+            ((ink_height + fonts.descent(font, size) - fonts.ascent(font, size)) / 2.)
+                .max(px(-1.5))
+                .min(px(1.5))
+        };
+        div().relative().top(offset).min_w_0().child(self.0)
+    }
+}
+
+/// Keep the caret's space reserved so hovering never moves the label.
+pub(super) fn disclosure_caret(group: &'static str, open: bool, color: Hsla) -> impl IntoElement {
+    div()
+        .id("disclosure-caret")
+        .flex_none()
+        .invisible()
+        .group_hover(group, |style| style.visible())
+        .child(
+            Icon::new(if open { "caret-down" } else { "caret-right" })
+                .size(14.)
+                .color(color),
+        )
+}
 
 /// Height of the custom titlebar, matching `--cs-titlebar-height`.
 pub const TITLEBAR_HEIGHT: f32 = 40.;
@@ -138,4 +179,5 @@ pub mod frame;
 pub mod sidebar;
 pub mod status;
 pub mod titlebar;
+pub(crate) mod toast;
 pub mod transcript;

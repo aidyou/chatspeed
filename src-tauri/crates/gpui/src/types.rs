@@ -174,6 +174,12 @@ pub enum Command {
         before: String,
     },
     /// A typed workflow signal (`user_message`, `approval`, `continue`, ...).
+    SubmitQueuedMessage {
+        generation: u64,
+        session: String,
+        queue_id: String,
+        signal: Value,
+    },
     Signal {
         id: String,
         signal: Value,
@@ -276,8 +282,16 @@ pub enum UpdateKind {
     Sessions(Vec<Session>),
     Snapshot(Page),
     Older(Page),
+    QueueSubmissionFailed {
+        queue_id: String,
+        message: String,
+    },
     Event(Value),
-    Chime(crate::chimes::Chime),
+    Decisions {
+        owner: String,
+        pending: Vec<crate::chimes::PendingDecision>,
+        reminder: Option<crate::chimes::Reminder>,
+    },
     Connected(bool),
     /// Runtime configuration (`get_all_config`) for locale and appearance.
     Config(Value, Instant),

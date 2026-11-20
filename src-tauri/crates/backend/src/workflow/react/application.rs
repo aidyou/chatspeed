@@ -404,8 +404,9 @@ impl WorkflowApplicationService {
     pub async fn workflow_snapshot(
         &self,
         session_id: &str,
+        limit: Option<usize>,
     ) -> Result<serde_json::Value, ApplicationError> {
-        get_workflow_snapshot_core(self, session_id.to_string()).await
+        get_workflow_snapshot_core(self, session_id.to_string(), limit).await
     }
 
     /// Starts (or resumes) a workflow session.

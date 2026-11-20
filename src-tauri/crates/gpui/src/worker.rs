@@ -1,8 +1,14 @@
-//! Isolated Tokio thread. Only list, snapshot, history-query and authenticated SSE are used.
-use crate::{model::Model, native, types::*};
+//! Isolated Tokio thread for runtime requests and authenticated workflow streams.
+use crate::{
+    chimes::{self, NotificationState},
+    model::{Model, PAGE_LIMIT},
+    native,
+    types::*,
+};
 use chatspeed_runtime_client::RuntimeClient;
 use serde_json::{json, Value};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     thread::JoinHandle,
     time::{Duration, Instant},
 };
@@ -79,6 +85,16 @@ async fn send(tx: &mpsc::Sender<Update>, generation: u64, kind: UpdateKind) -> b
 async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc::Sender<Update>) {
     let list_options = options.clone();
     let list_tx = tx.clone();
+    let (watch_tx, watch_rx) = watch::channel(None::<String>);
+    let (sessions_tx, sessions_rx) = watch::channel(Vec::<Session>::new());
+    if !options.demo {
+        tokio::spawn(watch_decisions(
+            options.clone(),
+            tx.clone(),
+            watch_rx,
+            sessions_rx,
+        ));
+    }
     tokio::spawn(async move {
         loop {
             if list_options.demo {
@@ -105,11 +121,14 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(client) => {
                         let started = Instant::now();
                         let sessions = match client.get("/control/v1/workflows").await {
-                            Ok(value) => serde_json::from_value(value).map_err(|_| "decode"),
+                            Ok(value) => {
+                                serde_json::from_value::<Vec<Session>>(value).map_err(|_| "decode")
+                            }
                             Err(_) => Err("request"),
                         };
                         match sessions {
                             Ok(sessions) => {
+                                let _ = sessions_tx.send(sessions.clone());
                                 if !send(&list_tx, 0, UpdateKind::Sessions(sessions)).await
                                     || !send(&list_tx, 0, UpdateKind::Connected(true)).await
                                 {
@@ -205,6 +224,9 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 .await;
             }
             Command::Select { generation, id } => {
+                if !id.starts_with("subagent_") && !id.starts_with("task_") {
+                    let _ = watch_tx.send(Some(id.clone()));
+                }
                 if let Some(task) = selection.take() {
                     task.abort();
                 }
@@ -213,6 +235,34 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 selection = Some(tokio::spawn(async move {
                     follow(options, tx, generation, id).await;
                 }));
+            }
+            Command::SubmitQueuedMessage {
+                generation,
+                session,
+                queue_id,
+                signal,
+            } => {
+                let result = if options.demo {
+                    Err(rust_i18n::t!("queued_message_send_failed").to_string())
+                } else {
+                    native::control_post(
+                        &options,
+                        &format!("/control/v1/workflows/{session}/signal"),
+                        signal,
+                    )
+                    .await
+                };
+                if let Err(message) = result {
+                    if !send(
+                        &tx,
+                        generation,
+                        UpdateKind::QueueSubmissionFailed { queue_id, message },
+                    )
+                    .await
+                    {
+                        return;
+                    }
+                }
             }
             Command::Signal { id, signal } => {
                 if options.demo {
@@ -267,7 +317,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 }
             }
             Command::Child { id, session } => {
-                let path = format!("/control/v1/workflows/{session}");
+                let path = format!("/control/v1/workflows/{session}?limit={PAGE_LIMIT}");
                 if let Ok(value) = native::control_get(&options, &path).await {
                     if let Ok(page) = serde_json::from_value(value) {
                         if !send(&tx, 0, UpdateKind::Child(id, page)).await {
@@ -622,7 +672,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     if let Ok(value) = client
                         .post(
                             "/control/v1/workflow-commands/get_earlier_workflow_message_page",
-                            &json!({"session_id":id,"before_message_id":before}),
+                            &json!({"session_id":id,"before_message_id":before,"limit":PAGE_LIMIT}),
                         )
                         .await
                     {
@@ -730,13 +780,175 @@ async fn start_session(
     Ok(session_id)
 }
 
+/// Keep notification subscriptions alive when the transcript switches sessions.
+async fn watch_decisions(
+    options: Options,
+    tx: mpsc::Sender<Update>,
+    mut selected: watch::Receiver<Option<String>>,
+    mut sessions: watch::Receiver<Vec<Session>>,
+) {
+    let mut tasks = BTreeMap::<String, tokio::task::JoinHandle<()>>::new();
+    let mut known = BTreeSet::new();
+    loop {
+        let active = selected.borrow_and_update().clone();
+        let list = sessions.borrow_and_update().clone();
+        let listed = list
+            .iter()
+            .map(|session| session.id.clone())
+            .collect::<BTreeSet<_>>();
+        // A newly opened workflow may be selected before its first list refresh.
+        let mut wanted = list
+            .iter()
+            .filter(|session| !chimes::terminal(&session.status))
+            .map(|session| session.id.clone())
+            .collect::<BTreeSet<_>>();
+        if let Some(id) = active {
+            if listed.contains(&id) || !known.contains(&id) {
+                wanted.insert(id);
+            }
+        }
+        // Keep the last known IDs until a deleted selected workflow is replaced.
+        known.retain(|id| listed.contains(id) || selected.borrow().as_ref() == Some(id));
+        known.extend(listed);
+        let removed = tasks
+            .keys()
+            .filter(|id| !wanted.contains(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in removed {
+            if let Some(task) = tasks.remove(&id) {
+                task.abort();
+                let _ = task.await;
+            }
+            if !send(
+                &tx,
+                0,
+                UpdateKind::Decisions {
+                    owner: id,
+                    pending: Vec::new(),
+                    reminder: None,
+                },
+            )
+            .await
+            {
+                return;
+            }
+        }
+        for id in wanted {
+            tasks
+                .entry(id.clone())
+                .or_insert_with(|| tokio::spawn(follow_decisions(options.clone(), tx.clone(), id)));
+        }
+        tokio::select! {
+            result = selected.changed() => if result.is_err() { return; },
+            result = sessions.changed() => if result.is_err() { return; },
+        }
+    }
+}
+
+async fn follow_decisions(options: Options, tx: mpsc::Sender<Update>, id: String) {
+    let mut cursor: Option<String> = None;
+    let mut state = NotificationState::default();
+    let mut published = Vec::new();
+    loop {
+        if let Some(client) = native::connect(&options).await {
+            match client.stream_workflow(&id, cursor.as_deref()).await {
+                Ok(mut stream) => {
+                    // Subscribe before hydration. Process buffered events after the snapshot,
+                    // never replace state with a snapshot after processing newer live events.
+                    if cursor.is_none() {
+                        if let Ok(snapshot) =
+                            client.get(&format!("/control/v1/workflows/{id}")).await
+                        {
+                            let reminder = state.snapshot(&id, &snapshot);
+                            let pending = state.pending();
+                            if pending != published || reminder.is_some() {
+                                published = pending.clone();
+                                if !send(
+                                    &tx,
+                                    0,
+                                    UpdateKind::Decisions {
+                                        owner: id.clone(),
+                                        pending,
+                                        reminder,
+                                    },
+                                )
+                                .await
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    loop {
+                        match stream.next_event().await {
+                            Ok(Some(event)) => {
+                                if cursor
+                                    .as_deref()
+                                    .and_then(|value| value.rsplit_once(':'))
+                                    .is_some_and(|(instance, sequence)| {
+                                        instance == event.server_instance_id
+                                            && sequence
+                                                .parse::<u64>()
+                                                .is_ok_and(|last| event.sequence <= last)
+                                    })
+                                {
+                                    continue;
+                                }
+                                cursor =
+                                    Some(chatspeed_runtime_client::stream_envelope_cursor(&event));
+                                if !NotificationState::handles(&event.payload) {
+                                    continue;
+                                }
+                                let reminder = state.event(&id, &event.payload);
+                                let pending = state.pending();
+                                if pending != published || reminder.is_some() {
+                                    published = pending.clone();
+                                    if !send(
+                                        &tx,
+                                        0,
+                                        UpdateKind::Decisions {
+                                            owner: id.clone(),
+                                            pending,
+                                            reminder,
+                                        },
+                                    )
+                                    .await
+                                    {
+                                        return;
+                                    }
+                                }
+                            }
+                            Ok(None) => break,
+                            Err(error) => {
+                                if matches!(
+                                    error,
+                                    chatspeed_runtime_client::ClientError::Serialization(_)
+                                ) {
+                                    cursor = None;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(_) => cursor = None,
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
 async fn snapshot(
     client: &RuntimeClient,
     id: &str,
     tx: &mpsc::Sender<Update>,
     generation: u64,
 ) -> bool {
-    let Ok(value) = client.get(&format!("/control/v1/workflows/{id}")).await else {
+    let Ok(value) = client
+        .get(&format!("/control/v1/workflows/{id}?limit={PAGE_LIMIT}"))
+        .await
+    else {
         return false;
     };
     let decode_start = Instant::now();
@@ -792,7 +1004,6 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
         }
     }
     let mut cursor: Option<String> = None;
-    let mut chimes = crate::chimes::ChimeTracker::default();
     let mut needs_snapshot = true;
     loop {
         if !send(&tx, generation, UpdateKind::Reconnect).await {
@@ -822,9 +1033,6 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                                         .is_some_and(|(instance, sequence)| instance == envelope.server_instance_id
                                             && sequence.parse::<u64>().is_ok_and(|last| envelope.sequence <= last)) { continue; }
                                     cursor = Some(next_cursor);
-                                    if let Some(chime) = chimes.event(&envelope.payload) {
-                                        if !send(&tx, generation, UpdateKind::Chime(chime)).await { return; }
-                                    }
                                     if !send(&tx, generation, UpdateKind::Event(envelope.payload)).await { return; }
                                 }
                                 Ok(None) => break,
@@ -833,7 +1041,6 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                                     // Treat every invalid envelope as a resync; never inspect error text.
                                     if matches!(error, chatspeed_runtime_client::ClientError::Serialization(_)) {
                                         cursor = None;
-                                        chimes = crate::chimes::ChimeTracker::default();
                                         needs_snapshot = true;
                                         if !send(&tx, generation, UpdateKind::Reset).await { return; }
                                     }

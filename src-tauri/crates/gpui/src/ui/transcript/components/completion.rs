@@ -101,6 +101,7 @@ pub(crate) fn finish_task_card(
     };
     let mut label = h_flex()
         .id(SharedString::from(view.key.clone()))
+        .group("completion-header")
         .w_full()
         .min_w_0()
         .items_center()
@@ -116,15 +117,11 @@ pub(crate) fn finish_task_card(
         );
     if view.cost.is_some() {
         label = label
-            .child(
-                Icon::new(if open {
-                    "double-arrow-up"
-                } else {
-                    "double-arrow-down"
-                })
-                .size(12.)
-                .color(cx.theme().muted_foreground),
-            )
+            .child(crate::ui::disclosure_caret(
+                "completion-header",
+                open,
+                cx.theme().muted_foreground,
+            ))
             .cursor_pointer()
             .on_click(on_toggle);
     }

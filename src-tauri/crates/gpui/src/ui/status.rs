@@ -47,7 +47,10 @@ fn render_status(live: Option<Live>, cx: &App) -> AnyElement {
     } else {
         muted
     };
-    let icon = Icon::new(live.icon).size(14.).color(color);
+    let mut icon = Icon::new(live.icon).size(14.).color(color);
+    if live.icon == "reasoning" {
+        icon = icon.spin("live-reasoning-spin");
+    }
     h_flex()
         .w_full()
         .max_w(px(780.))
@@ -65,7 +68,7 @@ fn render_status(live: Option<Live>, cx: &App) -> AnyElement {
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .child(live.text),
+                .child(super::chrome_label(live.text)),
         )
         .into_any_element()
 }
