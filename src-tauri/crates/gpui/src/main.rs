@@ -481,7 +481,7 @@ struct Observer {
     toast: Option<Toast>,
     /// Child transcripts loaded for expanded sub-agent cards, by task id.
     child_rows: BTreeMap<String, Vec<Row>>,
-    active_child: Option<SubAgentView>,
+    active_child: Option<(String, String)>,
     /// Selected option per `ask_user` group, keyed by `tool_call_id:group`.
     ask_user_choice: BTreeMap<String, usize>,
     /// Free text typed for an `ask_user` "Other" row, by the same key.
@@ -991,15 +991,15 @@ impl Observer {
 
     /// Pending decisions from all watched workflows, with a selected-session
     /// question fallback until the notification stream has hydrated.
-    fn pending_approvals(&self) -> Vec<(PendingDecision, String)> {
+    fn pending_approvals(&self) -> Vec<(PendingDecision, String, String)> {
         let mut pending = Vec::new();
         for (owner, entries) in &self.pending_decisions {
             let title = self.session_heading(owner);
-            pending.extend(entries.iter().cloned().map(|entry| (entry, title.clone())));
+            pending.extend(entries.iter().cloned().map(|entry| (entry, owner.clone(), title.clone())));
         }
         if let Some(selected) = &self.selected {
             if chimes::waiting_for_user(&self.model.state, &self.model.wait_reason)
-                && !pending.iter().any(|(entry, _)| {
+                && !pending.iter().any(|(entry, _, _)| {
                     entry.target == *selected && entry.kind == DecisionKind::Question
                 })
             {
@@ -1008,11 +1008,12 @@ impl Observer {
                         target: selected.clone(),
                         kind: DecisionKind::Question,
                     },
+                    selected.clone(),
                     self.session_heading(selected),
                 ));
             }
         }
-        pending.sort_by_key(|(entry, _)| self.selected.as_deref() != Some(entry.target.as_str()));
+        pending.sort_by_key(|(entry, _, _)| self.selected.as_deref() != Some(entry.target.as_str()));
         pending
     }
 
@@ -1025,11 +1026,19 @@ impl Observer {
             .unwrap_or_else(|| t!("untitled").to_string())
     }
 
-    fn open_pending_decision(&mut self, target: String, cx: &mut Context<Self>) {
-        if self.selected.as_deref() == Some(target.as_str()) {
+    fn open_pending_decision(&mut self, owner: String, target: String, cx: &mut Context<Self>) {
+        if self.selected.as_deref() != Some(owner.as_str()) {
+            self.select(owner.clone(), cx);
+        }
+        if self.selected.as_deref() != Some(owner.as_str()) {
+            return;
+        }
+        if owner == target {
+            self.close_child();
             self.reveal_latest(cx);
         } else {
-            self.select(target, cx);
+            let title = self.session_heading(&target);
+            self.open_child_session(target, title, cx);
         }
     }
 
@@ -2086,7 +2095,7 @@ impl Observer {
 
     fn current_child_matches(&self, epoch: u64, session: &str) -> bool {
         self.child_epoch == epoch
-            && self.active_child.as_ref().and_then(|card| card.task_id.as_deref()) == Some(session)
+            && self.active_child.as_ref().is_some_and(|(id, _)| id == session)
     }
 
     fn close_child(&mut self) {
@@ -2105,8 +2114,12 @@ impl Observer {
 
     fn open_child(&mut self, card: SubAgentView, cx: &mut Context<Self>) {
         let Some(id) = card.task_id.clone() else { return; };
+        self.open_child_session(id, card.agent, cx);
+    }
+
+    fn open_child_session(&mut self, id: String, title: String, cx: &mut Context<Self>) {
         self.close_child();
-        self.active_child = Some(card);
+        self.active_child = Some((id.clone(), title));
         self.child_epoch = self.child_epoch.wrapping_add(1);
         self.worker.set_child(Some((self.model.generation, self.child_epoch, id.clone())));
         self.child_pending.insert(id);
@@ -3498,8 +3511,7 @@ impl Observer {
     }
 
     fn child_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let card = self.active_child.as_ref()?;
-        let id = card.task_id.as_ref()?;
+        let (id, title) = self.active_child.as_ref()?;
         let foreground = cx.theme().foreground;
         let hover = cx.theme().muted;
         let content = if let Some(rows) = self.child_rows.get(id) {
@@ -3550,7 +3562,7 @@ impl Observer {
             .child(h_flex().h(px(40.)).flex_none().items_center().gap_2().px_3()
                 .border_b_1().border_color(cx.theme().border)
                 .child(Icon::new("task").size(15.).color(foreground))
-                .child(div().min_w_0().text_ellipsis().overflow_hidden().font_weight(FontWeight::SEMIBOLD).child(card.agent.clone()))
+                .child(div().min_w_0().text_ellipsis().overflow_hidden().font_weight(FontWeight::SEMIBOLD).child(title.clone()))
                 .child(div().flex_1())
                 .child(div().id("close-child-pane").p_1().rounded(px(4.)).cursor_pointer()
                     .hover(move |style| style.bg(hover))

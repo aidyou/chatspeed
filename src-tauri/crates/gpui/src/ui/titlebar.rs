@@ -453,7 +453,7 @@ fn menu(observer: &Observer, secondary: Hsla, cx: &mut Context<Observer>) -> Any
 
 /// The approval queue: only rendered while the runtime waits on a decision.
 fn approval_queue(
-    pending: Vec<(PendingDecision, String)>,
+    pending: Vec<(PendingDecision, String, String)>,
     secondary: Hsla,
     accent: Hsla,
     hover: Hsla,
@@ -512,7 +512,8 @@ fn approval_queue(
                 .gap(px(2.))
                 .max_h((window.viewport_size().height - px(TITLEBAR_HEIGHT + 48.)).max(px(0.)))
                 .overflow_y_scroll();
-            for (index, (entry, title)) in pending.iter().enumerate() {
+            for (index, (entry, owner, title)) in pending.iter().enumerate() {
+                let owner = owner.clone();
                 let weak = weak.clone();
                 let popover = popover.clone();
                 let target = entry.target.clone();
@@ -554,7 +555,7 @@ fn approval_queue(
                         .on_click(move |_, window, cx| {
                             let _ = popover.update(cx, |state, cx| state.dismiss(window, cx));
                             let _ = weak.update(cx, |this, cx| {
-                                this.open_pending_decision(target.clone(), cx);
+                                this.open_pending_decision(owner.clone(), target.clone(), cx);
                             });
                         }),
                 );
