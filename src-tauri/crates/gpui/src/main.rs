@@ -834,7 +834,7 @@ impl Observer {
         let Some(path) = self.draft_file() else { return; };
         let Some(parent) = path.parent() else { return; };
         let mut drafts: BTreeMap<String, String> = self.drafts.iter().filter_map(|(id, (text, _))| {
-            Some((id.as_ref()?.clone(), text.clone()))
+            (!text.trim().is_empty()).then_some((id.as_ref()?.clone(), text.clone()))
         }).collect();
         if let Some(id) = &self.selected {
             let text = self.restore_composer.clone().unwrap_or_else(|| self.composer.read(cx).value().to_string());
