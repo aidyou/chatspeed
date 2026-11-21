@@ -188,6 +188,7 @@ fn model_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let slot_config = configs[slot.as_str()].clone();
     let (_group, choices) = model_choices(observer, &slot_config);
     let current = slot_config["model"].as_str().unwrap_or_default().to_owned();
+    let current_provider = slot_config["id"].as_i64();
     let border = cx.theme().border;
     let primary = cx.theme().primary;
     let mut slots = v_flex().w(px(180.)).flex_none().gap(px(2.)).pr_3();
@@ -236,12 +237,12 @@ fn model_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let base = slot_config.clone();
     let has_choices = !choices.is_empty();
     for choice in choices {
-        let selected = current == choice.model;
+        let selected = current == choice.model && current_provider == Some(choice.provider_id);
         let next = apply_model_choice(&base, &choice);
         let mut configs = all_configs.clone();
         configs[slot.as_str()] = next;
         models = models.child(check_row(
-            format!("model-choice-{}", choice.model),
+            format!("model-choice-{}-{}", choice.provider_id, choice.model),
             choice.name,
             String::new(),
             selected,
