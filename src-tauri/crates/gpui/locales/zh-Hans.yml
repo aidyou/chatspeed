@@ -197,6 +197,11 @@ sandbox_refresh: "刷新配置"
 search_sessions: 搜索会话
 select: 请选择工作流会话
 sessions: 工作流会话
+session_delete: "删除会话"
+session_delete_confirm: "确定永久删除此会话吗？"
+session_edit_failed: "无法更新会话"
+session_rename: "重命名会话"
+session_save: "保存"
 sidebar_save_failed: "无法保存侧边栏状态"
 skill_enabled: "启用技能"
 skills_config: "Skills 配置"

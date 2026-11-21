@@ -1064,6 +1064,17 @@ impl Observer {
             && !self.rewind_pending
     }
 
+    fn edit_session(&mut self, session: String, title: Option<String>, cx: &mut Context<Self>) -> bool {
+        if !self.sessions.iter().any(|entry| entry.id == session) {
+            return false;
+        }
+        if self.worker.commands.try_send(Command::EditSession { session, title }).is_ok() {
+            return true;
+        }
+        self.show_toast(ToastKind::Error, t!("session_edit_failed").to_string(), cx);
+        false
+    }
+
     fn confirm_rewind(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_rewind() {
             return;
@@ -1471,6 +1482,16 @@ impl Observer {
 
     /// Clears the window back to an unsent session; the first message creates it.
     fn start_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_new_session(cx);
+        self.restore_draft(window, cx);
+        self.composer.update(cx, |state, cx| {
+            let focus = state.focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn reset_new_session(&mut self, cx: &mut Context<Self>) {
         if self.selected.is_some() {
             self.switch_draft(None, cx);
         }
@@ -1495,12 +1516,6 @@ impl Observer {
         self.timeline_scroll.follow = true;
         self.timeline_scroll.scroll_pending = true;
         self.clear_dir_state();
-        self.restore_draft(window, cx);
-        self.composer.update(cx, |state, cx| {
-            // Typing the first message is the next step, so take the focus there.
-            let focus = state.focus_handle(cx);
-            focus.focus(window, cx);
-        });
         cx.notify();
     }
 
@@ -2126,6 +2141,26 @@ impl Observer {
                         Err(error) => self.show_toast(ToastKind::Error, error, cx),
                     }
                 }
+                UpdateKind::SessionEdited { session, title, result } => match result {
+                    Err(error) => self.show_toast(ToastKind::Error, error, cx),
+                    Ok(()) => {
+                        if let Some(title) = title {
+                            if let Some(entry) = self.sessions.iter_mut().find(|entry| entry.id == session) {
+                                entry.title = title;
+                            }
+                        } else {
+                            self.sessions.retain(|entry| entry.id != session);
+                            self.pending_decisions.remove(&session);
+                            if self.selected.as_ref() == Some(&session) {
+                                self.reset_new_session(cx);
+                                if let Some(id) = self.sessions.first().map(|entry| entry.id.clone()) {
+                                    self.select(id, cx);
+                                }
+                            }
+                            self.drafts.remove(&Some(session));
+                        }
+                    }
+                },
                 UpdateKind::AutomationCreated(result) => {
                     self.automation_pending = false;
                     match result {

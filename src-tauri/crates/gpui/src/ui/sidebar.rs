@@ -675,8 +675,53 @@ fn session_row(
                     )
                 }),
         )
+        .child(session_actions(session, cx))
         .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
         .into_any_element()
+}
+
+fn session_actions(session: &Session, cx: &mut Context<Observer>) -> impl IntoElement {
+    use gpui_kit::component::{button::Button, input::InputState, WindowExt};
+    let rename = session.clone();
+    let delete = session.id.clone();
+    h_flex().justify_end().gap_1()
+        .child(div().id("rename-session").cursor_pointer().child(Icon::new("edit"))
+            .on_click(cx.listener(move |_, _, window, cx| {
+                cx.stop_propagation();
+                if window.has_active_dialog(cx) { return; }
+                let input = cx.new(|cx| {
+                    let mut input = InputState::new(window, cx);
+                    input.set_value(rename.title.clone(), window, cx);
+                    input
+                });
+                let owner = cx.entity().downgrade();
+                let id = rename.id.clone();
+                window.open_dialog(cx, move |dialog, _, _| {
+                    let (field, owner, id) = (input.clone(), owner.clone(), id.clone());
+                    dialog.title(t!("session_rename").to_string()).child(Input::new(&input)).footer(
+                        Button::new("save-session-title").label(t!("session_save").to_string()).on_click(move |_, window, cx| {
+                            let title = field.read(cx).value().trim().to_owned();
+                            if owner.update(cx, |this, cx| this.edit_session(id.clone(), Some(title), cx)).unwrap_or(false) {
+                                window.close_dialog(cx);
+                            }
+                        })
+                    )
+                });
+            })))
+        .child(div().id("delete-session").cursor_pointer().child(Icon::new("delete"))
+            .on_click(cx.listener(move |_, _, window, cx| {
+                cx.stop_propagation();
+                let id = delete.clone();
+                let answer = window.prompt(PromptLevel::Warning, &t!("session_delete"), Some(&t!("session_delete_confirm")), &[
+                    PromptButton::cancel(t!("action_cancel").to_string()),
+                    PromptButton::new(t!("session_delete").to_string()),
+                ], cx);
+                cx.spawn(async move |owner, cx| {
+                    if answer.await.ok() == Some(1) {
+                        let _ = owner.update(cx, |this, cx| this.edit_session(id, None, cx));
+                    }
+                }).detach();
+            })))
 }
 
 fn empty_tab(message: String, cx: &mut Context<Observer>) -> AnyElement {

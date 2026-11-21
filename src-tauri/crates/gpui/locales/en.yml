@@ -197,6 +197,11 @@ sandbox_refresh: "Refresh configuration"
 search_sessions: Search conversations
 select: Select a workflow session
 sessions: Workflow sessions
+session_delete: "Delete session"
+session_delete_confirm: "Permanently delete this session?"
+session_edit_failed: "Could not update the session"
+session_rename: "Rename session"
+session_save: "Save"
 sidebar_save_failed: "Could not save the sidebar preference"
 skill_enabled: "Enable skills"
 skills_config: "Skills configuration"

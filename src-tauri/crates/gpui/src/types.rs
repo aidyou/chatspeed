@@ -206,6 +206,10 @@ pub enum Command {
         generation: u64,
         session: String,
     },
+    EditSession {
+        session: String,
+        title: Option<String>,
+    },
     CreateAutomation(Value),
     Stop {
         id: String,
@@ -317,6 +321,11 @@ pub enum UpdateKind {
     },
     TodayCost(f64),
     Rewound(Result<bool, String>),
+    SessionEdited {
+        session: String,
+        title: Option<String>,
+        result: Result<(), String>,
+    },
     AutomationCreated(Result<(), String>),
     Sessions(Vec<Session>),
     Snapshot(Page),

@@ -415,6 +415,21 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     return;
                 }
             }
+            Command::EditSession { session, title } => {
+                let (command, payload) = match &title {
+                    Some(title) => ("update_workflow_title", json!({"session_id": session, "title": title})),
+                    None => ("delete_workflow", json!({"session_id": session})),
+                };
+                let result = native::workflow_command(
+                    &options,
+                    command,
+                    payload,
+                    Some(&idempotency_key(command)),
+                ).await.map(|_| ());
+                if !send(&tx, 0, UpdateKind::SessionEdited { session, title, result }).await {
+                    return;
+                }
+            }
             Command::CreateAutomation(spec) => {
                 let result = match native::connect(&options).await {
                     Some(client) => client
