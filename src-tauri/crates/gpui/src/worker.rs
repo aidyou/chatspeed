@@ -14,6 +14,26 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
+fn decode_rewind_response(value: Value) -> Result<bool, String> {
+    #[derive(serde::Deserialize)]
+    struct Response {
+        deleted: bool,
+    }
+
+    serde_json::from_value::<Response>(value)
+        .map(|response| response.deleted)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+#[test]
+fn rewind_response_uses_runtime_deleted_field() {
+    assert_eq!(decode_rewind_response(json!({"deleted": true})), Ok(true));
+    assert_eq!(decode_rewind_response(json!({"deleted": false})), Ok(false));
+    assert!(decode_rewind_response(json!({})).is_err());
+    assert!(decode_rewind_response(json!({"deleted": "true"})).is_err());
+}
+
 /// Owns shutdown: dropping the window cancels all network futures and joins its thread.
 pub struct Worker {
     pub commands: mpsc::Sender<Command>,
@@ -390,7 +410,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key("rewind")),
                 )
                 .await
-                .and_then(|value| serde_json::from_value(value).map_err(|e| e.to_string()));
+                .and_then(decode_rewind_response);
                 if !send(&tx, generation, UpdateKind::Rewound(result)).await {
                     return;
                 }
