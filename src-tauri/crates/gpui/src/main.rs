@@ -2308,12 +2308,7 @@ impl Observer {
                         UpdateKind::Reset => self.child_model.reset_live(),
                         _ => continue,
                     }
-                    let mut messages: Vec<_> = self.child_model.messages.values().cloned().collect();
-                    if !self.child_model.live.message.is_empty()
-                        || self.child_model.live.reasoning.as_deref().is_some_and(|text| !text.is_empty())
-                    {
-                        messages.push(self.child_model.live.clone());
-                    }
+                    let messages = Self::transcript_for(&self.child_model);
                     self.child_rows.insert(id, presentation::project(messages, &self.child_model.roots));
                     cx.notify();
                     continue;
@@ -2685,16 +2680,20 @@ impl Observer {
 
     /// Durable rows plus the transient live message and live tool lifecycle state.
     fn transcript(&self) -> Vec<Message> {
-        let mut messages: Vec<Message> = self.model.visible().cloned().collect();
-        messages.extend(self.model.pending_turns.iter().cloned());
-        if !self.model.live.message.is_empty() || self.model.live.reasoning.is_some() {
-            let mut live = self.model.live.clone();
+        Self::transcript_for(&self.model)
+    }
+
+    fn transcript_for(model: &Model) -> Vec<Message> {
+        let mut messages: Vec<Message> = model.visible().cloned().collect();
+        messages.extend(model.pending_turns.iter().cloned());
+        if !model.live.message.is_empty() || model.live.reasoning.is_some() {
+            let mut live = model.live.clone();
             live.id = -1;
             live.role = "assistant".into();
             messages.push(live);
         }
-        for id in &self.model.tool_order {
-            let Some(tool) = self.model.tools.get(id) else {
+        for id in &model.tool_order {
+            let Some(tool) = model.tools.get(id) else {
                 continue;
             };
             if messages
