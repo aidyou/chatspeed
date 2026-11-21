@@ -39,6 +39,26 @@ pub fn trigger(text: &str, caret: usize) -> Option<Trigger> {
             });
         }
     }
+    if let Some(index) = head.rmatch_indices("@\"").find_map(|(index, _)| {
+        (index == 0 || head[..index].ends_with(char::is_whitespace)).then_some(index)
+    }) {
+        let query_start = index + 2;
+        let mut escaped = false;
+        let closing = text[query_start..].char_indices().find_map(|(offset, ch)| {
+            if escaped {
+                escaped = false;
+                return None;
+            }
+            escaped = ch == '\\';
+            (ch == '"').then_some(query_start + offset)
+        });
+        if closing.is_none_or(|closing| caret <= closing) {
+            return Some(Trigger::File {
+                query: head[query_start..].replace("\\\"", "\""),
+                range: index..closing.map_or(caret, |closing| closing + 1),
+            });
+        }
+    }
     let index = head.rfind('@')?;
     if head[..index]
         .chars()
@@ -599,6 +619,19 @@ mod tests {
         ));
         assert!(matches!(trigger("open @src/main.rs "), None));
         assert!(trigger("user@host").is_none());
+    }
+
+    #[test]
+    fn quoted_completion_replaces_the_whole_reference_but_not_the_suffix() {
+        let text = r#"open @"src/my file.rs" then continue"#;
+        let caret = "open @\"src/my fi".len();
+        let Some(Trigger::File { query, range }) = at_caret(text, caret) else {
+            panic!("expected quoted path completion");
+        };
+        assert_eq!(query, "src/my fi");
+        assert_eq!(&text[range], r#"@"src/my file.rs""#);
+        assert!(trigger(r#"open @"src/my file.rs""#).is_none());
+        assert!(matches!(trigger("open @\"src/my fi"), Some(Trigger::File { query, .. }) if query == "src/my fi"));
     }
 
     #[test]
