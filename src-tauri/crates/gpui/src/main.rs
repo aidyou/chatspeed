@@ -2359,7 +2359,10 @@ impl Observer {
                             continue;
                         }
                         UpdateKind::Event(event) => self.child_model.event(event),
-                        UpdateKind::Reset => self.child_model.reset_live(),
+                        UpdateKind::Reset => {
+                            self.child_connected = Some(false);
+                            self.child_model.reset_live();
+                        }
                         _ => continue,
                     }
                     let messages = Self::transcript_for(&self.child_model);
