@@ -151,6 +151,7 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
     std::fs::write(&discovery, json!({"protocol_version":"1","server_instance_id":"mock","pid":std::process::id(),"host":"127.0.0.1","port":port,"token":"fixture","started_at":"fixture"}).to_string()).unwrap();
     let done = Arc::new(AtomicBool::new(false));
     let done_server = done.clone();
+    let (saved_tx, saved_rx) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         let mut held_streams = Vec::new();
         let mut streams = 0;
@@ -191,6 +192,9 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                 // A stalled settings response must not hold up the first sidebar list.
                 held_streams.push(socket);
                 continue;
+            } else if path == "/control/v1/data-commands/set_config" {
+                saved_tx.send(()).unwrap();
+                ("application/json", "null".to_owned())
             } else if path == "/control/v1/workflows" {
                 (
                     "application/json",
@@ -337,10 +341,14 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+    assert!(worker.save_sidebar(false));
+    assert!(worker.save_sidebar(true));
     drop(worker);
+    let saved_on_close = saved_rx.try_recv().is_ok();
     done.store(true, Ordering::Relaxed);
     server.join().unwrap();
     std::fs::remove_file(discovery).unwrap();
+    assert!(saved_on_close, "normal shutdown must drain the pending sidebar save");
     assert!(
         listed,
         "sidebar list must arrive while settings are stalled"

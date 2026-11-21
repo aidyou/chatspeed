@@ -120,7 +120,7 @@ pub(crate) fn thought(
                 .hover(|style| style.bg(cx.theme().muted))
                 .child({
                     let bulb = Icon::new("reasoning").size(14.).color(muted);
-                    if live {
+                    if live && !open {
                         bulb.spin("thought-spin", crate::ui::icon::Spin::Linear)
                     } else {
                         bulb

@@ -18,11 +18,16 @@ use tokio::sync::{mpsc, watch};
 pub struct Worker {
     pub commands: mpsc::Sender<Command>,
     pub updates: mpsc::Receiver<Update>,
+    sidebar_collapsed: Option<watch::Sender<Option<bool>>>,
     stop: watch::Sender<bool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Worker {
+    pub fn save_sidebar(&self, collapsed: bool) -> bool {
+        self.sidebar_collapsed.as_ref().is_some_and(|tx| tx.send(Some(collapsed)).is_ok())
+    }
+
     pub fn start(options: Options) -> std::io::Result<Self> {
         if let Some(path) = &options.metrics {
             crate::metrics::Metrics::prepare(path)?;
@@ -35,6 +40,9 @@ impl Worker {
         let (commands, rx) = mpsc::channel(16);
         let (tx, updates) = mpsc::channel(128);
         let (stop, mut stopped) = watch::channel(false);
+        let (sidebar_collapsed, mut sidebar) = watch::channel(None);
+        let prefs_options = options.clone();
+        let prefs_tx = tx.clone();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -42,16 +50,35 @@ impl Worker {
             .name("gpui-io".into())
             .spawn(move || {
                 runtime.block_on(async move {
+                    let writer = tokio::spawn(async move {
+                        while sidebar.changed().await.is_ok() {
+                            let value = *sidebar.borrow_and_update();
+                            if let Some(collapsed) = value.filter(|_| !prefs_options.demo) {
+                                let result = tokio::time::timeout(Duration::from_secs(2), native::data_command(
+                                    &prefs_options, "set_config",
+                                    json!({"key": "gpui_workflow_sidebar_collapsed", "value": collapsed}),
+                                )).await;
+                                if !matches!(result, Ok(Ok(_))) {
+                                    let _ = prefs_tx.try_send(Update {
+                                        generation: 0, queued: Instant::now(), queue_depth: 0,
+                                        kind: UpdateKind::Error(rust_i18n::t!("sidebar_save_failed").into_owned()),
+                                    });
+                                }
+                            }
+                        }
+                    });
                     tokio::select! {
                         _ = stopped.changed() => {},
                         _ = coordinate(options, rx, tx) => {},
                     }
+                    let _ = writer.await;
                 });
                 // Runtime drop cancels every selected-session and list task as well.
             })?;
         Ok(Self {
             commands,
             updates,
+            sidebar_collapsed: Some(sidebar_collapsed),
             stop,
             thread: Some(thread),
         })
@@ -60,6 +87,7 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
+        self.sidebar_collapsed.take();
         let _ = self.stop.send(true);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -218,27 +246,6 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 };
                 if !accepted && !send(&tx, 0, UpdateKind::DesktopMenuUnavailable).await {
                     return;
-                }
-            }
-            Command::SetSidebarCollapsed(collapsed) => {
-                if !options.demo
-                    && native::data_command(
-                        &options,
-                        "set_config",
-                        json!({"key": "gpui_workflow_sidebar_collapsed", "value": collapsed}),
-                    )
-                    .await
-                    .is_err()
-                {
-                    if !send(
-                        &tx,
-                        0,
-                        UpdateKind::Error(rust_i18n::t!("sidebar_save_failed").into_owned()),
-                    )
-                    .await
-                    {
-                        return;
-                    }
                 }
             }
             Command::SetSound { chime, muted } => {
@@ -521,24 +528,14 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
-            Command::SetModelConfig { session, configs } => {
+            Command::SetModelConfig { generation, session, configs } => {
                 if options.demo {
                     continue;
                 }
                 let command = "update_workflow_model_config";
                 let params = json!({"session_id": session, "configs": configs});
-                let result = native::workflow_command(
-                    &options,
-                    command,
-                    params,
-                    Some(&idempotency_key(command)),
-                )
-                .await;
-                if let Err(error) = result {
-                    if !send(&tx, 0, UpdateKind::Error(error)).await {
-                        return;
-                    }
-                }
+                let result = native::workflow_command(&options, command, params, Some(&idempotency_key(command))).await;
+                if !send(&tx, generation, UpdateKind::ModelsSaved(result.map(|_| configs))).await { return; }
             }
             Command::SetSandbox {
                 session,
@@ -567,32 +564,11 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
-            Command::ClearContext { session } => {
-                if options.demo {
-                    continue;
-                }
+            Command::ClearContext { generation, session } => {
+                if options.demo { continue; }
                 let command = "workflow_begin_new_context_frame";
-                let params = json!({"session_id": session});
-                let result = native::workflow_command(
-                    &options,
-                    command,
-                    params,
-                    Some(&idempotency_key(command)),
-                )
-                .await;
-                match result {
-                    Ok(_) => {
-                        let toast = rust_i18n::t!("clear_context_frame_done").to_string();
-                        if !send(&tx, 0, UpdateKind::Toast(toast)).await {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        if !send(&tx, 0, UpdateKind::Error(error)).await {
-                            return;
-                        }
-                    }
-                }
+                let result = native::workflow_command(&options, command, json!({"session_id":session}), Some(&idempotency_key(command))).await;
+                if !send(&tx, generation, UpdateKind::ContextCleared(result)).await { return; }
             }
             Command::SetAutoCompress { session, enabled } => {
                 if options.demo {

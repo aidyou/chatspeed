@@ -182,6 +182,7 @@ fn check_row(
 
 /// Switches between the model slots on the left and the models on the right.
 fn model_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+    let generation = observer.model.generation;
     let configs = observer.model_configs();
     let slot = observer.model_config_slot.clone();
     let slot_config = configs[slot.as_str()].clone();
@@ -245,13 +246,10 @@ fn model_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             String::new(),
             selected,
             cx.listener(move |this, _, _, cx| {
-                if let Some(session) = this.selected.clone() {
-                    let _ = this.worker.commands.try_send(Command::SetModelConfig {
-                        session,
-                        configs: configs.clone(),
-                    });
+                if this.model.accepts(generation) && this.models_pending.is_none() {
+                    this.save_models(configs.clone(), cx);
+                    this.close_quick_panel(cx);
                 }
-                this.close_quick_panel(cx);
             }),
             cx,
         ));

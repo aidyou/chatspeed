@@ -443,6 +443,10 @@ fn model_selector(
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
+    if observer.models_pending.is_some() || observer.options.demo {
+        return trigger_el;
+    }
+    let generation = observer.model.generation;
     let config = observer.active_model_config();
     let slot = if observer.planning_mode {
         "plan"
@@ -482,13 +486,10 @@ fn model_selector(
                     is_selected,
                     move |_, window, cx| {
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        observer_entity.update(cx, |this, _| {
-                            let _ = this.worker.commands.try_send(
-                                chatspeed_gpui::types::Command::SetModelConfig {
-                                    session: session.clone(),
-                                    configs: configs.clone(),
-                                },
-                            );
+                        observer_entity.update(cx, |this, cx| {
+                            if this.model.accepts(generation) && this.selected.as_ref() == Some(&session) {
+                                this.save_models(configs.clone(), cx);
+                            }
                         });
                     },
                     OptionColors::new(cx),
@@ -1121,7 +1122,7 @@ fn clear_context(
     muted: Hsla,
     cx: &mut Context<Observer>,
 ) -> AnyElement {
-    let enabled = observer.selected.is_some() && !observer.workflow_running();
+    let enabled = observer.can_clear_context() && !observer.clear_pending && !observer.options.demo;
     let color = if enabled { muted } else { muted.opacity(0.4) };
     div()
         .id("composer-clear-context")

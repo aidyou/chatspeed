@@ -22,6 +22,7 @@ Usage: python3 scripts/build_gpui_icon_font.py
 from pathlib import Path
 
 from fontTools.misc.transform import Transform
+from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont
@@ -95,12 +96,29 @@ def check_horizontal_origins(source, native):
         assert native["hmtx"].metrics[name] == expected, f"pen origin moved for {name}"
 
 
+def export_rotatable_icons(font):
+    # GPUI transforms SVG sprites, not text. Use the exact Vue font outlines.
+    glyphs = font.getGlyphSet()
+    em = font['head'].unitsPerEm
+    ascent = font['hhea'].ascent
+    descent = font['hhea'].descent
+    for name, code in [('reasoning', 0xE64C), ('loading', 0xE891), ('pin', 0xE755)]:
+        glyph = glyphs[font.getBestCmap()[code]]
+        pen = SVGPathPen(glyphs)
+        glyph.draw(TransformPen(pen, (1, 0, 0, -1, (em - glyph.width) / 2, (em + ascent + descent) / 2)))
+        (TARGET.parent / f'vue-{name}.svg').write_text(
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {em} {em}"><path d="{pen.getCommands()}"/></svg>\n',
+            encoding='utf-8',
+        )
+
+
 def main():
     font = TTFont(SOURCE, recalcTimestamp=False)
+    TARGET.parent.mkdir(parents=True, exist_ok=True)
+    export_rotatable_icons(font)
     preserve_horizontal_origins(font)
     add_latin_m(font)
     add_mirrored_arrow(font)
-    TARGET.parent.mkdir(parents=True, exist_ok=True)
     font.save(TARGET)
 
     with TTFont(SOURCE) as source, TTFont(TARGET) as check:

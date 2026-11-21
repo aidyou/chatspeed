@@ -10,9 +10,9 @@ use gpui_kit::*;
 
 use crate::icons;
 
-const REASONING_BULB: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6m-5 3h4M9 15c0-2-3-3-3-7a6 6 0 0 1 12 0c0 4-3 5-3 7z"/></svg>"#;
-
-const PIN: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3h8l-1 7 4 5v2H5v-2l4-5-1-7zm4 14v5"/></svg>"#;
+const REASONING_BULB: &[u8] = include_bytes!("../../assets/vue-reasoning.svg");
+const LOADING: &[u8] = include_bytes!("../../assets/vue-loading.svg");
+const PIN: &[u8] = include_bytes!("../../assets/vue-pin.svg");
 
 pub(crate) struct IconAssets;
 
@@ -20,6 +20,7 @@ impl AssetSource for IconAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         match path {
             "icons/reasoning-lightbulb.svg" => Ok(Some(Cow::Borrowed(REASONING_BULB))),
+            "icons/vue-loading.svg" => Ok(Some(Cow::Borrowed(LOADING))),
             "icons/chatspeed-pin.svg" => Ok(Some(Cow::Borrowed(PIN))),
             _ => gpui_kit::assets::Assets.load(path),
         }
@@ -27,7 +28,7 @@ impl AssetSource for IconAssets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
-        for asset in ["icons/reasoning-lightbulb.svg", "icons/chatspeed-pin.svg"] {
+        for asset in ["icons/reasoning-lightbulb.svg", "icons/vue-loading.svg", "icons/chatspeed-pin.svg"] {
             if asset.starts_with(path) {
                 paths.push(asset.into());
             }
@@ -43,7 +44,7 @@ mod tests {
 
     #[test]
     fn animated_icons_are_available_with_the_default_assets() {
-        for path in ["icons/reasoning-lightbulb.svg", "icons/loader-circle.svg"] {
+        for path in ["icons/reasoning-lightbulb.svg", "icons/vue-loading.svg"] {
             let svg = IconAssets.load(path).unwrap().unwrap();
             assert!(svg.starts_with(b"<svg"), "{path}");
         }
@@ -152,11 +153,12 @@ impl RenderOnce for Icon {
             .size
             .unwrap_or_else(|| f32::from(inherited.font_size.to_pixels(window.rem_size())));
         let color = self.color.unwrap_or(inherited.color);
-        // GPUI transforms SVGs, but not text glyphs. Static icons still use the font.
+        // GPUI only transforms SVG sprites; the rotating sprites are exported
+        // from the same font used for the static glyphs.
         let animated_path = match self.name {
-            "reasoning" => Some("icons/reasoning-lightbulb.svg"),
-            "loading" => Some("icons/loader-circle.svg"),
-            "pin" => Some("icons/chatspeed-pin.svg"),
+            "reasoning" if self.spin.is_some() => Some("icons/reasoning-lightbulb.svg"),
+            "loading" if self.spin.is_some() => Some("icons/vue-loading.svg"),
+            "pin" if self.turns != 0. => Some("icons/chatspeed-pin.svg"),
             _ => None,
         };
         if let Some(path) = animated_path {
@@ -166,16 +168,14 @@ impl RenderOnce for Icon {
                 .flex_none()
                 .text_color(color);
             if let Some((id, curve)) = self.spin {
-                let period = match curve {
-                    Spin::Linear => 2000,
-                    Spin::Eased => 1000,
+                let seconds = match curve {
+                    Spin::Linear => 2,
+                    Spin::Eased => 1,
                 };
                 return icon
                     .with_animation(
                         id,
-                        Animation::new(Duration::from_millis(period))
-                            .repeat_synced()
-                            .with_max_fps(30.),
+                        Animation::new(Duration::from_secs(seconds)).repeat(),
                         move |icon, phase| {
                             icon.with_transformation(Transformation::rotate(percentage(
                                 curve.phase(phase),

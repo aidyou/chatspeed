@@ -14,7 +14,6 @@ pub struct Model {
     pub messages: BTreeMap<i64, Message>,
     pub live: Message,
     pub tools: BTreeMap<String, Value>,
-    pub tool_output: BTreeMap<String, String>,
     pub tool_order: Vec<String>,
     pub before: Option<String>,
     pub hidden: usize,
@@ -66,6 +65,21 @@ impl Model {
             ..Self::default()
         };
         generation
+    }
+
+    pub fn apply_context_clear(&mut self, response: &Value) -> bool {
+        let Ok(marker) = serde_json::from_value::<Message>(response["markerMessage"].clone()) else { return false; };
+        if marker.id <= 0 || marker.role != "system" || marker.message_kind != "summary"
+            || marker.message_subtype.as_deref() != Some("manual_clear_context") { return false; }
+        self.messages.insert(marker.id, marker);
+        self.state = response["state"].as_str().unwrap_or("pending").to_owned();
+        self.has_live_session = response["hasLiveSession"].as_bool().unwrap_or(false);
+        self.wait_reason.clear();
+        self.pending_tool_ids.clear();
+        self.awaiting_user_tool_call_id = None;
+        self.live = Message::default();
+        self.live_overflow = false;
+        true
     }
 
     pub fn can_stop(&self) -> bool {
@@ -354,7 +368,12 @@ impl Model {
                         self.live = Message::default();
                         self.live_overflow = false;
                     }
-                    self.messages.insert(id, row);
+                    // A partial SSE message must not replace the typed clear marker.
+                    if !self.messages.get(&id).is_some_and(|existing| {
+                        existing.message_subtype.as_deref() == Some("manual_clear_context")
+                    }) {
+                        self.messages.insert(id, row);
+                    }
                 }
             }
             "confirm" | "approval_requested" => {
@@ -391,20 +410,9 @@ impl Model {
                     }
                 }
             }
-            "tool_stream" => {
-                if let (Some(id), Some(output)) = (event["tool_id"].as_str(), event["output"].as_str()) {
-                    if !self.tool_output.contains_key(id) && self.tool_output.len() >= 32 { return; }
-                    let buffer = self.tool_output.entry(id.to_owned()).or_default();
-                    buffer.push_str(output);
-                    let mut trim = buffer.len().saturating_sub(16 * 1024);
-                    while !buffer.is_char_boundary(trim) { trim += 1; }
-                    buffer.drain(..trim);
-                }
-            }
             "tool_started" | "tool_completed" | "tool_failed" => {
                 if let Some(id) = event["tool_call_id"].as_str() {
                     self.pending_tool_ids.remove(id);
-                    if kind != "tool_started" { self.tool_output.remove(id); }
                     self.tool_order.retain(|id| self.tools.contains_key(id));
                     if !self.tools.contains_key(id) {
                         self.tool_order.push(id.to_owned());
@@ -496,6 +504,23 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_receipt_installs_one_durable_marker_before_snapshot() {
+        let mut model = Model::default();
+        model.messages.insert(1, Message { id: 1, ..Message::default() });
+        let id = 9_007_199_254_740_993_i64;
+        let receipt = json!({"state":"pending","hasLiveSession":false,"markerMessage": {
+            "id":id,"role":"system","messageKind":"summary","messageSubtype":"manual_clear_context"
+        }});
+        assert!(!model.apply_context_clear(&json!({"markerMessage":null})));
+        assert!(model.apply_context_clear(&receipt));
+        model.event(json!({"type":"message","message_id":id,"role":"system"}));
+        let marker = model.messages[&id].clone();
+        assert_eq!(marker.message_subtype.as_deref(), Some("manual_clear_context"));
+        model.page(Page { messages: vec![marker], ..Page::default() }, false);
+        assert_eq!(model.messages.len(), 2);
+    }
 
     #[test]
     fn queue_snapshot_and_live_events_converge_without_creating_history_rows() {

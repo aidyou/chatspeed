@@ -169,7 +169,6 @@ pub enum Command {
         session: String,
         tool_ids: Vec<String>,
     },
-    SetSidebarCollapsed(bool),
     SetSound {
         chime: crate::chimes::Chime,
         muted: bool,
@@ -229,6 +228,7 @@ pub enum Command {
     },
     /// Replaces the workflow's per-slot model configs.
     SetModelConfig {
+        generation: u64,
         session: String,
         configs: Value,
     },
@@ -240,6 +240,7 @@ pub enum Command {
     },
     /// Starts a new context frame so later turns ignore earlier history.
     ClearContext {
+        generation: u64,
         session: String,
     },
     /// Toggles automatic rollup compression for the workflow.
@@ -337,7 +338,8 @@ pub enum UpdateKind {
     /// A user-action failure worth showing above the composer.
     Error(String),
     /// A user-action success worth showing above the composer.
-    Toast(String),
+    ContextCleared(Result<Value, String>),
+    ModelsSaved(Result<Value, String>),
     /// Agent, model and skill catalogues for the composer selectors.
     Catalogue {
         agents: Vec<Value>,

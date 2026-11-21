@@ -424,6 +424,9 @@ struct Observer {
     sidebar_collapsed: bool,
     sidebar_changed: bool,
     pending_settings: BTreeMap<(String, &'static str), (bool, Option<Instant>)>,
+    models_saved_at: Option<Instant>,
+    models_pending: Option<Value>,
+    clear_pending: bool,
     send_with_shift: bool,
     /// Tab shown in the expanded sidebar, and the rail entry that selects it.
     sidebar_tab: ui::sidebar::SidebarTab,
@@ -665,6 +668,9 @@ impl Observer {
             sidebar_collapsed: false,
             sidebar_changed: false,
             pending_settings: BTreeMap::new(),
+            models_saved_at: None,
+            models_pending: None,
+            clear_pending: false,
             send_with_shift: false,
             sidebar_tab: ui::sidebar::SidebarTab::Tasks,
             rail_tab: ui::sidebar::RailTab::Tasks,
@@ -773,6 +779,9 @@ impl Observer {
             self.switch_draft(Some(id), cx);
         }
         self.model.select();
+        self.models_saved_at = None;
+        self.models_pending = None;
+        self.clear_pending = false;
         self.active_child = None;
         self.child_pending.clear();
         self.child_rows.clear();
@@ -827,12 +836,7 @@ impl Observer {
         }
         self.sidebar_collapsed = collapsed;
         self.sidebar_changed = true;
-        if self
-            .worker
-            .commands
-            .try_send(Command::SetSidebarCollapsed(collapsed))
-            .is_err()
-        {
+        if !self.worker.save_sidebar(collapsed) {
             self.show_toast(
                 ToastKind::Warning,
                 t!("sidebar_save_failed").into_owned(),
@@ -1146,7 +1150,7 @@ impl Observer {
 
     /// The model slot the composer edits: Vue uses `plan` in planning mode.
     fn active_model_config(&self) -> serde_json::Value {
-        let models = self.agent_config()["models"].clone();
+        let models = self.model_configs();
         let slots: [&str; 2] = if self.planning_mode {
             ["plan", "act"]
         } else {
@@ -1163,8 +1167,28 @@ impl Observer {
         serde_json::json!({})
     }
 
+    fn save_models(&mut self, configs: Value, cx: &mut Context<Self>) {
+        if self.models_pending.is_some() || self.options.demo {
+            return;
+        }
+        let Some(session) = self.selected.clone() else {
+            return;
+        };
+        match self.worker.commands.try_send(Command::SetModelConfig {
+            generation: self.model.generation,
+            session,
+            configs: configs.clone(),
+        }) {
+            Ok(()) => self.models_pending = Some(configs),
+            Err(error) => self.show_toast(ToastKind::Error, error.to_string(), cx),
+        }
+        cx.notify();
+    }
+
     fn model_configs(&self) -> serde_json::Value {
-        self.agent_config()["models"].clone()
+        self.models_pending
+            .clone()
+            .unwrap_or_else(|| self.agent_config()["models"].clone())
     }
 
     /// Provider id of the active model: `0` means a ChatSpeed proxy alias.
@@ -1390,13 +1414,16 @@ impl Observer {
             cx.notify();
             return;
         };
+        if self.clear_pending || self.options.demo || !self.can_clear_context() { return; }
         if self
             .worker
             .commands
-            .try_send(Command::ClearContext { session })
+            .try_send(Command::ClearContext { generation: self.model.generation, session })
             .is_err()
         {
             self.show_toast(ToastKind::Error, t!("clear_context_failed").to_string(), cx);
+        } else {
+            self.clear_pending = true;
         }
         cx.notify();
     }
@@ -1416,6 +1443,9 @@ impl Observer {
         }
         self.rewind_pending = false;
         self.model.select();
+        self.models_saved_at = None;
+        self.models_pending = None;
+        self.clear_pending = false;
         self.active_child = None;
         self.child_pending.clear();
         self.child_rows.clear();
@@ -2135,8 +2165,33 @@ impl Observer {
                     self.tools = tools;
                     cx.notify();
                 }
-                UpdateKind::Toast(message) => {
-                    self.show_toast(ToastKind::Success, message, cx);
+                UpdateKind::ContextCleared(result) => {
+                    self.clear_pending = false;
+                    match result {
+                        Ok(value) => {
+                            if self.model.apply_context_clear(&value) && value["noop"] != true {
+                                self.timeline_scroll.scroll_pending = self.timeline_scroll.follow;
+                                self.show_toast(
+                                    ToastKind::Success,
+                                    t!("clear_context_frame_done").into_owned(),
+                                    cx,
+                                );
+                            }
+                        }
+                        Err(error) => self.show_toast(ToastKind::Error, error, cx),
+                    }
+                }
+                UpdateKind::ModelsSaved(result) => {
+                    self.models_pending = None;
+                    match result {
+                        Ok(models) => {
+                            let mut config = self.agent_config();
+                            config["models"] = models;
+                            self.model.workflow["agent_config"] = config;
+                            self.models_saved_at = Some(update.queued);
+                        }
+                        Err(error) => self.show_toast(ToastKind::Error, error, cx),
+                    }
                 }
                 UpdateKind::Files { request, files } => {
                     if self
@@ -2180,6 +2235,8 @@ impl Observer {
                     }
                 }
                 UpdateKind::Snapshot(page) => {
+                    let preserve_models = self.models_saved_at.is_some_and(|at| page.fetched_from.is_none_or(|start| start <= at));
+                    let saved_models = preserve_models.then(|| self.agent_config()["models"].clone());
                     if let (Some(session), Some(fetched_from)) =
                         (self.selected.as_ref(), page.fetched_from)
                     {
@@ -2188,6 +2245,13 @@ impl Observer {
                         });
                     }
                     self.model.page(page, false);
+                    if let Some(models) = saved_models {
+                        let mut config = self.agent_config();
+                        config["models"] = models;
+                        self.model.workflow["agent_config"] = config;
+                    } else {
+                        self.models_saved_at = None;
+                    }
                     self.sync_planning_mode();
                     self.auto_expand_first_root(cx);
                     if let Some(start) = self.switched.take() {
@@ -2866,17 +2930,6 @@ impl Observer {
 
     fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
         let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
-        if let Some(output) = self.model.tool_output.get(&tool.tool_call_id).filter(|text| !text.is_empty()) {
-            detail = detail.child(div().id("tool-stream-output").max_h(px(200.)).overflow_y_scroll()
-                .rounded(px(6.)).bg(cx.theme().muted).p_2().font_family(MONO_FONT)
-                .text_size(px(12.)).child(output.clone()));
-        } else if tool.status == presentation::ToolStatus::Running {
-            detail = detail.child(h_flex().child(ui::running_badge(
-                t!("executing").to_string(),
-                SharedString::from(format!("{}:running", tool.detail_key)),
-                cx,
-            )));
-        }
         let answered =
             self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool);
         let answering = self.ask_user_active(tool) && !answered;
@@ -2988,6 +3041,18 @@ impl Observer {
         }
         if !tool.detail.is_empty() {
             detail = detail.child(self.markdown_view(&tool.detail_key));
+        }
+        if tool.status == presentation::ToolStatus::Running {
+            let primary = cx.theme().primary;
+            detail = detail.child(
+                h_flex().items_center().gap_1().py_2().px(px(20.)).text_size(px(12.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Icon::new("loading").size(14.).color(primary).spin(
+                        SharedString::from(format!("{}:running", tool.detail_key)),
+                        ui::Spin::Eased,
+                    ))
+                    .child(t!("executing").into_owned()),
+            );
         }
         detail.into_any_element()
     }

@@ -7,7 +7,7 @@ mod icon;
 mod menu_popover;
 
 pub use icon::Icon;
-pub(crate) use icon::IconAssets;
+pub(crate) use icon::{IconAssets, Spin};
 
 /// A compact label next to an icon. Keep its optical adjustment out of the row layout.
 #[derive(IntoElement)]
