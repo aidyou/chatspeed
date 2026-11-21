@@ -490,6 +490,7 @@ struct Observer {
     /// Child transcripts requested but not loaded yet.
     child_epoch: u64,
     child_model: Model,
+    child_markdown: BTreeMap<String, (String, Entity<TextViewState>)>,
     child_connected: Option<bool>,
     child_pending: BTreeSet<String>,
     /// Agents, model providers and skills the composer selectors list.
@@ -736,6 +737,7 @@ impl Observer {
             ask_user_text: BTreeMap::new(),
             child_epoch: 0,
             child_model: Model::default(),
+            child_markdown: BTreeMap::new(),
             child_connected: None,
             child_pending: BTreeSet::new(),
             agents: Vec::new(),
@@ -2310,6 +2312,7 @@ impl Observer {
                     }
                     let messages = Self::transcript_for(&self.child_model);
                     self.child_rows.insert(id, presentation::project(messages, &self.child_model.roots));
+                    self.refresh_child_markdown(cx);
                     cx.notify();
                     continue;
                 }
@@ -3318,6 +3321,33 @@ impl Observer {
         sub_agent_card(card, details, on_toggle, cx)
     }
 
+    fn refresh_child_markdown(&mut self, cx: &mut Context<Self>) {
+        let rows = self.child_rows.values().flatten().filter_map(|row| match row {
+            Row::Assistant(view) if !view.markdown.is_empty() => Some((&view.key, &view.markdown)),
+            _ => None,
+        });
+        let mut next = BTreeMap::new();
+        for (key, text) in rows {
+            let entity = match self.child_markdown.remove(key) {
+                Some((previous, entity)) => {
+                    if previous != *text {
+                        entity.update(cx, |state, cx| {
+                            if let Some(delta) = text.strip_prefix(previous.as_str()) {
+                                state.push_str(delta, cx);
+                            } else {
+                                state.set_text(text, cx);
+                            }
+                        });
+                    }
+                    entity
+                }
+                None => cx.new(|cx| TextViewState::markdown(text, cx)),
+            };
+            next.insert(key.clone(), (text.clone(), entity));
+        }
+        self.child_markdown = next;
+    }
+
     fn child_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let card = self.active_child.as_ref()?;
         let id = card.task_id.as_ref()?;
@@ -3333,7 +3363,9 @@ impl Observer {
                             .when_some(view.reasoning.as_deref().filter(|text| !text.is_empty()), |row, text| {
                                 row.child(plain_text(text, cx.theme().muted_foreground))
                             })
-                            .when(!view.markdown.is_empty(), |row| row.child(plain_text(&view.markdown, foreground)))
+                            .when_some(self.child_markdown.get(&view.key), |row, (_, state)| {
+                                row.child(TextView::new(state).selectable(true))
+                            })
                             .into_any_element());
                     }
                     Row::User(view) => &view.text,
