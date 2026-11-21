@@ -3446,6 +3446,7 @@ impl Observer {
         let epoch = self.child_epoch;
         let mut panel = v_flex().gap_2();
         for (index, group) in tool.choices.iter().enumerate() {
+            panel = panel.child(div().font_weight(FontWeight::SEMIBOLD).child(group.title.clone()));
             for (option, label) in group.options.iter().cloned().chain(std::iter::once(t!("ask_user_other").to_string())).enumerate() {
                 let session = session.to_owned();
                 let id = tool.tool_call_id.clone();
