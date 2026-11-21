@@ -1895,10 +1895,12 @@ impl Observer {
                 signal["rejection_message"] = Value::String(reason);
             }
         }
-        let _ = self.worker.commands.try_send(Command::Signal {
+        if self.worker.commands.try_send(Command::Signal {
             id: session,
             signal,
-        });
+        }).is_err() {
+            self.show_toast(ToastKind::Error, t!("approval_submit_failed").to_string(), cx);
+        }
         cx.notify();
     }
 
