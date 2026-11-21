@@ -2067,12 +2067,9 @@ impl Observer {
 
     fn open_child(&mut self, card: SubAgentView, cx: &mut Context<Self>) {
         let Some(id) = card.task_id.clone() else { return; };
+        self.close_child();
         self.active_child = Some(card);
         self.child_epoch = self.child_epoch.wrapping_add(1);
-        self.child_pending.clear();
-        self.child_rows.clear();
-        self.child_model = Model::default();
-        self.child_connected = None;
         self.worker.set_child(Some((self.model.generation, self.child_epoch, id.clone())));
         self.child_pending.insert(id);
         cx.notify();
