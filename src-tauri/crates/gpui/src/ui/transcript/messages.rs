@@ -88,6 +88,9 @@ pub(crate) fn user_bubble(
                             )),
                     )
                 }))
+                .when_some(view.delivery_label.clone(), |bubble, label| {
+                    bubble.child(div().mt_1().text_size(px(11.)).text_color(cx.theme().muted_foreground).child(label))
+                })
                 .when(expandable, |bubble| bubble.child(toggle)),
         )
         .into_any_element()

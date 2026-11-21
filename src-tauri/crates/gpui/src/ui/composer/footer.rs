@@ -274,13 +274,13 @@ fn agent_selector(
                     is_selected,
                     move |_, window, cx| {
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        observer_entity.update(cx, |this, _| {
-                            let _ = this.worker.commands.try_send(
-                                chatspeed_gpui::types::Command::SetAgent {
+                        observer_entity.update(cx, |this, cx| {
+                            if this.can_switch_agent() && !is_selected {
+                                this.submit_config(&session, "agent", Command::SetAgent {
                                     session: session.clone(),
                                     agent: target.clone(),
-                                },
-                            );
+                                }, cx);
+                            }
                         });
                     },
                     OptionColors::new(cx),
@@ -798,11 +798,13 @@ fn quick_actions(
                     MenuRowStyle::new(colors, approval == value, danger),
                     move |window: &mut Window, cx: &mut App| {
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        observer_entity.update(cx, |this, _| {
-                            let _ = this.worker.commands.try_send(Command::SetApprovalLevel {
-                                session: session.clone(),
-                                level: level.clone(),
-                            });
+                        observer_entity.update(cx, |this, cx| {
+                            if this.approval_level() != level {
+                                this.submit_config(&session, "approval", Command::SetApprovalLevel {
+                                    session: session.clone(),
+                                    level: level.clone(),
+                                }, cx);
+                            }
                         });
                     },
                 ));
@@ -946,14 +948,6 @@ fn sandbox_selector(
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
-    let scheme = observer.sandbox_scheme_id().or_else(|| {
-        observer
-            .sandbox_schemes
-            .iter()
-            .find(|scheme| scheme["enabled"].as_bool().unwrap_or(true))
-            .and_then(|scheme| scheme["id"].as_str())
-            .map(str::to_owned)
-    });
     let schemes: Vec<(String, String)> = observer
         .sandbox_schemes
         .iter()
@@ -982,17 +976,26 @@ fn sandbox_selector(
             String::new(),
         ),
     ];
-    let current = mode.clone();
     let observer_entity = cx.entity();
     MenuPopover::new(
         "composer-sandbox-popover",
         trigger_el,
         move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
-            let mut list = v_flex().id("composer-sandbox-list").w(px(280.)).gap(px(2.));
+            let observer = observer_entity.read(cx);
+            let current = observer.sandbox_mode();
+            let scheme = observer.sandbox_scheme_id();
+            let pending = observer.config_pending.contains(&(session.clone(), "sandbox"));
+            let mut list = v_flex().id("composer-sandbox-list").w(px(280.)).gap(px(2.))
+                .when(pending, |list| list.opacity(0.55));
             for (value, title, hint) in options.clone() {
                 let observer_entity = observer_entity.clone();
                 let session = session.clone();
-                let scheme = scheme.clone();
+                let next_scheme = if value == "host_only" {
+                    None
+                } else {
+                    scheme.clone().filter(|id| schemes.iter().any(|(candidate, _)| candidate == id))
+                        .or_else(|| schemes.first().map(|(id, _)| id.clone()))
+                };
                 let is_selected = current == value;
                 list = list.child(option_row(
                     format!("composer-sandbox-{value}"),
@@ -1000,27 +1003,15 @@ fn sandbox_selector(
                     hint,
                     is_selected,
                     move |_, _, cx| {
-                        // Keep the panel open: Vue reveals the profile list in
-                        // the same panel right after the mode changes.
+                        if is_selected || (value != "host_only" && next_scheme.is_none()) {
+                            return;
+                        }
                         observer_entity.update(cx, |this, cx| {
-                            this.sandbox_mode_draft = Some(value.to_owned());
-                            this.sandbox_scheme_draft = if value == "host_only" {
-                                None
-                            } else {
-                                scheme.clone()
-                            };
-                            let _ = this.worker.commands.try_send(
-                                chatspeed_gpui::types::Command::SetSandbox {
-                                    session: session.clone(),
-                                    mode: value.to_owned(),
-                                    scheme: if value == "host_only" {
-                                        None
-                                    } else {
-                                        scheme.clone()
-                                    },
-                                },
-                            );
-                            cx.notify();
+                            this.submit_config(&session, "sandbox", Command::SetSandbox {
+                                session: session.clone(),
+                                mode: value.to_owned(),
+                                scheme: next_scheme.clone(),
+                            }, cx);
                         });
                     },
                     OptionColors::new(cx),
@@ -1057,14 +1048,13 @@ fn sandbox_selector(
                             selected,
                             move |_, _, cx| {
                                 observer_entity.update(cx, |this, cx| {
-                                    this.sandbox_mode_draft = Some(mode.clone());
-                                    this.sandbox_scheme_draft = Some(refresh_id.clone());
-                                    let _ = this.worker.commands.try_send(Command::SetSandbox {
-                                        session: session.clone(),
-                                        mode: mode.clone(),
-                                        scheme: Some(refresh_id.clone()),
-                                    });
-                                    cx.notify();
+                                    if !selected {
+                                        this.submit_config(&session, "sandbox", Command::SetSandbox {
+                                            session: session.clone(),
+                                            mode: mode.clone(),
+                                            scheme: Some(refresh_id.clone()),
+                                        }, cx);
+                                    }
                                 });
                             },
                             OptionColors::new(cx),
@@ -1098,12 +1088,11 @@ fn sandbox_selector(
                             .child(t!("sandbox_refresh").to_string())
                             .on_click(move |_, _, cx: &mut App| {
                                 observer_entity.update(cx, |this, cx| {
-                                    let _ = this.worker.commands.try_send(Command::SetSandbox {
+                                    this.submit_config(&session, "sandbox", Command::SetSandbox {
                                         session: session.clone(),
                                         mode: mode.clone(),
                                         scheme: scheme.clone(),
-                                    });
-                                    cx.notify();
+                                    }, cx);
                                 });
                             }),
                     );

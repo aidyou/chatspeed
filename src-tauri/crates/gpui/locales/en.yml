@@ -288,6 +288,8 @@ todo_view: View todo
 tool_config: "Tool configuration"
 tools_empty: "No tools found"
 tree_loading: Loading
+turn_delivery_pending: "Waiting for confirmation…"
+turn_delivery_unconfirmed: "Delivery not confirmed"
 unit_hour: h
 unit_minute: m
 unit_second: s

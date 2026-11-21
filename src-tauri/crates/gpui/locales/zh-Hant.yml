@@ -288,6 +288,8 @@ todo_view: 查看待辦
 tool_config: "工具配置"
 tools_empty: "未發現工具"
 tree_loading: 載入中
+turn_delivery_pending: "等待確認…"
+turn_delivery_unconfirmed: "傳送結果未確認"
 unit_hour: 小時
 unit_minute: 分
 unit_second: 秒

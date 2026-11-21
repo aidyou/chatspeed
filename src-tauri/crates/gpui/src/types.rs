@@ -158,6 +158,8 @@ pub struct Page {
     pub execution_context: Value,
     #[serde(default, alias = "canRewindTail")]
     pub can_rewind_tail: bool,
+    #[serde(default, alias = "tailRewindKind")]
+    pub tail_rewind_kind: Option<String>,
     #[serde(default, alias = "hasLiveSession")]
     pub has_live_session: bool,
 }
@@ -188,6 +190,12 @@ pub enum Command {
         generation: u64,
         session: String,
         queue_id: String,
+        signal: Value,
+    },
+    SubmitTurn {
+        generation: u64,
+        session: String,
+        client_id: String,
         signal: Value,
     },
     Signal {
@@ -297,6 +305,11 @@ pub struct Update {
 
 /// Control messages share the reliable queue with text deltas.
 pub enum UpdateKind {
+    ConfigSaved {
+        session: String,
+        key: &'static str,
+        result: Result<Value, String>,
+    },
     SettingsChanged {
         session: String,
         key: &'static str,
@@ -308,6 +321,7 @@ pub enum UpdateKind {
     Sessions(Vec<Session>),
     Snapshot(Page),
     Older(Page),
+    TurnUnconfirmed { client_id: String, message: String },
     QueueSubmissionFailed {
         queue_id: String,
         message: String,

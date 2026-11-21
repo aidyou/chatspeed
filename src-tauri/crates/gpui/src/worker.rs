@@ -336,6 +336,14 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
+            Command::SubmitTurn { generation, session, client_id, signal } => {
+                let path = format!("/control/v1/workflows/{session}/signal");
+                if let Err(message) = native::control_post(&options, &path, signal).await {
+                    if !send(&tx, generation, UpdateKind::TurnUnconfirmed { client_id, message }).await {
+                        return;
+                    }
+                }
+            }
             Command::Signal { id, signal } => {
                 if options.demo {
                     continue;
@@ -522,10 +530,15 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key(command)),
                 )
                 .await;
-                if let Err(error) = result {
-                    if !send(&tx, 0, UpdateKind::Error(error)).await {
-                        return;
+                let result = result.and_then(|reply| {
+                    if let Some(text) = reply["agent_config"].as_str() {
+                        serde_json::from_str::<Value>(text).map_err(|error| error.to_string())
+                    } else {
+                        Ok(reply["agent_config"].clone())
                     }
+                }).map(|config| json!({"agent_id": agent, "agent_config": config}));
+                if !send(&tx, 0, UpdateKind::ConfigSaved { session, key: "agent", result }).await {
+                    return;
                 }
             }
             Command::SetModelConfig { generation, session, configs } => {
@@ -558,10 +571,9 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key(command)),
                 )
                 .await;
-                if let Err(error) = result {
-                    if !send(&tx, 0, UpdateKind::Error(error)).await {
-                        return;
-                    }
+                let result = result.map(|_| json!({"sandboxOverride": true, "sandboxExecutionMode": mode, "sandboxSchemeId": scheme}));
+                if !send(&tx, 0, UpdateKind::ConfigSaved { session, key: "sandbox", result }).await {
+                    return;
                 }
             }
             Command::ClearContext { generation, session } => {
@@ -631,10 +643,9 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key("approval-level")),
                 )
                 .await;
-                if let Err(error) = result {
-                    if !send(&tx, 0, UpdateKind::Error(error)).await {
-                        return;
-                    }
+                let result = result.map(|_| json!({"approvalLevel": level}));
+                if !send(&tx, 0, UpdateKind::ConfigSaved { session, key: "approval", result }).await {
+                    return;
                 }
             }
             Command::SetPlanning { session, enabled } => {
@@ -704,10 +715,9 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key("skills-config")),
                 )
                 .await;
-                if let Err(error) = result {
-                    if !send(&tx, 0, UpdateKind::Error(error)).await {
-                        return;
-                    }
+                let result = result.map(|_| json!({"skillEnabled": enabled, "selectedSkills": selected}));
+                if !send(&tx, 0, UpdateKind::ConfigSaved { session, key: "skills", result }).await {
+                    return;
                 }
             }
             Command::SetAgentConfig { session, config } => {

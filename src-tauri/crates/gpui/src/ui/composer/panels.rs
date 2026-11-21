@@ -295,15 +295,15 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             .as_ref()
             .map(|draft| draft.selected.clone())
             .unwrap_or_default();
-        if let Some(draft) = this.skills_draft.as_mut() {
-            draft.enabled = enabled;
-        }
-        let _ = this.worker.commands.try_send(Command::SetSkills {
-            session,
+        if this.submit_config(&session, "skills", Command::SetSkills {
+            session: session.clone(),
             enabled,
             selected: selected.into_iter().collect(),
-        });
-        cx.notify();
+        }, cx) {
+            if let Some(draft) = this.skills_draft.as_mut() {
+                draft.enabled = enabled;
+            }
+        }
     });
     let mut list = v_flex().w_full().min_w_0().gap(px(1.)).p_3();
     list = list.child(check_row(
@@ -329,7 +329,7 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 let Some(session) = this.selected.clone() else {
                     return;
                 };
-                let Some(draft) = this.skills_draft.as_mut() else {
+                let Some(mut draft) = this.skills_draft.clone() else {
                     return;
                 };
                 if checked {
@@ -338,14 +338,13 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                     draft.selected.insert(key.clone());
                 }
                 draft.enabled = true;
-                let enabled = draft.enabled;
-                let selected: Vec<String> = draft.selected.iter().cloned().collect();
-                let _ = this.worker.commands.try_send(Command::SetSkills {
-                    session,
-                    enabled,
-                    selected,
-                });
-                cx.notify();
+                if this.submit_config(&session, "skills", Command::SetSkills {
+                    session: session.clone(),
+                    enabled: draft.enabled,
+                    selected: draft.selected.iter().cloned().collect(),
+                }, cx) {
+                    this.skills_draft = Some(draft);
+                }
             }),
             cx,
         ));

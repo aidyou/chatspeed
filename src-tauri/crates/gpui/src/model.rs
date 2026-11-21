@@ -12,6 +12,7 @@ pub const LIVE_BYTES_LIMIT: usize = 1024 * 1024;
 pub struct Model {
     pub generation: u64,
     pub messages: BTreeMap<i64, Message>,
+    pub pending_turns: Vec<Message>,
     pub live: Message,
     pub tools: BTreeMap<String, Value>,
     pub tool_order: Vec<String>,
@@ -20,6 +21,8 @@ pub struct Model {
     pub reading_history: bool,
     pub live_overflow: bool,
     pub state: String,
+    execution_state: String,
+    tail_rewind_kind: String,
     pub can_rewind_tail: bool,
     pub has_live_session: bool,
     /// Backend-owned compression hint, mirrored from `compression_status` events.
@@ -73,6 +76,8 @@ impl Model {
             || marker.message_subtype.as_deref() != Some("manual_clear_context") { return false; }
         self.messages.insert(marker.id, marker);
         self.state = response["state"].as_str().unwrap_or("pending").to_owned();
+        self.execution_state = self.state.clone();
+        self.tail_rewind_kind.clear();
         self.has_live_session = response["hasLiveSession"].as_bool().unwrap_or(false);
         self.wait_reason.clear();
         self.pending_tool_ids.clear();
@@ -80,6 +85,20 @@ impl Model {
         self.live = Message::default();
         self.live_overflow = false;
         true
+    }
+
+    pub fn can_clear_context(&self) -> bool {
+        matches!(self.state.as_str(), "completed" | "error" | "failed" | "cancelled")
+            || (self.state == "pending"
+                && !self.has_live_session
+                && (self.execution_state.is_empty() || self.execution_state == "pending")
+                && !matches!(self.wait_reason.as_str(), "approval" | "user_input" | "confirmation" | "sub_agent"))
+    }
+
+    pub fn can_continue(&self) -> bool {
+        !self.has_live_session
+            && !matches!(self.tail_rewind_kind.as_str(), "ask_user_wait" | "ask_user_answered")
+            && matches!(self.state.as_str(), "thinking" | "executing" | "auditing" | "running" | "paused" | "awaiting_sub_agent" | "error" | "failed" | "cancelled")
     }
 
     pub fn can_stop(&self) -> bool {
@@ -117,6 +136,8 @@ impl Model {
             self.roots = crate::types::workflow_roots(&page.workflow);
         }
         let context = &page.execution_context;
+        self.execution_state = context["state"].as_str().unwrap_or("pending").to_ascii_lowercase();
+        self.tail_rewind_kind = page.tail_rewind_kind.unwrap_or_default();
         self.can_rewind_tail = page.can_rewind_tail;
         self.has_live_session = page.has_live_session;
         self.reconcile_queue(context, &page.messages);
@@ -163,6 +184,13 @@ impl Model {
         if initial {
             self.before = page.message_window_before_id;
             self.hidden = page.hidden_earlier_message_count;
+        }
+        for row in &page.messages {
+            if row.role == "user" {
+                if let Some(id) = row.metadata["client_message_id"].as_str() {
+                    self.confirm_turn(id);
+                }
+            }
         }
         // Snapshot windows are partial: never replace already loaded history.
         self.messages
@@ -250,6 +278,19 @@ impl Model {
         );
         self.snapshot_queue_ids = ids;
         self.queued_messages = queue;
+    }
+
+    /// Drops the local echo only when the backend supplies a durable user row.
+    fn confirm_turn(&mut self, id: &str) {
+        self.pending_turns.retain(|row| row.metadata["client_message_id"].as_str() != Some(id));
+    }
+
+    pub fn mark_turn_unconfirmed(&mut self, id: &str) -> bool {
+        let Some(row) = self.pending_turns.iter_mut().find(|row| row.metadata["client_message_id"].as_str() == Some(id)) else {
+            return false;
+        };
+        row.metadata["gpui_turn_status"] = json!("unconfirmed");
+        true
     }
 
     pub fn resume_follow(&mut self) {
@@ -350,6 +391,7 @@ impl Model {
                 {
                     if event["role"] == "user" {
                         if let Some(client_id) = event["metadata"]["client_message_id"].as_str() {
+                            self.confirm_turn(client_id);
                             self.finish_queued_message(client_id);
                         }
                     }
@@ -504,6 +546,63 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_actions_follow_snapshot_execution_and_live_state() {
+        let mut model = Model::default();
+        let page = |status: &str, context: Value, live, rewind: Option<&str>| Page {
+            status: status.into(),
+            execution_context: context,
+            has_live_session: live,
+            tail_rewind_kind: rewind.map(str::to_owned),
+            ..Page::default()
+        };
+        model.page(page("pending", json!({"state": "executing"}), false, None), false);
+        assert!(!model.can_clear_context());
+        model.page(page("pending", json!({"state": "pending", "waitReason": "approval"}), false, None), false);
+        assert!(!model.can_clear_context());
+        model.page(page("pending", json!({"state": "pending"}), false, None), false);
+        assert!(model.can_clear_context());
+        model.page(page("paused", Value::Null, true, None), false);
+        assert!(!model.can_continue());
+        model.page(page("paused", Value::Null, false, Some("ask_user_wait")), false);
+        assert!(!model.can_continue());
+        model.page(page("paused", Value::Null, false, None), false);
+        assert!(model.can_continue());
+    }
+
+    #[test]
+    fn local_turn_reconciles_from_event_or_snapshot_without_text_deduplication() {
+        for snapshot_first in [false, true] {
+            let mut model = Model::default();
+            let row = |id, client_id| Message {
+                id,
+                role: "user".into(),
+                message: "same text".into(),
+                metadata: json!({"client_message_id": client_id}),
+                ..Message::default()
+            };
+            model.pending_turns.extend([row(0, "one"), row(0, "two")]);
+            model.page(Page::default(), false);
+            assert_eq!(model.pending_turns.len(), 2);
+            assert!(model.mark_turn_unconfirmed("one"));
+            let snapshot = || Page { messages: vec![row(42, "one")], ..Page::default() };
+            let event = || json!({"type":"message", "message_id":"42", "role":"user", "content":"same text", "metadata":{"client_message_id":"one"}});
+            if snapshot_first {
+                model.page(snapshot(), false);
+                model.event(event());
+            } else {
+                model.event(event());
+                model.page(snapshot(), false);
+            }
+            assert_eq!(model.visible().count(), 1);
+            assert!(!model.mark_turn_unconfirmed("one"));
+            assert_eq!(model.pending_turns.len(), 1);
+            assert_eq!(model.pending_turns[0].metadata["client_message_id"], "two");
+            model.select();
+            assert!(model.pending_turns.is_empty());
+        }
+    }
 
     #[test]
     fn clear_receipt_installs_one_durable_marker_before_snapshot() {

@@ -496,8 +496,8 @@ struct Observer {
     /// Vue's planning-mode switch, applied through the workflow phase.
     planning_mode: bool,
     /// Optimistic sandbox choice; the workflow config confirms it afterwards.
-    sandbox_mode_draft: Option<String>,
-    sandbox_scheme_draft: Option<String>,
+    config_pending: BTreeSet<(String, &'static str)>,
+    config_acks: BTreeMap<&'static str, (Instant, Value)>,
     /// Answers this window submitted before the runtime echoed them back.
     ask_user_answered: BTreeMap<String, Vec<LocalAskUserAnswer>>,
     /// Which configuration dialog the quick actions opened, if any.
@@ -715,8 +715,8 @@ impl Observer {
             tools: Vec::new(),
             proxy_targets: Value::Null,
             planning_mode: false,
-            sandbox_mode_draft: None,
-            sandbox_scheme_draft: None,
+            config_pending: BTreeSet::new(),
+            config_acks: BTreeMap::new(),
             ask_user_answered: BTreeMap::new(),
             quick_panel: None,
             model_config_slot: "act".into(),
@@ -794,8 +794,7 @@ impl Observer {
         self.ask_user_text.clear();
         self.ask_user_answered.clear();
         self.quick_panel = None;
-        self.sandbox_mode_draft = None;
-        self.sandbox_scheme_draft = None;
+        self.config_acks.clear();
         self.planning_mode = false;
         self.skills_draft = None;
         self.tool_draft = None;
@@ -1240,10 +1239,33 @@ impl Observer {
             .map_or(phase == "planning", |(enabled, _)| *enabled);
     }
 
-    fn sandbox_mode(&self) -> String {
-        if let Some(draft) = &self.sandbox_mode_draft {
-            return draft.clone();
+    fn submit_config(&mut self, session: &str, key: &'static str, command: Command, cx: &mut Context<Self>) -> bool {
+        let entry = (session.to_owned(), key);
+        if self.options.demo || self.selected.as_deref() != Some(session) || self.config_pending.contains(&entry) {
+            return false;
         }
+        if self.worker.commands.try_send(command).is_err() {
+            return false;
+        }
+        self.config_pending.insert(entry);
+        cx.notify();
+        true
+    }
+
+    fn apply_config_ack(&mut self, key: &str, patch: &Value) {
+        if key == "agent" {
+            self.model.workflow["agent_id"] = patch["agent_id"].clone();
+            self.model.workflow["agent_config"] = patch["agent_config"].clone();
+        } else if let Some(fields) = patch.as_object() {
+            let mut config = self.agent_config();
+            for (field, value) in fields {
+                config[field] = value.clone();
+            }
+            self.model.workflow["agent_config"] = config;
+        }
+    }
+
+    fn sandbox_mode(&self) -> String {
         let config = self.agent_config();
         config["sandboxExecutionMode"]
             .as_str()
@@ -1253,13 +1275,10 @@ impl Observer {
     }
 
     fn sandbox_scheme_id(&self) -> Option<String> {
-        if let Some(draft) = &self.sandbox_scheme_draft {
-            return Some(draft.clone());
-        }
         let config = self.agent_config();
-        config["sandboxSchemeId"]
-            .as_str()
-            .or_else(|| config["sandbox_scheme_id"].as_str())
+        config.get("sandboxSchemeId")
+            .or_else(|| config.get("sandbox_scheme_id"))
+            .and_then(Value::as_str)
             .filter(|id| !id.is_empty())
             .map(str::to_owned)
     }
@@ -1275,13 +1294,7 @@ impl Observer {
     }
 
     fn can_clear_context(&self) -> bool {
-        self.selected.is_some()
-            && (matches!(
-                self.model.state.as_str(),
-                "completed" | "error" | "failed" | "cancelled"
-            ) || (self.model.state == "pending"
-                && !self.model.has_live_session
-                && self.model.wait_reason.is_empty()))
+        self.selected.is_some() && self.model.can_clear_context()
     }
 
     fn toggle_planning(&mut self, cx: &mut Context<Self>) {
@@ -1457,8 +1470,7 @@ impl Observer {
         self.ask_user_choice.clear();
         self.ask_user_text.clear();
         self.ask_user_answered.clear();
-        self.sandbox_mode_draft = None;
-        self.sandbox_scheme_draft = None;
+        self.config_acks.clear();
         self.planning_mode = false;
         self.timeline_scroll.follow = true;
         self.timeline_scroll.scroll_pending = true;
@@ -1530,6 +1542,39 @@ impl Observer {
                                     provisional: true,
                                 });
                         })
+                } else if !self.options.demo
+                    && matches!(self.model.state.as_str(), "completed" | "failed" | "cancelled" | "error")
+                {
+                    static NEXT_TURN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    let sequence = NEXT_TURN.fetch_add(1, Ordering::Relaxed);
+                    let nanos = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+                    let client_id = format!("gpui-turn-{}-{nanos}-{sequence}", std::process::id());
+                    let mut correlation = metadata.unwrap_or_else(|| serde_json::json!({}));
+                    correlation["client_message_id"] = serde_json::json!(client_id);
+                    signal["metadata"] = correlation.clone();
+                    correlation["gpui_turn_status"] = serde_json::json!("pending");
+                    let label = if text.is_empty() {
+                        attachments.iter().map(|item| item.name.as_str()).collect::<Vec<_>>().join(", ")
+                    } else {
+                        text
+                    };
+                    self.worker.commands.try_send(Command::SubmitTurn {
+                        generation: self.model.generation,
+                        session: id,
+                        client_id,
+                        signal,
+                    }).map(|()| {
+                        self.model.pending_turns.push(Message {
+                            id: 0,
+                            role: "user".into(),
+                            message: label,
+                            metadata: correlation,
+                            ..Message::default()
+                        });
+                        self.rows = presentation::project(self.transcript(), self.roots());
+                        self.refresh_markdown(cx);
+                    })
                 } else {
                     self.worker
                         .commands
@@ -1724,19 +1769,17 @@ impl Observer {
     /// Vue's "Continue" is offered for paused, failed, cancelled and errored
     /// workflows; the runtime resumes from that signal.
     fn can_continue(&self) -> bool {
-        self.selected.is_some()
-            && matches!(
-                self.model.state.as_str(),
-                "paused" | "error" | "failed" | "cancelled"
-            )
+        self.selected.is_some() && !self.options.demo && self.model.can_continue()
     }
 
     fn continue_workflow(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected.clone() {
-            let _ = self.worker.commands.try_send(Command::Signal {
+        if let Some(id) = self.selected.clone().filter(|_| self.can_continue()) {
+            if self.worker.commands.try_send(Command::Signal {
                 id,
                 signal: serde_json::json!({"type": "continue"}),
-            });
+            }).is_err() {
+                return;
+            }
             self.timeline_scroll.follow = true;
             self.model.resume_follow();
             self.timeline_scroll.scroll_pending = true;
@@ -2009,6 +2052,26 @@ impl Observer {
                 continue;
             }
             match update.kind {
+                UpdateKind::ConfigSaved { session, key, result } => {
+                    self.config_pending.remove(&(session.clone(), key));
+                    if self.selected.as_deref() == Some(session.as_str()) {
+                        match result {
+                            Ok(patch) => {
+                                if key == "agent" {
+                                    self.config_acks.clear();
+                                    self.models_saved_at = None;
+                                }
+                                self.apply_config_ack(key, &patch);
+                                self.config_acks.insert(key, (update.queued, patch));
+                                self.sync_planning_mode();
+                            }
+                            Err(error) => self.show_toast(ToastKind::Error, error, cx),
+                        }
+                        if key == "skills" && self.skills_draft.is_some() {
+                            self.skills_draft = Some(SkillsDraft::from_config(&self.agent_config()));
+                        }
+                    }
+                }
                 UpdateKind::SettingsChanged {
                     session,
                     key,
@@ -2229,6 +2292,11 @@ impl Observer {
                     self.metrics.resets += 1;
                     self.model.reset_live();
                 }
+                UpdateKind::TurnUnconfirmed { client_id, message } => {
+                    if self.model.mark_turn_unconfirmed(&client_id) {
+                        self.show_toast(ToastKind::Error, message, cx);
+                    }
+                }
                 UpdateKind::QueueSubmissionFailed { queue_id, message } => {
                     if self.model.reject_queue_submission(&queue_id) {
                         self.show_toast(ToastKind::Error, message, cx);
@@ -2244,7 +2312,14 @@ impl Observer {
                             id != session || !ack.is_some_and(|at| fetched_from > at)
                         });
                     }
+                    let fetched_from = page.fetched_from;
                     self.model.page(page, false);
+                    self.config_acks.retain(|_, (saved, _)| fetched_from.is_none_or(|start| start <= *saved));
+                    let mut patches: Vec<_> = self.config_acks.iter().map(|(&key, (at, patch))| (*at, key, patch.clone())).collect();
+                    patches.sort_by_key(|(at, _, _)| *at);
+                    for (_, key, patch) in patches {
+                        self.apply_config_ack(key, &patch);
+                    }
                     if let Some(models) = saved_models {
                         let mut config = self.agent_config();
                         config["models"] = models;
@@ -2499,6 +2574,7 @@ impl Observer {
     /// Durable rows plus the transient live message and live tool lifecycle state.
     fn transcript(&self) -> Vec<Message> {
         let mut messages: Vec<Message> = self.model.visible().cloned().collect();
+        messages.extend(self.model.pending_turns.iter().cloned());
         if !self.model.live.message.is_empty() || self.model.live.reasoning.is_some() {
             let mut live = self.model.live.clone();
             live.id = -1;

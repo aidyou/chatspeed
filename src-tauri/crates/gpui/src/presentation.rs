@@ -585,6 +585,7 @@ pub struct AssistantView {
 pub struct UserView {
     pub key: String,
     pub text: String,
+    pub delivery_label: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2398,11 +2399,28 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
             continue;
         }
         if message.role == "user" {
-            let text = clean_text(&message.message);
+            let mut text = clean_text(&message.message);
+            if text.is_empty() && message.metadata["client_message_id"].as_str().is_some_and(|id| id.starts_with("gpui-turn-")) {
+                if let Some(attachments) = message.metadata["attachments"].as_array() {
+                    text = attachments.iter().filter_map(|file| file["name"].as_str()).collect::<Vec<_>>().join(", ");
+                }
+            }
             if !text.is_empty() {
+                let delivery_label = if message.id == 0 {
+                    match message.metadata["gpui_turn_status"].as_str() {
+                        Some("pending") => Some(t!("turn_delivery_pending").to_string()),
+                        Some("unconfirmed") => Some(t!("turn_delivery_unconfirmed").to_string()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 rows.push(Row::User(UserView {
-                    key: message_key(message),
+                    key: message.metadata["client_message_id"].as_str()
+                        .map(|id| format!("user-turn-{id}"))
+                        .unwrap_or_else(|| message_key(message)),
                     text,
+                    delivery_label,
                 }));
             }
             index += 1;
