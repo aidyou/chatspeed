@@ -14,6 +14,21 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
+fn automation_request(action: AutomationAction) -> (&'static str, Value) {
+    match action {
+        AutomationAction::Enable => ("enable", json!({})),
+        AutomationAction::Disable => ("disable", json!({})),
+        AutomationAction::Run => ("run", json!({})),
+        AutomationAction::Delete => ("delete", json!({"confirm": true})),
+    }
+}
+
+#[test]
+fn automation_delete_requires_explicit_confirmation_payload() {
+    assert_eq!(automation_request(AutomationAction::Delete), ("delete", json!({"confirm": true})));
+    assert_eq!(automation_request(AutomationAction::Run), ("run", json!({})));
+}
+
 fn decode_rewind_response(value: Value) -> Result<bool, String> {
     #[derive(serde::Deserialize)]
     struct Response {
@@ -427,6 +442,29 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     Some(&idempotency_key(command)),
                 ).await.map(|_| ());
                 if !send(&tx, 0, UpdateKind::SessionEdited { session, title, result }).await {
+                    return;
+                }
+            }
+            Command::ListAutomations => {
+                let result = native::control_get(&options, "/control/v1/automations")
+                    .await
+                    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()));
+                if !send(&tx, 0, UpdateKind::Automations(result)).await {
+                    return;
+                }
+            }
+            Command::ActOnAutomation { id, action } => {
+                let (operation, payload) = automation_request(action);
+                let path = format!("/control/v1/automations/{id}/{operation}");
+                let result = match native::connect(&options).await {
+                    Some(client) => client.post_with_idempotency(&path, &payload, &idempotency_key(operation)).await.map(|_| ()).map_err(|error| error.to_string()),
+                    None => Err(rust_i18n::t!("automation_action_failed").to_string()),
+                };
+                let update = match result {
+                    Ok(()) => UpdateKind::Automations(native::control_get(&options, "/control/v1/automations").await.and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))),
+                    Err(error) => UpdateKind::Error(error),
+                };
+                if !send(&tx, 0, update).await {
                     return;
                 }
             }

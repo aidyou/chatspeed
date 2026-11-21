@@ -14,6 +14,21 @@ pub struct Options {
     pub demo: bool,
 }
 
+#[derive(Clone, Copy)]
+pub enum AutomationAction {
+    Enable,
+    Disable,
+    Run,
+    Delete,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct AutomationSummary {
+    pub automation_id: String,
+    pub title: String,
+    pub enabled: bool,
+}
+
 /// Minimal read-only workflow projection.
 #[derive(Clone, Default, Deserialize)]
 pub struct Session {
@@ -210,6 +225,8 @@ pub enum Command {
         session: String,
         title: Option<String>,
     },
+    ListAutomations,
+    ActOnAutomation { id: String, action: AutomationAction },
     CreateAutomation(Value),
     Stop {
         id: String,
@@ -326,6 +343,7 @@ pub enum UpdateKind {
         title: Option<String>,
         result: Result<(), String>,
     },
+    Automations(Result<Vec<AutomationSummary>, String>),
     AutomationCreated(Result<(), String>),
     Sessions(Vec<Session>),
     Snapshot(Page),

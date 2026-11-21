@@ -343,7 +343,7 @@ fn panel(observer: &Observer, skin: &Surfaces, cx: &mut Context<Observer>) -> An
     let body = match active {
         SidebarTab::Files => crate::ui::file_tree::tree(observer, cx),
         _ => match observer.rail_tab {
-            RailTab::Automation => empty_tab(t!("automation_empty").to_string(), cx),
+            RailTab::Automation => automation_list(observer, cx),
             RailTab::Tasks => session_list(observer, skin, cx),
         },
     };
@@ -722,6 +722,58 @@ fn session_actions(session: &Session, cx: &mut Context<Observer>) -> impl IntoEl
                     }
                 }).detach();
             })))
+}
+
+fn automation_list(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+    let entries = match &observer.automations {
+        None => return empty_tab("…".to_string(), cx),
+        Some(Err(error)) => return empty_tab(error.clone(), cx),
+        Some(Ok(entries)) => entries,
+    };
+    let query = observer.session_search.read(cx).value().trim().to_lowercase();
+    let mut rows = v_flex().id("automation-list").flex_1().min_h_0().overflow_y_scroll().px_4();
+    let mut found = false;
+    for entry in entries.iter().filter(|entry| entry.title.to_lowercase().contains(&query)) {
+        found = true;
+        rows = rows.child(h_flex().id(entry.automation_id.clone()).gap_2().items_center().py_2()
+            .child(div().size(px(6.)).rounded_full().bg(if entry.enabled { Hsla::from(success()) } else { cx.theme().muted_foreground }))
+            .child(div().flex_1().min_w_0().text_ellipsis().child(entry.title.clone()))
+            .children([
+                ("toggle", if entry.enabled { t!("automation_disable") } else { t!("automation_enable") }, if entry.enabled { chatspeed_gpui::types::AutomationAction::Disable } else { chatspeed_gpui::types::AutomationAction::Enable }),
+                ("run", t!("automation_run"), chatspeed_gpui::types::AutomationAction::Run),
+            ].into_iter().map(|(key, label, action)| {
+                let id = entry.automation_id.clone();
+                div().id(key).cursor_pointer().text_xs().child(label.to_string())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.worker.commands.try_send(chatspeed_gpui::types::Command::ActOnAutomation { id: id.clone(), action }).is_err() {
+                            this.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
+                        }
+                    }))
+            }))
+            .child(div().id("delete-automation").cursor_pointer().child(Icon::new("delete"))
+                .on_click(cx.listener({
+                    let id = entry.automation_id.clone();
+                    move |_, _, window, cx| {
+                        let id = id.clone();
+                        let label = t!("automation_delete");
+                        let answer = window.prompt(PromptLevel::Warning, &label, Some(&t!("automation_delete_confirm")), &[
+                            PromptButton::cancel(t!("action_cancel").to_string()),
+                            PromptButton::new(label.to_string()),
+                        ], cx);
+                        cx.spawn(async move |owner, cx| {
+                            if answer.await.ok() == Some(1) {
+                                let _ = owner.update(cx, |this, cx| {
+                                    use chatspeed_gpui::types::{AutomationAction, Command};
+                                    if this.worker.commands.try_send(Command::ActOnAutomation { id, action: AutomationAction::Delete }).is_err() {
+                                        this.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
+                                    }
+                                });
+                            }
+                        }).detach();
+                    }
+                }))));
+    }
+    if found { rows.into_any_element() } else { empty_tab(t!("automation_empty").to_string(), cx) }
 }
 
 fn empty_tab(message: String, cx: &mut Context<Observer>) -> AnyElement {

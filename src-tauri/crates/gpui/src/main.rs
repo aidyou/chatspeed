@@ -392,6 +392,7 @@ struct Observer {
     terminal: ui::terminal::Panel,
     model: Model,
     sessions: Vec<Session>,
+    automations: Option<Result<Vec<AutomationSummary>, String>>,
     pending_decisions: BTreeMap<String, Vec<PendingDecision>>,
     selected: Option<String>,
     connected: bool,
@@ -649,6 +650,7 @@ impl Observer {
             terminal: ui::terminal::Panel::new(cx),
             model: Model::default(),
             sessions: Vec::new(),
+            automations: None,
             pending_decisions: BTreeMap::new(),
             selected: None,
             connected: false,
@@ -872,11 +874,20 @@ impl Observer {
     /// Rail selection also picks the list tab Vue shows next to it.
     fn select_rail_tab(&mut self, tab: ui::sidebar::RailTab, cx: &mut Context<Self>) {
         self.rail_tab = tab;
+        if tab == ui::sidebar::RailTab::Automation {
+            self.refresh_automations();
+        }
         self.sidebar_tab = match tab {
             ui::sidebar::RailTab::Tasks => ui::sidebar::SidebarTab::Tasks,
             ui::sidebar::RailTab::Automation => ui::sidebar::SidebarTab::Automation,
         };
         cx.notify();
+    }
+
+    fn refresh_automations(&mut self) {
+        if self.worker.commands.try_send(Command::ListAutomations).is_ok() {
+            self.automations = None;
+        }
     }
 
     fn select_sidebar_tab(&mut self, tab: ui::sidebar::SidebarTab, cx: &mut Context<Self>) {
@@ -2161,7 +2172,11 @@ impl Observer {
                         }
                     }
                 },
+                UpdateKind::Automations(result) => self.automations = Some(result),
                 UpdateKind::AutomationCreated(result) => {
+                    if result.is_ok() && self.rail_tab == ui::sidebar::RailTab::Automation {
+                        self.refresh_automations();
+                    }
                     self.automation_pending = false;
                     match result {
                         Ok(()) => self.show_toast(

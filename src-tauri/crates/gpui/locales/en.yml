@@ -23,15 +23,21 @@ auto_approve_plan_hint: "Start implementation as soon as a plan is submitted"
 auto_compress_disabled: "Auto compression off"
 auto_compress_enabled: "Auto compression on"
 auto_compress_hint: "Roll up long context automatically"
+automation_action_failed: Could not perform the scheduled task action
 automation_agent_label: "Agent: %{agent}"
 automation_agent_required: No agent is available
 automation_create_failed: Could not create the scheduled task
 automation_created: Scheduled task created
 automation_daily_time: Daily at (local time)
+automation_delete: Delete automation
+automation_delete_confirm: Permanently delete this automation?
+automation_disable: Disable
 automation_empty: No automations yet
+automation_enable: Enable
 automation_name: Task name
 automation_prompt: Task instructions
 automation_required_fields: Enter a name, instructions, and a valid time (HH:MM).
+automation_run: Run now
 awaiting_approval: Awaiting approval
 chat_hub: ChatHub
 clear_context_divider: Start new session
