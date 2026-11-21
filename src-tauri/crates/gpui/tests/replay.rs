@@ -177,6 +177,7 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
     let done = Arc::new(AtomicBool::new(false));
     let done_server = done.clone();
     let (saved_tx, saved_rx) = std::sync::mpsc::channel();
+    let (signal_tx, signal_rx) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         let mut held_streams = Vec::new();
         let mut streams = 0;
@@ -217,6 +218,9 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                 // A stalled settings response must not hold up the first sidebar list.
                 held_streams.push(socket);
                 continue;
+            } else if path.ends_with("/signal") {
+                signal_tx.send(path.to_owned()).unwrap();
+                ("application/json", "{}".to_owned())
             } else if path == "/control/v1/data-commands/set_config" {
                 saved_tx.send(()).unwrap();
                 ("application/json", "null".to_owned())
@@ -366,6 +370,17 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
+    worker.set_child(Some((generation, 1, "subagent_question".into())));
+    for signal in [
+        json!({"type":"approval", "id":"shared-call", "approved":true, "approve_all":false}),
+        json!({"type":"user_message", "content":"answer", "metadata":{"ask_user_response":true,"requested_tool_call_id":"shared-call"}}),
+    ] {
+        worker.commands.try_send(Command::Signal { id: "subagent_question".into(), signal }).unwrap();
+    }
+    let captured_signals: Vec<_> = (0..2)
+        .map(|_| signal_rx.recv_timeout(Duration::from_secs(4)))
+        .collect();
+    worker.set_child(None);
     assert!(worker.save_sidebar(false));
     assert!(worker.save_sidebar(true));
     worker.save_geometry(vec![("workflow_window_size", json!({"width": 1100, "height": 700}))]);
@@ -375,6 +390,7 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
     done.store(true, Ordering::Relaxed);
     server.join().unwrap();
     std::fs::remove_file(discovery).unwrap();
+    assert_eq!(captured_signals, vec![Ok("/control/v1/workflows/subagent_question/signal".to_owned()); 2]);
     assert_eq!(saves_on_close, 2, "shutdown must drain one sidebar and one coalesced geometry save");
     assert!(
         listed,
