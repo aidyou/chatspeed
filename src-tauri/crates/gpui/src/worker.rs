@@ -55,11 +55,16 @@ pub struct Worker {
     pub updates: mpsc::Receiver<Update>,
     sidebar_collapsed: Option<watch::Sender<Option<bool>>>,
     geometry: Option<watch::Sender<Vec<(&'static str, Value)>>>,
+    child: watch::Sender<Option<(u64, u64, String)>>,
     stop: watch::Sender<bool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Worker {
+    pub fn set_child(&self, target: Option<(u64, u64, String)>) {
+        self.child.send_replace(target);
+    }
+
     pub fn save_geometry(&self, values: Vec<(&'static str, Value)>) {
         if let Some(tx) = &self.geometry {
             tx.send_replace(values);
@@ -81,8 +86,12 @@ impl Worker {
         let (commands, rx) = mpsc::channel(16);
         let (tx, updates) = mpsc::channel(128);
         let (stop, mut stopped) = watch::channel(false);
+        let stop_on_exit = stop.clone();
         let (sidebar_collapsed, mut sidebar) = watch::channel(None);
         let (geometry, mut bounds) = watch::channel(Vec::<(&'static str, Value)>::new());
+        let (child, mut child_target) = watch::channel::<Option<(u64, u64, String)>>(None);
+        let child_options = options.clone();
+        let child_tx = tx.clone();
         let geometry_options = options.clone();
         let prefs_options = options.clone();
         let prefs_tx = tx.clone();
@@ -123,10 +132,43 @@ impl Worker {
                             }
                         }
                     });
+                    let mut child_stopped = stopped.clone();
+                    let child_follower = tokio::spawn(async move {
+                        let mut task: Option<tokio::task::JoinHandle<()>> = None;
+                        loop {
+                            tokio::select! {
+                                _ = child_stopped.changed() => break,
+                                changed = child_target.changed() => {
+                                    if changed.is_err() { break; }
+                                }
+                            }
+                            if let Some(previous) = task.take() { previous.abort(); }
+                            let target = child_target.borrow_and_update().clone();
+                            if let Some((generation, epoch, id)) = target {
+                                let options = child_options.clone();
+                                let tx = child_tx.clone();
+                                task = Some(tokio::spawn(async move {
+                                    let (local_tx, mut updates) = mpsc::channel::<Update>(16);
+                                    let relay = async {
+                                        while let Some(update) = updates.recv().await {
+                                            if !send(&tx, generation, UpdateKind::Child(epoch, id.clone(), Box::new(update.kind))).await { break; }
+                                        }
+                                    };
+                                    tokio::select! {
+                                        _ = follow(options, local_tx, generation, id.clone()) => {},
+                                        _ = relay => {},
+                                    }
+                                }));
+                            }
+                        }
+                        if let Some(previous) = task.take() { previous.abort(); }
+                    });
                     tokio::select! {
                         _ = stopped.changed() => {},
                         _ = coordinate(options, rx, tx) => {},
                     }
+                    let _ = stop_on_exit.send(true);
+                    let _ = child_follower.await;
                     let _ = writer.await;
                     let _ = geometry_writer.await;
                 });
@@ -137,6 +179,7 @@ impl Worker {
             updates,
             sidebar_collapsed: Some(sidebar_collapsed),
             geometry: Some(geometry),
+            child,
             stop,
             thread: Some(thread),
         })
@@ -534,16 +577,6 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                         }
                     }
                 }
-            }
-            Command::Child { generation, epoch, session } => {
-                let options = options.clone();
-                let tx = tx.clone();
-                tokio::spawn(async move {
-                    let path = format!("/control/v1/workflows/{session}?limit={PAGE_LIMIT}");
-                    let result = native::control_get(&options, &path).await
-                        .and_then(|value| serde_json::from_value(value).map_err(|err| err.to_string()));
-                    let _ = send(&tx, generation, UpdateKind::Child(epoch, session, result)).await;
-                });
             }
             Command::ListDir { path } => {
                 let tx = tx.clone();

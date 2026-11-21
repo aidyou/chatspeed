@@ -489,6 +489,7 @@ struct Observer {
     ask_user_text: BTreeMap<String, Entity<TextareaState>>,
     /// Child transcripts requested but not loaded yet.
     child_epoch: u64,
+    child_model: Model,
     child_pending: BTreeSet<String>,
     /// Agents, model providers and skills the composer selectors list.
     agents: Vec<serde_json::Value>,
@@ -733,6 +734,7 @@ impl Observer {
             approval_drafts: BTreeMap::new(),
             ask_user_text: BTreeMap::new(),
             child_epoch: 0,
+            child_model: Model::default(),
             child_pending: BTreeSet::new(),
             agents: Vec::new(),
             models: Vec::new(),
@@ -808,6 +810,7 @@ impl Observer {
         self.models_saved_at = None;
         self.models_pending = None;
         self.clear_pending = false;
+        self.worker.set_child(None);
         self.active_child = None;
         self.child_pending.clear();
         self.child_rows.clear();
@@ -1515,6 +1518,7 @@ impl Observer {
         self.models_saved_at = None;
         self.models_pending = None;
         self.clear_pending = false;
+        self.worker.set_child(None);
         self.active_child = None;
         self.child_pending.clear();
         self.child_rows.clear();
@@ -2056,13 +2060,9 @@ impl Observer {
         self.child_epoch = self.child_epoch.wrapping_add(1);
         self.child_pending.clear();
         self.child_rows.clear();
-        if self.worker.commands.try_send(Command::Child {
-            generation: self.model.generation,
-            epoch: self.child_epoch,
-            session: id.clone(),
-        }).is_ok() {
-            self.child_pending.insert(id);
-        }
+        self.child_model = Model::default();
+        self.worker.set_child(Some((self.model.generation, self.child_epoch, id.clone())));
+        self.child_pending.insert(id);
         cx.notify();
     }
 
@@ -2288,17 +2288,24 @@ impl Observer {
                     if epoch != self.child_epoch || self.active_child.as_ref().and_then(|card| card.task_id.as_ref()) != Some(&id) {
                         continue;
                     }
-                    self.child_pending.remove(&id);
-                    match result {
-                        Ok(page) => {
-                            let roots = workflow_roots(&page.workflow);
-                            self.child_rows.insert(id, presentation::project(page.messages, &roots))
-                        },
-                        Err(err) => {
-                            self.show_toast(ToastKind::Error, err, cx);
-                            None
+                    match *result {
+                        UpdateKind::Snapshot(page) => {
+                            self.child_model.page(page, false);
+                            self.child_pending.remove(&id);
                         }
-                    };
+                        UpdateKind::Event(event) => self.child_model.event(event),
+                        UpdateKind::Reset => self.child_model.reset_live(),
+                        _ => continue,
+                    }
+                    let mut messages: Vec<_> = self.child_model.messages.values().cloned().collect();
+                    if !self.child_model.live.message.is_empty()
+                        || self.child_model.live.reasoning.as_deref().is_some_and(|text| !text.is_empty())
+                    {
+                        messages.push(self.child_model.live.clone());
+                    }
+                    self.child_rows.insert(id, presentation::project(messages, &self.child_model.roots));
+                    cx.notify();
+                    continue;
                 }
                 UpdateKind::Error(message) => {
                     self.show_toast(ToastKind::Error, message, cx);
@@ -3336,6 +3343,7 @@ impl Observer {
                     .hover(move |style| style.bg(hover))
                     .child(Icon::new("fullscreen").size(14.).color(foreground))
                     .on_click(cx.listener(|this, _, _, cx| {
+                        this.worker.set_child(None);
                         this.active_child = None;
                         this.refresh_markdown(cx);
                         cx.notify();

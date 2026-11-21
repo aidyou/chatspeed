@@ -244,12 +244,6 @@ pub enum Command {
         attached_context: Option<String>,
         metadata: Option<Value>,
     },
-    /// Loads a child session for an expanded sub-agent card.
-    Child {
-        generation: u64,
-        epoch: u64,
-        session: String,
-    },
     /// Lists one directory for the authorized-path tree.
     ListDir {
         path: String,
@@ -384,7 +378,7 @@ pub enum UpdateKind {
     Opened(String),
     StartFailed(String),
     /// A child session snapshot for an expanded sub-agent card.
-    Child(u64, String, Result<Page, String>),
+    Child(u64, String, Box<UpdateKind>),
     /// A user-action failure worth showing above the composer.
     Error(String),
     /// A user-action success worth showing above the composer.
