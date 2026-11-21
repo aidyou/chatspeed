@@ -4180,6 +4180,9 @@ impl Render for Observer {
                     })),
             );
         }
+        if self.selected.is_some() && self.switched.is_some() {
+            content = content.child(ui::transcript::child_loading(cx));
+        }
         let active_group = ui::transcript::latest_active_group(&self.rows, self.workflow_running());
         for row in &self.rows {
             // Vue separates transcript entries with the medium spacing token.
