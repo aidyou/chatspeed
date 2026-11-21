@@ -81,16 +81,16 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
             .on_click(move |_, window, cx| {
                 let name = title_state.read(cx).value().trim().to_owned();
                 let prompt = prompt_state.read(cx).value().trim().to_owned();
-                let time = time_state.read(cx).value().trim().to_owned();
+                let times = time_state.read(cx).value().split(',').map(str::trim).map(str::to_owned).collect::<Vec<_>>();
                 let accepted = owner.update(cx, |this, cx| {
                     if this.automation_pending { return false; }
-                    if name.is_empty() || prompt.is_empty() || !valid_daily_time(&time) {
+                    if name.is_empty() || prompt.is_empty() || !times.iter().all(|time| valid_daily_time(time)) {
                         this.show_toast(crate::ToastKind::Warning, t!("automation_required_fields").to_string(), cx);
                         return false;
                     }
                     let spec = serde_json::json!({
                         "title": name, "prompt": prompt, "agent_id": agent,
-                        "allowed_paths": [], "schedule_kind": "daily", "schedule_config": {"times": [time]},
+                        "allowed_paths": [], "schedule_kind": "daily", "schedule_config": {"times": times},
                         "continuous_context": false, "self_review": false, "enabled": true,
                     });
                     if this.worker.commands.try_send(chatspeed_gpui::types::Command::CreateAutomation(spec)).is_err() {

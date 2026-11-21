@@ -28,7 +28,7 @@ automation_agent_label: "Agent: %{agent}"
 automation_agent_required: No agent is available
 automation_create_failed: Could not create the scheduled task
 automation_created: Scheduled task created
-automation_daily_time: Daily at (local time)
+automation_daily_time: "Daily times (local HH:MM, comma-separated)"
 automation_delete: Delete automation
 automation_delete_confirm: Permanently delete this automation?
 automation_disable: Disable

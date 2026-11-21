@@ -28,7 +28,7 @@ automation_agent_label: "代理：%{agent}"
 automation_agent_required: 暂无可用代理
 automation_create_failed: 无法创建定时任务
 automation_created: 已创建定时任务
-automation_daily_time: 每天执行时间（本地时间）
+automation_daily_time: "每日执行时间（本地 HH:MM，多个时点用英文逗号分隔）"
 automation_delete: 删除自动化
 automation_delete_confirm: 确定永久删除此自动化吗？
 automation_disable: 停用

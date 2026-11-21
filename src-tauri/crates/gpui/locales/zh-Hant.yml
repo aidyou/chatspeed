@@ -28,7 +28,7 @@ automation_agent_label: "代理：%{agent}"
 automation_agent_required: 暫無可用代理
 automation_create_failed: 無法建立排程任務
 automation_created: 已建立排程任務
-automation_daily_time: 每天執行時間（本機時間）
+automation_daily_time: "每日執行時間（本機 HH:MM，多個時點用半形逗號分隔）"
 automation_delete: 刪除自動化
 automation_delete_confirm: 確定永久刪除此自動化嗎？
 automation_disable: 停用
