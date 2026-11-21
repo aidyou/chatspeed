@@ -1704,6 +1704,7 @@ impl Observer {
 
     /// Opens the platform image picker, like Vue's attachment dialog.
     fn pick_attachments(&mut self, cx: &mut Context<Self>) {
+        let generation = self.model.generation;
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -1720,7 +1721,11 @@ impl Observer {
             if picked.is_empty() {
                 return;
             }
-            let _ = this.update(cx, |this, cx| this.add_attachments(picked, cx));
+            let _ = this.update(cx, |this, cx| {
+                if this.model.accepts(generation) {
+                    this.add_attachments(picked, cx);
+                }
+            });
         })
         .detach();
     }
