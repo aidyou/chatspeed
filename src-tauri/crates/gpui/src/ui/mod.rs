@@ -5,6 +5,7 @@ use gpui_kit::*;
 pub(crate) mod history_scrollbar;
 mod icon;
 mod menu_popover;
+pub(crate) mod terminal;
 
 pub use icon::Icon;
 pub(crate) use icon::{IconAssets, Spin};

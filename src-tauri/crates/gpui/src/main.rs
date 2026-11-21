@@ -389,6 +389,7 @@ struct TimelineScroll {
 struct Observer {
     worker: Worker,
     options: Options,
+    terminal: ui::terminal::Panel,
     model: Model,
     sessions: Vec<Session>,
     pending_decisions: BTreeMap<String, Vec<PendingDecision>>,
@@ -631,6 +632,7 @@ impl Observer {
         let observer = Self {
             worker,
             options,
+            terminal: ui::terminal::Panel::new(cx),
             model: Model::default(),
             sessions: Vec::new(),
             pending_decisions: BTreeMap::new(),
@@ -3817,7 +3819,8 @@ impl Render for Observer {
                                         )
                                         .child(ui::composer::composer(self, cx))
                                         .into_any_element()
-                                }),
+                                })
+                                .children(ui::terminal::render(self, cx)),
                         ),
                 )
                 .child(

@@ -9,6 +9,7 @@ pub mod model;
 pub mod native;
 pub mod prefs;
 pub mod presentation;
+pub mod terminal;
 pub mod types;
 pub mod worker;
 

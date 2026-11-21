@@ -279,6 +279,10 @@ tab_automation: 自动化
 tab_paths: 授权目录
 tab_tasks: 任务
 terminal: 终端
+terminal_connecting: 正在打开终端…
+terminal_exited: 终端已退出
+terminal_input_failed: 无法发送终端输入
+terminal_lost: 终端连接已断开，请打开新标签页重新连接。
 thinking: 思考中...
 thought: 思考
 thought_completed: 已思考

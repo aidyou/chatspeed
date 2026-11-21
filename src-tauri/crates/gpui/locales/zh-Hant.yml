@@ -279,6 +279,10 @@ tab_automation: 自動化
 tab_paths: 授權目錄
 tab_tasks: 任務
 terminal: 終端
+terminal_connecting: 正在開啟終端…
+terminal_exited: 終端已結束
+terminal_input_failed: 無法傳送終端輸入
+terminal_lost: 終端連線已中斷，請開啟新分頁重新連線。
 thinking: 思考中...
 thought: 思考
 thought_completed: 已思考

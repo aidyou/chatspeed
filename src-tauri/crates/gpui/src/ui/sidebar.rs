@@ -223,7 +223,7 @@ fn rail(
                     "bash",
                     skin,
                     cx,
-                    |this, cx| this.not_implemented(t!("terminal"), cx),
+                    super::terminal::toggle,
                 )),
         )
         .into_any_element()
@@ -768,7 +768,7 @@ fn compact(
                     48.,
                     skin,
                     cx,
-                    |this, cx| this.not_implemented(t!("terminal"), cx),
+                    super::terminal::toggle,
                 )),
         )
         .into_any_element()

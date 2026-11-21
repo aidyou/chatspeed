@@ -279,6 +279,10 @@ tab_automation: Automation
 tab_paths: Authorized paths
 tab_tasks: Tasks
 terminal: Terminal
+terminal_connecting: Opening terminal…
+terminal_exited: Terminal exited
+terminal_input_failed: Terminal input could not be sent
+terminal_lost: Terminal connection lost. Open a new tab to reconnect.
 thinking: Thinking...
 thought: Thought
 thought_completed: Thought completed
