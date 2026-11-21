@@ -563,6 +563,16 @@ mod tests {
         assert!(!model.can_clear_context());
         model.page(page("pending", json!({"state": "pending"}), false, None), false);
         assert!(model.can_clear_context());
+        for (status, reason) in [
+            ("awaiting_approval", "approval"),
+            ("awaiting_user", "user_input"),
+            ("awaiting_sub_agent", "sub_agent"),
+        ] {
+            model.page(page(status, json!({"waitReason": reason}), true, None), false);
+            assert!(model.can_stop(), "live {status}");
+            model.page(page(status, json!({"waitReason": reason}), false, None), false);
+            assert!(!model.can_stop(), "durable-only {status}");
+        }
         model.page(page("paused", Value::Null, true, None), false);
         assert!(!model.can_continue());
         model.page(page("paused", Value::Null, false, Some("ask_user_wait")), false);
