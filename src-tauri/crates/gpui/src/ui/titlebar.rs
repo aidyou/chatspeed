@@ -81,16 +81,16 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
             .on_click(move |_, window, cx| {
                 let name = title_state.read(cx).value().trim().to_owned();
                 let prompt = prompt_state.read(cx).value().trim().to_owned();
-                let times = time_state.read(cx).value().split(',').map(str::trim).map(str::to_owned).collect::<Vec<_>>();
+                let schedule = parse_daily_schedule(time_state.read(cx).value().as_ref());
                 let accepted = owner.update(cx, |this, cx| {
                     if this.automation_pending { return false; }
-                    if name.is_empty() || prompt.is_empty() || !times.iter().all(|time| valid_daily_time(time)) {
+                    let Some(schedule) = schedule.filter(|_| !name.is_empty() && !prompt.is_empty()) else {
                         this.show_toast(crate::ToastKind::Warning, t!("automation_required_fields").to_string(), cx);
                         return false;
-                    }
+                    };
                     let spec = serde_json::json!({
                         "title": name, "prompt": prompt, "agent_id": agent,
-                        "allowed_paths": [], "schedule_kind": "daily", "schedule_config": {"times": times},
+                        "allowed_paths": [], "schedule_kind": "daily", "schedule_config": schedule,
                         "continuous_context": false, "self_review": false, "enabled": true,
                     });
                     if this.worker.commands.try_send(chatspeed_gpui::types::Command::CreateAutomation(spec)).is_err() {
@@ -110,6 +110,23 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 .child(Button::new("create-automation-cancel").label(t!("action_cancel").to_string()).on_click(|_, window, cx| window.close_dialog(cx)))
                 .child(submit))
     });
+}
+
+fn parse_daily_schedule(value: &str) -> Option<serde_json::Value> {
+    let mut times: Vec<_> = value.split([',', '，']).map(str::trim).collect();
+    if !times.iter().all(|time| valid_daily_time(time)) {
+        return None;
+    }
+    times.sort_unstable();
+    times.dedup();
+    Some(serde_json::json!({"time": times.first()?, "times": times}))
+}
+
+#[::core::prelude::v1::test]
+fn daily_schedule_normalizes_times() {
+    assert_eq!(parse_daily_schedule("18:00，09:00, 09:00"), Some(serde_json::json!({"time":"09:00","times":["09:00","18:00"]})));
+    assert!(parse_daily_schedule("09:00, 24:00").is_none());
+    assert!(parse_daily_schedule("").is_none());
 }
 
 fn valid_daily_time(time: &str) -> bool {
