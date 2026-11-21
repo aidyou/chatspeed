@@ -43,6 +43,7 @@ automation_required_fields: 请输入名称、任务指令和有效时间（HH:M
 automation_run: 立即运行
 awaiting_approval: 等待用户审批
 chat_hub: ChatHub
+child_reconnecting: 正在重新连接子会话…
 clear_context_divider: 开始新会话
 clear_context_failed: "清空上下文失败"
 clear_context_frame_done: "已为后续 AI 回合清空上下文"

@@ -490,6 +490,7 @@ struct Observer {
     /// Child transcripts requested but not loaded yet.
     child_epoch: u64,
     child_model: Model,
+    child_connected: Option<bool>,
     child_pending: BTreeSet<String>,
     /// Agents, model providers and skills the composer selectors list.
     agents: Vec<serde_json::Value>,
@@ -735,6 +736,7 @@ impl Observer {
             ask_user_text: BTreeMap::new(),
             child_epoch: 0,
             child_model: Model::default(),
+            child_connected: None,
             child_pending: BTreeSet::new(),
             agents: Vec::new(),
             models: Vec::new(),
@@ -2064,6 +2066,7 @@ impl Observer {
         self.child_pending.clear();
         self.child_rows.clear();
         self.child_model = Model::default();
+        self.child_connected = None;
         self.worker.set_child(Some((self.model.generation, self.child_epoch, id.clone())));
         self.child_pending.insert(id);
         cx.notify();
@@ -2295,6 +2298,11 @@ impl Observer {
                         UpdateKind::Snapshot(page) => {
                             self.child_model.page(page, false);
                             self.child_pending.remove(&id);
+                        }
+                        UpdateKind::Connected(connected) => {
+                            self.child_connected = Some(connected);
+                            cx.notify();
+                            continue;
                         }
                         UpdateKind::Event(event) => self.child_model.event(event),
                         UpdateKind::Reset => self.child_model.reset_live(),
@@ -3351,6 +3359,10 @@ impl Observer {
                         this.refresh_markdown(cx);
                         cx.notify();
                     }))))
+            .when(self.child_connected == Some(false), |pane| {
+                pane.child(div().px_3().py_1().text_xs().text_color(cx.theme().muted_foreground)
+                    .child(t!("child_reconnecting").to_string()))
+            })
             .child(div().id("child-pane-scroll").flex_1().min_h_0().overflow_y_scroll().child(content))
             .into_any_element())
     }

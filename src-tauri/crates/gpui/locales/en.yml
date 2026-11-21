@@ -43,6 +43,7 @@ automation_required_fields: Enter a name, instructions, and a valid time (HH:MM)
 automation_run: Run now
 awaiting_approval: Awaiting approval
 chat_hub: ChatHub
+child_reconnecting: Reconnecting to the child session…
 clear_context_divider: Start new session
 clear_context_failed: "Failed to clear the context frame"
 clear_context_frame_done: "Context cleared for subsequent AI turns"
