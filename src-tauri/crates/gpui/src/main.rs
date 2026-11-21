@@ -438,6 +438,7 @@ struct Observer {
     rail_tab: ui::sidebar::RailTab,
     /// Session search box and the primary-root filter beside it.
     session_search: Entity<InputState>,
+    skill_search: Entity<InputState>,
     session_root_filter: Option<String>,
     /// Draggable width of the expanded panel, matching Vue's 200px floor.
     sidebar_width: f32,
@@ -654,6 +655,10 @@ impl Observer {
         });
         let session_search =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("search_sessions").to_string()));
+        let skill_search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("search_skills").to_string()));
+        cx.subscribe_in(&skill_search, window, |_, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) { cx.notify(); }
+        }).detach();
         // The list filters while the query changes, so every edit repaints it.
         cx.subscribe_in(
             &session_search,
@@ -737,6 +742,7 @@ impl Observer {
             sidebar_tab: ui::sidebar::SidebarTab::Tasks,
             rail_tab: ui::sidebar::RailTab::Tasks,
             session_search,
+            skill_search,
             session_root_filter: None,
             sidebar_width: ui::SIDEBAR_WIDTH,
             sidebar_drag: None,

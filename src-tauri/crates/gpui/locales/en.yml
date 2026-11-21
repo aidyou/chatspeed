@@ -207,6 +207,7 @@ sandbox_mode_only: "Sandbox only"
 sandbox_mode_only_hint: "Run Shell/CMD directly in the sandbox"
 sandbox_refresh: "Refresh configuration"
 search_sessions: Search conversations
+search_skills: Search skills
 select: Select a workflow session
 sessions: Workflow sessions
 session_delete: "Delete session"

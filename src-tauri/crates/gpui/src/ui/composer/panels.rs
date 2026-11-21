@@ -273,14 +273,15 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let Some(draft) = observer.skills_draft.clone() else {
         return empty_note(t!("skills_empty").to_string(), cx);
     };
+    let query = observer.skill_search.read(cx).value().trim().to_lowercase();
     let skills: Vec<(String, String)> = observer
         .skills
         .iter()
         .filter_map(|skill| {
-            Some((
-                skill["name"].as_str()?.to_owned(),
-                skill["description"].as_str().unwrap_or("").to_owned(),
-            ))
+            let name = skill["name"].as_str()?;
+            let description = skill["description"].as_str().unwrap_or_default();
+            (name.to_lowercase().contains(&query) || description.to_lowercase().contains(&query))
+                .then(|| (name.to_owned(), description.to_owned()))
         })
         .collect();
     let enabled = draft.enabled;
@@ -292,6 +293,7 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         }
     });
     let mut list = v_flex().w_full().min_w_0().gap(px(1.)).p_3();
+    list = list.child(gpui_kit::component::input::Input::new(&observer.skill_search));
     list = list.child(check_row(
         "skills-enabled".into(),
         t!("skill_enabled").to_string(),

@@ -207,6 +207,7 @@ sandbox_mode_only: "仅沙箱"
 sandbox_mode_only_hint: "直接在沙箱中运行 Shell/CMD"
 sandbox_refresh: "刷新配置"
 search_sessions: 搜索会话
+search_skills: 搜索技能
 select: 请选择工作流会话
 sessions: 工作流会话
 session_delete: "删除会话"
