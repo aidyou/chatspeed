@@ -3394,7 +3394,11 @@ impl Observer {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.worker.set_child(None);
                         this.active_child = None;
-                        this.refresh_markdown(cx);
+                        this.child_pending.clear();
+                        this.child_rows.clear();
+                        this.child_markdown.clear();
+                        this.child_model = Model::default();
+                        this.child_connected = None;
                         cx.notify();
                     }))))
             .when(self.child_connected == Some(false), |pane| {
