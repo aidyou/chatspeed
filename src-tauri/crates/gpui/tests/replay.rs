@@ -49,6 +49,31 @@ fn replay_is_ordered_and_window_drop_joins_worker() {
 }
 
 #[test]
+fn child_reopen_tags_updates_without_replacing_parent() {
+    let mut worker = Worker::start(Options { discovery: None, metrics: None, demo: true }).unwrap();
+    worker.commands.try_send(Command::Select { generation: 9, id: "parent".into() }).unwrap();
+    for epoch in 1..=2 {
+        worker.set_child(Some((9, epoch, "child".into())));
+        let until = Instant::now() + Duration::from_secs(3);
+        let mut child_snapshot = false;
+        let mut parent_event = false;
+        while Instant::now() < until && !(child_snapshot && parent_event) {
+            match worker.updates.try_recv().map(|update| update.kind) {
+                Ok(UpdateKind::Child(current, id, kind)) if current == epoch => {
+                    assert_eq!(id, "child");
+                    child_snapshot |= matches!(*kind, UpdateKind::Snapshot(_));
+                }
+                Ok(UpdateKind::Event(_)) => parent_event = true,
+                Ok(_) => {},
+                Err(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        assert!(child_snapshot && parent_event);
+        worker.set_child(None);
+    }
+}
+
+#[test]
 fn immediate_shutdown_cancels_selected_worker() {
     let worker = Worker::start(Options {
         discovery: None,
