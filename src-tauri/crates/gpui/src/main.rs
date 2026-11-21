@@ -814,10 +814,7 @@ impl Observer {
         self.models_saved_at = None;
         self.models_pending = None;
         self.clear_pending = false;
-        self.worker.set_child(None);
-        self.active_child = None;
-        self.child_pending.clear();
-        self.child_rows.clear();
+        self.close_child();
         self.approval_drafts.clear();
         self.rewind_pending = false;
         self.markdown.clear();
@@ -1522,10 +1519,7 @@ impl Observer {
         self.models_saved_at = None;
         self.models_pending = None;
         self.clear_pending = false;
-        self.worker.set_child(None);
-        self.active_child = None;
-        self.child_pending.clear();
-        self.child_rows.clear();
+        self.close_child();
         self.approval_drafts.clear();
         self.rows.clear();
         self.markdown.clear();
@@ -2059,6 +2053,16 @@ impl Observer {
         self.ask_user_answered
             .insert(tool.tool_call_id.clone(), answers);
         cx.notify();
+    }
+
+    fn close_child(&mut self) {
+        self.worker.set_child(None);
+        self.active_child = None;
+        self.child_pending.clear();
+        self.child_rows.clear();
+        self.child_markdown.clear();
+        self.child_model = Model::default();
+        self.child_connected = None;
     }
 
     fn open_child(&mut self, card: SubAgentView, cx: &mut Context<Self>) {
@@ -3392,13 +3396,7 @@ impl Observer {
                     .hover(move |style| style.bg(hover))
                     .child(Icon::new("fullscreen").size(14.).color(foreground))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.worker.set_child(None);
-                        this.active_child = None;
-                        this.child_pending.clear();
-                        this.child_rows.clear();
-                        this.child_markdown.clear();
-                        this.child_model = Model::default();
-                        this.child_connected = None;
+                        this.close_child();
                         cx.notify();
                     }))))
             .when(self.child_connected == Some(false), |pane| {
