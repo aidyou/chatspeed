@@ -2035,7 +2035,7 @@ impl Observer {
                 return;
             }
         };
-        let _ = self.worker.commands.try_send(Command::Signal {
+        if self.worker.commands.try_send(Command::Signal {
             id: session,
             signal: serde_json::json!({
                 "type": "user_message",
@@ -2046,7 +2046,10 @@ impl Observer {
                     "requested_tool_call_id": tool.tool_call_id,
                 },
             }),
-        });
+        }).is_err() {
+            self.show_toast(ToastKind::Error, t!("ask_user_submit_failed").to_string(), cx);
+            return;
+        }
         // Switch the card to its answered form immediately; the runtime's
         // persisted answer takes over on the next projection.
         self.ask_user_answered

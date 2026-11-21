@@ -17,6 +17,7 @@ ask_user_other: 其他
 ask_user_other_placeholder: 输入你的回答
 ask_user_other_required: 请为「其他」填写回答内容
 ask_user_required: 请先为每个问题选择一个选项
+ask_user_submit_failed: 无法发送回答
 attachment_unsupported: "只能添加图片文件"
 auto_approve_plan: "自动批准计划"
 auto_approve_plan_hint: "计划提交后直接进入实施阶段"

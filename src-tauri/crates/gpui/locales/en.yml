@@ -17,6 +17,7 @@ ask_user_other: Other
 ask_user_other_placeholder: Type your answer
 ask_user_other_required: Type your own answer for the “Other” option
 ask_user_required: Pick an option for every question first
+ask_user_submit_failed: Could not send the answer
 attachment_unsupported: "Only image files can be attached"
 auto_approve_plan: "Auto-approve plan"
 auto_approve_plan_hint: "Start implementation as soon as a plan is submitted"
