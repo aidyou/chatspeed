@@ -901,9 +901,10 @@ impl Observer {
     }
 
     fn refresh_automations(&mut self) {
-        if self.worker.commands.try_send(Command::ListAutomations).is_ok() {
-            self.automations = None;
-        }
+        self.automations = match self.worker.commands.try_send(Command::ListAutomations) {
+            Ok(()) => None,
+            Err(_) => Some(Err(t!("automation_action_failed").to_string())),
+        };
     }
 
     fn select_sidebar_tab(&mut self, tab: ui::sidebar::SidebarTab, cx: &mut Context<Self>) {
