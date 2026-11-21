@@ -472,6 +472,7 @@ struct Observer {
     toast: Option<Toast>,
     /// Child transcripts loaded for expanded sub-agent cards, by task id.
     child_rows: BTreeMap<String, Vec<Row>>,
+    active_child: Option<SubAgentView>,
     /// Selected option per `ask_user` group, keyed by `tool_call_id:group`.
     ask_user_choice: BTreeMap<String, usize>,
     /// Free text typed for an `ask_user` "Other" row, by the same key.
@@ -696,6 +697,7 @@ impl Observer {
             start_draft: None,
             toast: None,
             child_rows: BTreeMap::new(),
+            active_child: None,
             ask_user_choice: BTreeMap::new(),
             approval_drafts: BTreeMap::new(),
             ask_user_text: BTreeMap::new(),
@@ -771,6 +773,9 @@ impl Observer {
             self.switch_draft(Some(id), cx);
         }
         self.model.select();
+        self.active_child = None;
+        self.child_pending.clear();
+        self.child_rows.clear();
         self.approval_drafts.clear();
         self.rewind_pending = false;
         self.markdown.clear();
@@ -1411,6 +1416,9 @@ impl Observer {
         }
         self.rewind_pending = false;
         self.model.select();
+        self.active_child = None;
+        self.child_pending.clear();
+        self.child_rows.clear();
         self.approval_drafts.clear();
         self.rows.clear();
         self.markdown.clear();
@@ -1620,7 +1628,7 @@ impl Observer {
     }
 
     fn stop_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.selected.clone().filter(|_| self.workflow_running()) else {
+        let Some(id) = self.selected.clone().filter(|_| self.model.can_stop()) else {
             return;
         };
         let generation = self.model.generation;
@@ -1641,7 +1649,7 @@ impl Observer {
             let _ = this.update(cx, |this, cx| {
                 if this.selected.as_deref() == Some(id.as_str())
                     && this.model.accepts(generation)
-                    && this.workflow_running()
+                    && this.model.can_stop()
                 {
                     let _ = this.worker.commands.try_send(Command::Stop { id });
                     cx.notify();
@@ -1919,21 +1927,14 @@ impl Observer {
         cx.notify();
     }
 
-    /// Expands a sub-agent card and requests its child transcript once.
-    fn toggle_sub_agent(&mut self, card: SubAgentView, cx: &mut Context<Self>) {
-        if self.expanded.remove(&card.key) {
-            cx.notify();
-            return;
-        }
-        self.expanded.insert(card.key.clone());
-        if let Some(task_id) = card.task_id {
-            if !self.child_rows.contains_key(&task_id) && self.child_pending.insert(task_id.clone())
-            {
-                let _ = self.worker.commands.try_send(Command::Child {
-                    id: task_id.clone(),
-                    session: task_id,
-                });
-            }
+    fn open_child(&mut self, card: SubAgentView, cx: &mut Context<Self>) {
+        let Some(id) = card.task_id.clone() else { return; };
+        self.active_child = Some(card);
+        if !self.child_pending.contains(&id) && self.worker.commands.try_send(Command::Child {
+            generation: self.model.generation,
+            session: id.clone(),
+        }).is_ok() {
+            self.child_pending.insert(id);
         }
         cx.notify();
     }
@@ -2105,10 +2106,15 @@ impl Observer {
                     }
                     self.show_toast(ToastKind::Error, message, cx);
                 }
-                UpdateKind::Child(id, page) => {
+                UpdateKind::Child(id, result) => {
                     self.child_pending.remove(&id);
-                    self.child_rows
-                        .insert(id, presentation::project(page.messages, self.roots()));
+                    match result {
+                        Ok(page) => self.child_rows.insert(id, presentation::project(page.messages, self.roots())),
+                        Err(err) => {
+                            self.show_toast(ToastKind::Error, err, cx);
+                            None
+                        }
+                    };
                 }
                 UpdateKind::Error(message) => {
                     self.show_toast(ToastKind::Error, message, cx);
@@ -2860,7 +2866,11 @@ impl Observer {
 
     fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
         let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
-        if tool.status == presentation::ToolStatus::Running {
+        if let Some(output) = self.model.tool_output.get(&tool.tool_call_id).filter(|text| !text.is_empty()) {
+            detail = detail.child(div().id("tool-stream-output").max_h(px(200.)).overflow_y_scroll()
+                .rounded(px(6.)).bg(cx.theme().muted).p_2().font_family(MONO_FONT)
+                .text_size(px(12.)).child(output.clone()));
+        } else if tool.status == presentation::ToolStatus::Running {
             detail = detail.child(h_flex().child(ui::running_badge(
                 t!("executing").to_string(),
                 SharedString::from(format!("{}:running", tool.detail_key)),
@@ -3014,11 +3024,10 @@ impl Observer {
     }
 
     fn sub_agent_row(&self, card: &SubAgentView, cx: &mut Context<Self>) -> AnyElement {
-        use ui::transcript::{child_loading, child_transcript, sub_agent_card, SubAgentDetails};
+        use ui::transcript::{sub_agent_card, SubAgentDetails};
 
-        let click_card = card.clone();
-        let on_toggle =
-            cx.listener(move |this, _, _, cx| this.toggle_sub_agent(click_card.clone(), cx));
+        let key = card.key.clone();
+        let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx));
         let details = self.expanded.contains(&card.key).then(|| {
             let task = self.sub_agent_section(
                 t!("sub_agent_task_section").to_string(),
@@ -3040,27 +3049,64 @@ impl Observer {
                 .cost
                 .as_ref()
                 .map(|cost| self.cost_section(card.cost_key.clone(), cost, cx));
-            let transcript = card
-                .task_id
-                .as_ref()
-                .and_then(|id| match self.child_rows.get(id) {
-                    // The same row renderer is used for both timelines.
-                    Some(rows) if !rows.is_empty() => {
-                        let elements: Vec<_> =
-                            rows.iter().map(|row| self.row(row, None, cx)).collect();
-                        Some(child_transcript(elements, cx))
-                    }
-                    Some(_) => None,
-                    None => Some(child_loading(cx)),
-                });
-            SubAgentDetails {
-                task,
-                result,
-                cost,
-                transcript,
-            }
+            let open_transcript = card.task_id.as_ref().map(|_| {
+                let card = card.clone();
+                let hover = cx.theme().muted;
+                let foreground = cx.theme().foreground;
+                div().id("open-child-transcript").p_1().rounded(px(4.))
+                    .cursor_pointer().hover(move |style| style.bg(hover))
+                    .child(Icon::new("fullscreen-off").size(14.).color(foreground))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.open_child(card.clone(), cx);
+                    })).into_any_element()
+            });
+            SubAgentDetails { task, result, cost, open_transcript }
         });
         sub_agent_card(card, details, on_toggle, cx)
+    }
+
+    fn child_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let card = self.active_child.as_ref()?;
+        let id = card.task_id.as_ref()?;
+        let foreground = cx.theme().foreground;
+        let hover = cx.theme().muted;
+        let content = if let Some(rows) = self.child_rows.get(id) {
+            // The primary row renderer binds decision callbacks to the parent.
+            // Until the child has its own action scope, render its preview without those callbacks.
+            let entries = rows.iter().filter_map(|row| {
+                let text = match row {
+                    Row::Assistant(view) => &view.markdown,
+                    Row::User(view) => &view.text,
+                    Row::Tool(view) => &view.summary,
+                    Row::Activity(view) => &view.summary,
+                    _ => return None,
+                };
+                (!text.is_empty()).then(|| plain_text(text, foreground).into_any_element())
+            });
+            ui::transcript::child_transcript(entries, cx)
+        } else if self.child_pending.contains(id) {
+            ui::transcript::child_loading(cx)
+        } else {
+            div().into_any_element()
+        };
+        Some(v_flex().id(SharedString::from(format!("child-pane-{id}")))
+            .absolute().inset_0().occlude().bg(cx.theme().background)
+            .child(h_flex().h(px(40.)).flex_none().items_center().gap_2().px_3()
+                .border_b_1().border_color(cx.theme().border)
+                .child(Icon::new("task").size(15.).color(foreground))
+                .child(div().min_w_0().text_ellipsis().overflow_hidden().font_weight(FontWeight::SEMIBOLD).child(card.agent.clone()))
+                .child(div().flex_1())
+                .child(div().id("close-child-pane").p_1().rounded(px(4.)).cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .child(Icon::new("fullscreen").size(14.).color(foreground))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.active_child = None;
+                        this.refresh_markdown(cx);
+                        cx.notify();
+                    }))))
+            .child(div().id("child-pane-scroll").flex_1().min_h_0().overflow_y_scroll().child(content))
+            .into_any_element())
     }
 
     fn choice_group(
@@ -3625,7 +3671,8 @@ impl Render for Observer {
                                             self.timeline_scroll
                                                 .scrollbar_input
                                                 .overlay(&self.timeline_scroll.scroll),
-                                        ),
+                                        )
+                                        .children(self.child_overlay(cx)),
                                 )
                                 .child(ui::composer::composer(self, cx)),
                         ),

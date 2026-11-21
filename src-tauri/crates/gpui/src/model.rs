@@ -14,6 +14,7 @@ pub struct Model {
     pub messages: BTreeMap<i64, Message>,
     pub live: Message,
     pub tools: BTreeMap<String, Value>,
+    pub tool_output: BTreeMap<String, String>,
     pub tool_order: Vec<String>,
     pub before: Option<String>,
     pub hidden: usize,
@@ -65,6 +66,12 @@ impl Model {
             ..Self::default()
         };
         generation
+    }
+
+    pub fn can_stop(&self) -> bool {
+        self.has_live_session
+            && matches!(self.state.as_str(), "thinking" | "executing" | "auditing" | "running"
+                | "paused" | "awaiting_user" | "awaiting_approval" | "awaiting_auto_approval" | "awaiting_sub_agent")
     }
 
     pub fn accepts(&self, generation: u64) -> bool {
@@ -384,8 +391,20 @@ impl Model {
                     }
                 }
             }
+            "tool_stream" => {
+                if let (Some(id), Some(output)) = (event["tool_id"].as_str(), event["output"].as_str()) {
+                    if !self.tool_output.contains_key(id) && self.tool_output.len() >= 32 { return; }
+                    let buffer = self.tool_output.entry(id.to_owned()).or_default();
+                    buffer.push_str(output);
+                    let mut trim = buffer.len().saturating_sub(16 * 1024);
+                    while !buffer.is_char_boundary(trim) { trim += 1; }
+                    buffer.drain(..trim);
+                }
+            }
             "tool_started" | "tool_completed" | "tool_failed" => {
                 if let Some(id) = event["tool_call_id"].as_str() {
+                    self.pending_tool_ids.remove(id);
+                    if kind != "tool_started" { self.tool_output.remove(id); }
                     self.tool_order.retain(|id| self.tools.contains_key(id));
                     if !self.tools.contains_key(id) {
                         self.tool_order.push(id.to_owned());

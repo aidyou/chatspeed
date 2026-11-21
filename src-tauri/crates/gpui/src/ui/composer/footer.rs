@@ -23,7 +23,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let accent = cx.theme().primary;
     let hover = cx.theme().muted;
     let muted = cx.theme().muted_foreground;
-    let running = observer.workflow_running();
+    let can_stop = observer.model.can_stop();
     let can_send = (!observer.composer.read(cx).value().trim().is_empty()
         || !observer.attachments.is_empty())
         && !observer.start_pending;
@@ -51,7 +51,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                     row.child(continue_button(accent, hover, cx))
                 }),
         )
-        .when(running, |row| {
+        .when(can_stop, |row| {
             row.child(icon_action(
                 "stop-workflow",
                 "stop",

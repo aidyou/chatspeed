@@ -414,15 +414,15 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
-            Command::Child { id, session } => {
-                let path = format!("/control/v1/workflows/{session}?limit={PAGE_LIMIT}");
-                if let Ok(value) = native::control_get(&options, &path).await {
-                    if let Ok(page) = serde_json::from_value(value) {
-                        if !send(&tx, 0, UpdateKind::Child(id, page)).await {
-                            return;
-                        }
-                    }
-                }
+            Command::Child { generation, session } => {
+                let options = options.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let path = format!("/control/v1/workflows/{session}?limit={PAGE_LIMIT}");
+                    let result = native::control_get(&options, &path).await
+                        .and_then(|value| serde_json::from_value(value).map_err(|err| err.to_string()));
+                    let _ = send(&tx, generation, UpdateKind::Child(session, result)).await;
+                });
             }
             Command::ListDir { path } => {
                 let tx = tx.clone();

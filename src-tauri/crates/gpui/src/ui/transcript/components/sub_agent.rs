@@ -1,4 +1,4 @@
-//! Delegated-task card and its nested transcript surface.
+//! Delegated-task card and its separate transcript surface.
 
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
@@ -21,7 +21,7 @@ pub(crate) struct SubAgentDetails {
     pub task: AnyElement,
     pub result: Option<AnyElement>,
     pub cost: Option<AnyElement>,
-    pub transcript: Option<AnyElement>,
+    pub open_transcript: Option<AnyElement>,
 }
 
 pub(crate) fn sub_agent_card(
@@ -74,7 +74,7 @@ pub(crate) fn sub_agent_card(
         task,
         result,
         cost,
-        transcript,
+        open_transcript,
     }) = details
     {
         let mut rows = h_flex().w_full().min_w_0().gap_3();
@@ -129,6 +129,7 @@ pub(crate) fn sub_agent_card(
                                 .child(t!("sub_agent_delegated_task").to_string()),
                         )
                         .child(div().flex_1())
+                        .children(open_transcript)
                         .when(!card.usage.is_empty(), |view| {
                             view.child(
                                 div()
@@ -144,7 +145,6 @@ pub(crate) fn sub_agent_card(
                 .children(result)
                 .children(cost),
         );
-        body = body.children(transcript);
     }
     body.into_any_element()
 }
