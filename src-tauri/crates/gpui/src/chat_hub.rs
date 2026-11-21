@@ -5,10 +5,13 @@ use std::{cell::Cell, fs::{File, OpenOptions}, io, path::{Path, PathBuf}, rc::Rc
 use gpui_kit::{canvas, prelude::*, Context, Window};
 #[cfg(target_os = "linux")]
 use raw_window_handle::HasWindowHandle;
-use wry::{dpi::{LogicalPosition, LogicalSize}, NewWindowResponse, Rect, WebView, WebViewBuilder};
+use wry::{NewWindowResponse, Rect, WebView, WebViewBuilder};
+
+pub(crate) const DOCK_WIDTH: f32 = 600.;
 
 pub(crate) struct ChatHub {
     view: Rc<WebView>,
+    growth: Option<(gpui_kit::Pixels, gpui_kit::Pixels)>,
     bounds: Rc<Cell<Option<[f32; 4]>>>,
     #[cfg(not(target_os = "macos"))]
     _context: wry::WebContext,
@@ -96,7 +99,7 @@ impl ChatHub {
         };
         #[cfg(not(target_os = "linux"))]
         let view = builder.build_as_child(window)?;
-        Ok(Self { view: Rc::new(view), bounds: Rc::new(Cell::new(None)),
+        Ok(Self { view: Rc::new(view), bounds: Rc::new(Cell::new(None)), growth: None,
             #[cfg(not(target_os = "macos"))]
             _context: context,
             _profile_lock: profile_lock,
@@ -117,6 +120,33 @@ impl ChatHub {
         }).detach();
     }
 
+    fn expand(&mut self, window: &mut Window, cx: &gpui_kit::App) {
+        use gpui_kit::{px, size};
+        if window.is_maximized() || window.is_fullscreen() { return; }
+        let Some(display) = window.display(cx) else { return; };
+        let bounds = window.bounds();
+        let area = display.visible_bounds();
+        let growth = (area.origin.x + area.size.width - bounds.origin.x - bounds.size.width)
+            .max(px(0.)).min(px(DOCK_WIDTH));
+        if growth > px(0.) {
+            self.growth = Some((bounds.size.width, growth));
+            window.resize(size(bounds.size.width + growth, bounds.size.height));
+        }
+    }
+
+    pub(crate) fn added_width(&self, width: gpui_kit::Pixels) -> gpui_kit::Pixels {
+        self.growth.map_or(gpui_kit::px(0.), |(base, requested)| (width - base).max(gpui_kit::px(0.)).min(requested))
+    }
+
+    pub(crate) fn close(self, window: &mut Window) {
+        let bounds = window.bounds();
+        let growth = self.added_width(bounds.size.width);
+        drop(self);
+        if growth > gpui_kit::px(0.) && !window.is_maximized() && !window.is_fullscreen() {
+            window.resize(gpui_kit::size(bounds.size.width - growth, bounds.size.height));
+        }
+    }
+
     pub(crate) fn reload(&self) -> wry::Result<()> {
         self.view.reload()
     }
@@ -128,15 +158,35 @@ impl ChatHub {
     pub(crate) fn dock(&self) -> impl IntoElement {
         let view = Rc::downgrade(&self.view);
         let last = self.bounds.clone();
-        canvas(|_, _, _| (), move |bounds, (), _, _| {
+        canvas(|_, _, _| (), move |bounds, (), window, _| {
             let Some(view) = view.upgrade() else { return; };
             let next = [bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height].map(f32::from);
+            #[cfg(target_os = "linux")]
+            let (next, rect) = {
+                use wry::dpi::{PhysicalPosition, PhysicalSize};
+                let scale = window.scale_factor();
+                let [x, y, w, h] = next;
+                let left = (x * scale).round();
+                let top = (y * scale).round();
+                let width = ((x + w) * scale).round() - left;
+                let height = ((y + h) * scale).round() - top;
+                ([left, top, width, height], Rect {
+                    position: PhysicalPosition::new(left as i32, top as i32).into(),
+                    size: PhysicalSize::new(width as u32, height as u32).into(),
+                })
+            };
+            #[cfg(not(target_os = "linux"))]
+            let rect = {
+                let _ = window;
+                use wry::dpi::{LogicalPosition, LogicalSize};
+                Rect {
+                    position: LogicalPosition::new(next[0], next[1]).into(),
+                    size: LogicalSize::new(next[2], next[3]).into(),
+                }
+            };
             if next[2] <= 0. || next[3] <= 0. { let _ = view.set_visible(false); last.set(None); return; }
-            if last.get() != Some(next) && view.set_bounds(Rect {
-                position: LogicalPosition::new(next[0], next[1]).into(),
-                size: LogicalSize::new(next[2], next[3]).into(),
-            }).is_ok() && view.set_visible(true).is_ok() { last.set(Some(next)); }
-        }).flex_1().w_full()
+            if last.get() != Some(next) && view.set_bounds(rect).is_ok() && view.set_visible(true).is_ok() { last.set(Some(next)); }
+        }).flex_1().min_h_0().w_full()
     }
 }
 
@@ -157,7 +207,8 @@ pub(crate) fn select_site(sites: serde_json::Value, window: &mut Window, cx: &mu
                 window.close_dialog(cx);
                 let _ = owner.update(cx, |this, cx| {
                     match ChatHub::open(window, &url) {
-                        Ok(hub) => {
+                        Ok(mut hub) => {
+                            hub.expand(window, cx);
                             #[cfg(target_os = "linux")]
                             hub.pump_gtk(cx);
                             this.chat_hub = Some(hub);

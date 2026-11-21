@@ -732,6 +732,8 @@ impl Observer {
             if !(width.is_finite() && height.is_finite() && width > 0. && height > 0.) {
                 return;
             }
+            #[cfg(feature = "chat-hub")]
+            let width = width - this.chat_hub.as_ref().map_or(0., |hub| f32::from(hub.added_width(bounds.size.width)));
             this.worker.save_geometry(ui::window_pin::geometry_values(window, width, height));
         }).detach();
         let mut observer = Self {
@@ -4402,7 +4404,7 @@ impl Render for Observer {
                     }
                 }))
             };
-            v_flex().w(px(480.)).max_w(relative(0.55)).h_full().min_h_0()
+            v_flex().flex_none().w(px(chat_hub::DOCK_WIDTH)).max_w(relative(0.45)).min_w_0().h_full().min_h_0()
                 .child(h_flex().gap_2()
                     .child(control("hub-reload", "↻", chat_hub::ChatHub::reload))
                     .child(control("hub-zoom-out", "−", |hub| hub.zoom(0.8)))
@@ -4446,7 +4448,7 @@ impl Render for Observer {
                                         .flex_1()
                                         .min_h_0()
                                         .child(
-                                            v_flex().relative().flex_1().min_h_0().min_w_0()
+                                            v_flex().relative().flex_1().w_full().min_h_0().min_w_0().overflow_hidden()
                                                 .child(content)
                                                 .child(self.timeline_scroll.scrollbar_input.overlay(&self.timeline_scroll.scroll))
                                                 .children(self.child_overlay(cx)),
@@ -4478,6 +4480,9 @@ impl Render for Observer {
         // Configuration dialogs float above the whole frame instead of growing
         // the composer, like Vue's appended-to-body popovers.
         let mut shell = div().id("workflow-shell").size_full().relative().child(frame)
+            .capture_key_down(cx.listener(|this, event, window, cx| {
+                ui::terminal::shortcut(this, event, window, cx);
+            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some(offset) = this.status_panel_drag {
                     if event.pressed_button == Some(MouseButton::Left) {

@@ -367,7 +367,8 @@ pub(super) fn toggle_chat_hub(this: &mut Observer, window: &mut Window, cx: &mut
     }
     #[cfg(feature = "chat-hub")]
     {
-        if this.chat_hub.take().is_some() {
+        if let Some(hub) = this.chat_hub.take() {
+            hub.close(window);
             cx.notify();
             return;
         }
