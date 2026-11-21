@@ -465,6 +465,7 @@ struct Observer {
     /// Multi-line composer state; sends read it and clear it.
     composer: Entity<TextareaState>,
     drafts: BTreeMap<Option<String>, (String, Vec<Attachment>)>,
+    draft_save: Option<Task<()>>,
     restore_composer: Option<String>,
     show_today_cost: bool,
     today_cost: f64,
@@ -562,6 +563,7 @@ impl Observer {
             window,
             |this, _, event: &InputEvent, _window, cx| match event {
                 InputEvent::Change => {
+                    this.schedule_draft_save(cx);
                     ui::composer::suggestions::refresh(this, cx);
                     cx.notify();
                 }
@@ -573,6 +575,7 @@ impl Observer {
                 }
                 InputEvent::Blur => {
                     this.composer_focused = false;
+                    this.persist_drafts(cx);
                     cx.notify();
                 }
                 _ => {}
@@ -653,7 +656,7 @@ impl Observer {
             }
             this.worker.save_geometry(ui::window_pin::geometry_values(window, width, height));
         }).detach();
-        let observer = Self {
+        let mut observer = Self {
             worker,
             options,
             terminal: ui::terminal::Panel::new(cx),
@@ -724,6 +727,7 @@ impl Observer {
             title_drag: false,
             composer,
             drafts: BTreeMap::new(),
+            draft_save: None,
             restore_composer: None,
             show_today_cost: false,
             today_cost: 0.,
@@ -768,6 +772,17 @@ impl Observer {
             file_results: Vec::new(),
             task,
         };
+        if let Some(path) = observer.draft_file() {
+            use std::io::Read;
+            if let Ok(file) = std::fs::File::open(path) {
+                let mut bytes = Vec::new();
+                if file.take(2 * 1024 * 1024 + 1).read_to_end(&mut bytes).is_ok() && bytes.len() <= 2 * 1024 * 1024 {
+                    if let Ok(drafts) = serde_json::from_slice::<BTreeMap<String, String>>(&bytes) {
+                        observer.drafts.extend(drafts.into_iter().map(|(id, text)| (Some(id), (text, Vec::new()))));
+                    }
+                }
+            }
+        }
         observer.request_catalogue();
         observer
     }
@@ -775,6 +790,41 @@ impl Observer {
     /// Loads the agent, model, skill and sandbox lists the footer selectors use.
     fn request_catalogue(&self) {
         let _ = self.worker.commands.try_send(Command::Catalogue);
+    }
+
+    fn schedule_draft_save(&mut self, cx: &mut Context<Self>) {
+        if self.options.demo {
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        self.draft_save = Some(cx.spawn(async move |owner, cx| {
+            executor.timer(Duration::from_millis(300)).await;
+            let _ = owner.update(cx, |this, cx| this.persist_drafts(cx));
+        }));
+    }
+
+    fn draft_file(&self) -> Option<PathBuf> {
+        if self.options.demo { return None; }
+        let discovery = chatspeed_runtime_client::try_discovery_path(self.options.discovery.as_deref()).ok()?;
+        Some(discovery.with_extension("gpui-drafts.json"))
+    }
+
+    fn persist_drafts(&self, cx: &App) {
+        use std::io::Write;
+        let Some(path) = self.draft_file() else { return; };
+        let Some(parent) = path.parent() else { return; };
+        let mut drafts: BTreeMap<String, String> = self.drafts.iter().filter_map(|(id, (text, _))| {
+            Some((id.as_ref()?.clone(), text.clone()))
+        }).collect();
+        if let Some(id) = &self.selected {
+            let text = self.restore_composer.clone().unwrap_or_else(|| self.composer.read(cx).value().to_string());
+            if text.trim().is_empty() { drafts.remove(id); } else { drafts.insert(id.clone(), text); }
+        }
+        let Ok(bytes) = serde_json::to_vec(&drafts) else { return; };
+        if bytes.len() > 2 * 1024 * 1024 { return; }
+        if let Ok(mut file) = tempfile::NamedTempFile::new_in(parent) {
+            if file.write_all(&bytes).is_ok() { let _ = file.persist(path); }
+        }
     }
 
     fn switch_draft(&mut self, next: Option<String>, cx: &App) {
@@ -791,6 +841,7 @@ impl Observer {
         self.selected = next;
         self.attachments = attachments;
         self.restore_composer = Some(text);
+        self.persist_drafts(cx);
     }
 
     fn restore_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1699,6 +1750,7 @@ impl Observer {
         self.attachments.clear();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
+        self.schedule_draft_save(cx);
         cx.notify();
     }
 
@@ -2246,6 +2298,7 @@ impl Observer {
                                 }
                             }
                             self.drafts.remove(&Some(session));
+                            self.persist_drafts(cx);
                         }
                     }
                 },
