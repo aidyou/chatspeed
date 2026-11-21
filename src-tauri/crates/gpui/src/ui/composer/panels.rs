@@ -286,23 +286,9 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let enabled = draft.enabled;
     let selected = draft.selected.clone();
     let toggle_enabled = cx.listener(move |this, _, _, cx| {
-        let Some(session) = this.selected.clone() else {
-            return;
-        };
-        let enabled = !enabled;
-        let selected = this
-            .skills_draft
-            .as_ref()
-            .map(|draft| draft.selected.clone())
-            .unwrap_or_default();
-        if this.submit_config(&session, "skills", Command::SetSkills {
-            session: session.clone(),
-            enabled,
-            selected: selected.into_iter().collect(),
-        }, cx) {
-            if let Some(draft) = this.skills_draft.as_mut() {
-                draft.enabled = enabled;
-            }
+        if let Some(draft) = this.skills_draft.as_mut() {
+            draft.enabled = !draft.enabled;
+            cx.notify();
         }
     });
     let mut list = v_flex().w_full().min_w_0().gap(px(1.)).p_3();
@@ -326,25 +312,13 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             description,
             checked,
             cx.listener(move |this, _, _, cx| {
-                let Some(session) = this.selected.clone() else {
+                let Some(draft) = this.skills_draft.as_mut() else {
                     return;
                 };
-                let Some(mut draft) = this.skills_draft.clone() else {
-                    return;
-                };
-                if checked {
-                    draft.selected.remove(&key);
-                } else {
+                if !draft.selected.remove(&key) {
                     draft.selected.insert(key.clone());
                 }
-                draft.enabled = true;
-                if this.submit_config(&session, "skills", Command::SetSkills {
-                    session: session.clone(),
-                    enabled: draft.enabled,
-                    selected: draft.selected.iter().cloned().collect(),
-                }, cx) {
-                    this.skills_draft = Some(draft);
-                }
+                cx.notify();
             }),
             cx,
         ));
@@ -356,6 +330,21 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .max_h(px(460.))
         .overflow_y_scroll()
         .child(list)
+        .child(h_flex().justify_end().gap_2().p_3()
+            .child(gpui_kit::component::button::Button::new("skills-cancel")
+                .label(t!("action_cancel").to_string())
+                .on_click(cx.listener(|this, _, _, cx| this.close_quick_panel(cx))))
+            .child(gpui_kit::component::button::Button::new("skills-save")
+                .label(t!("session_save").to_string())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let (Some(session), Some(draft)) = (this.selected.clone(), this.skills_draft.clone()) else { return; };
+                    if this.submit_config(&session, "skills", Command::SetSkills {
+                        session: session.clone(), enabled: draft.enabled,
+                        selected: draft.selected.into_iter().collect(),
+                    }, cx) {
+                        this.close_quick_panel(cx);
+                    }
+                }))))
         .into_any_element()
 }
 
