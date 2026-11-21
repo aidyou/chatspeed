@@ -2947,14 +2947,15 @@ impl Observer {
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
         self.message_with_copy(
             ui::transcript::messages::user_bubble(view, key, expanded, on_toggle, cx),
+            &view.key,
             &view.text,
             cx,
         )
     }
 
-    fn message_with_copy(&self, message: AnyElement, text: &str, cx: &mut Context<Self>) -> AnyElement {
+    fn message_with_copy(&self, message: AnyElement, key: &str, text: &str, cx: &mut Context<Self>) -> AnyElement {
         let text = text.to_owned();
-        v_flex().min_w_0().child(message)
+        v_flex().id(SharedString::from(format!("message-copy-scope-{key}"))).min_w_0().child(message)
             .when(!text.is_empty(), |row| {
                 row.child(h_flex().justify_end().child(ui::icon_button(
                     "copy-message", "copy", cx.theme().muted_foreground, cx.theme().muted,
@@ -2999,6 +3000,7 @@ impl Observer {
         let markdown = (!view.markdown.is_empty()).then(|| self.markdown_view(&view.key));
         self.message_with_copy(
             ui::transcript::messages::assistant_message(thought, markdown),
+            &view.key,
             &view.markdown,
             cx,
         )
