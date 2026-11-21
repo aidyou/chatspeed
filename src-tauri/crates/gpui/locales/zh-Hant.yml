@@ -145,7 +145,7 @@ not_supported_native: 原生視窗暫未支援
 file_editor_close: 關閉
 file_editor_conflict: 磁碟上的檔案已變更。目前的編輯仍保留，請複製變更後再重新開啟檔案。
 file_editor_discard: 捨棄並關閉
-file_editor_open_error: "無法開啟 UTF-8 文字檔案（上限 50 MiB）：%{reason}"
+file_open_error: "無法開啟檔案：%{reason}"
 file_editor_save: 儲存
 file_editor_save_error: "無法儲存檔案：%{reason}"
 file_editor_saving: 正在儲存…

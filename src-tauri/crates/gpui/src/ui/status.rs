@@ -53,7 +53,7 @@ fn render_status(live: Option<Live>, cx: &App) -> AnyElement {
     }
     h_flex()
         .w_full()
-        .max_w(px(780.))
+        .min_w_0()
         .min_h(px(24.))
         .items_center()
         .gap_2()

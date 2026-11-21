@@ -191,7 +191,7 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     v_flex()
         .id("composer-box")
         .w_full()
-        .max_w(px(780.))
+        .min_w_0()
         .max_h(px(EXPANDED_HEIGHT))
         .rounded(px(12.))
         .border_1()

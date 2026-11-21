@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 clap = { version = "4", features = ["derive"] }
 locale_config = "0.3.0"
 tempfile = { version = "3.27.0", optional = true }
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp", "bmp", "ico", "tiff"], optional = true }
 
 raw-window-handle = { version = "0.6.2", optional = true }
 
@@ -35,7 +36,6 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSVi
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13.2", optional = true }
-image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [build-dependencies]
 embed-resource = "3"

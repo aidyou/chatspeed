@@ -8,6 +8,7 @@
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::*;
 use rust_i18n::t;
+use std::path::Path;
 
 use crate::icons::file_icon;
 use crate::ui::Icon;
@@ -68,6 +69,7 @@ fn root_row(
     let path = root.to_owned();
     h_flex()
         .id(format!("root-{root}"))
+        .group("authorized-tree-row")
         .w_full()
         .min_w_0()
         .items_center()
@@ -95,6 +97,7 @@ fn root_row(
                 .text_ellipsis()
                 .child(root_name(root).to_owned()),
         )
+        .child(actions(root, true, true, cx))
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_dir(path.clone(), cx)))
         .into_any_element()
 }
@@ -157,6 +160,7 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
 
     h_flex()
         .id(format!("node-{path}"))
+        .group("authorized-tree-row")
         .relative()
         .w_full()
         .min_w_0()
@@ -200,6 +204,7 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
                 .text_ellipsis()
                 .child(name.clone()),
         )
+        .child(actions(&path, is_dir, false, cx))
         .on_click(cx.listener(move |this, _, window, cx| {
             if is_dir {
                 this.toggle_dir(path.clone(), cx);
@@ -208,6 +213,135 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
             }
         }))
         .into_any_element()
+}
+
+fn actions(path: &str, directory: bool, root: bool, cx: &mut Context<Observer>) -> AnyElement {
+    let mut icons = Vec::new();
+    if !root {
+        icons.push("at");
+    }
+    icons.push("copy");
+    if directory {
+        icons.push("ext-folder-open");
+    }
+    if root {
+        icons.extend(["refresh", "trash"]);
+    }
+    let muted = cx.theme().muted_foreground;
+    let hover = cx.theme().background;
+    h_flex()
+        .flex_shrink_0()
+        .invisible()
+        .group_hover("authorized-tree-row", |style| style.visible())
+        .children(icons.into_iter().map(|icon| {
+            let path = path.to_owned();
+            div()
+                .id(icon)
+                .p(px(3.))
+                .rounded_sm()
+                .hover(move |style| style.bg(hover))
+                .child(Icon::new(icon).size(12.).color(muted))
+                .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    match icon {
+                        "copy" => {
+                            cx.write_to_clipboard(ClipboardItem::new_string(path.clone()));
+                            this.show_toast(
+                                crate::ToastKind::Success,
+                                t!("copied").to_string(),
+                                cx,
+                            );
+                        }
+                        "refresh" => {
+                            if this.expanded_dirs.contains(&path) {
+                                this.load_dir(path.clone(), cx);
+                            } else {
+                                this.dir_entries.remove(&path);
+                            }
+                        }
+                        "trash" => {
+                            if let Some(session) = this.selected.clone() {
+                                let mut config = this.agent_config();
+                                if config.is_object() {
+                                    config["allowedPaths"] = serde_json::json!(this
+                                        .roots()
+                                        .iter()
+                                        .filter(|root| *root != &path)
+                                        .collect::<Vec<_>>());
+                                    if let Err(error) = this.worker.commands.try_send(
+                                        chatspeed_gpui::types::Command::SetAgentConfig {
+                                            session,
+                                            config,
+                                        },
+                                    ) {
+                                        this.show_toast(
+                                            crate::ToastKind::Error,
+                                            error.to_string(),
+                                            cx,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        "at" => {
+                            let normalized = path.replace('\\', "/");
+                            let root = this.roots().first().map(|root| root.replace('\\', "/"));
+                            let reference = root
+                                .as_ref()
+                                .and_then(|root| Path::new(&normalized).strip_prefix(root).ok())
+                                .and_then(Path::to_str)
+                                .filter(|path| !path.is_empty())
+                                .unwrap_or(&normalized);
+                            let text = format!(
+                                "{} ",
+                                super::composer::suggestions::format_reference(reference)
+                            );
+                            this.composer.update(cx, |state, cx| {
+                                EntityInputHandler::replace_text_in_range(
+                                    state, None, &text, window, cx,
+                                );
+                                state.focus_handle(cx).focus(window, cx);
+                            });
+                        }
+                        "ext-folder-open" => {
+                            if let Err(error) = open_folder(&path, this.roots()) {
+                                this.show_toast(crate::ToastKind::Error, error.to_string(), cx);
+                            }
+                        }
+                        _ => {}
+                    }
+                }))
+        }))
+        .into_any_element()
+}
+
+fn open_folder(path: &str, roots: &[String]) -> std::io::Result<()> {
+    let path = Path::new(path).canonicalize()?;
+    if !path.is_dir()
+        || !roots.iter().any(|root| {
+            Path::new(root)
+                .canonicalize()
+                .is_ok_and(|root| path.starts_with(root))
+        })
+    {
+        return Err(std::io::ErrorKind::PermissionDenied.into());
+    }
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer.exe"
+    } else {
+        "xdg-open"
+    };
+    let mut child = std::process::Command::new(program).arg(path).spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 /// A loading or error line inside an expanded folder.

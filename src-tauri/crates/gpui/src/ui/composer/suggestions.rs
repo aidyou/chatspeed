@@ -194,7 +194,7 @@ pub fn panel(observer: &Observer, cx: &mut Context<Observer>) -> Option<AnyEleme
     Some(
         v_flex()
             .w_full()
-            .max_w(px(780.))
+            .min_w_0()
             .max_h(px(300.))
             .popover_style(cx)
             .rounded(px(10.))
@@ -403,7 +403,7 @@ fn reference_path(file: &Value, primary_root: Option<&String>) -> String {
 }
 
 /// Vue quotes paths that contain whitespace, a quote or a backslash.
-fn format_reference(path: &str) -> String {
+pub(in crate::ui) fn format_reference(path: &str) -> String {
     if !path
         .chars()
         .any(|c| c.is_whitespace() || c == '"' || c == '\\')
