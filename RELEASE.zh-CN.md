@@ -7,6 +7,13 @@
 ### 新增功能
 
 - **OpenCode 适配**：发往 `opencode.ai` 的请求新增稳定的 `x-opencode-session` 会话 ID，便于优化路由与提示缓存。
+- **GPT-6+ 推理识别**：主版本号不低于 6 的 GPT 模型（例如 `gpt-6.1-sol`、`gpt-6.2-terra`、`gpt-6.3-preview`）现被识别为推理模型，解析为 OpenAI 推理 profile 并采用 `medium` 默认推理强度，在 `api.openai.com` 端点使用 OpenAI 思考适配器并支持推理摘要。新增 `gptMinMajor` 匹配规则，使未来的 GPT 版本自动纳入覆盖。
+- **OpenCode Go 提示缓存键**：对标记了 `opencodeGoPromptCacheKey` 的 OpenAI 协议模型，发往 `opencode.ai` 的 `/inference/go/openai/v1/chat/completions` 请求现会注入由稳定会话 ID 派生的 `prompt_cache_key`，提升提示缓存复用。该键仅在可信内部请求时添加，且绝不覆盖调用方显式提供的值。
+- **OpenCode Qwen 3.8 思考适配器**：`opencode.ai` 上的 `qwen3.8-flash` 与 `qwen-3.8-flash` 现经由 Qwen 思考适配器处理，保留 `thinking_budget` 并移除冲突的 `reasoning_effort`。
+
+### 修复
+
+- **重复添加 MCP 服务器**：添加已存在的 MCP 服务器时不再隐式启动既有记录。添加表单现读取嵌套的注册结果，仅启用新注册的服务器，对重复项以"已存在"提示拒绝，并在注册 ID 缺失或非法时以本地化错误安全失败。
 
 ---
 

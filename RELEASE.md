@@ -7,6 +7,13 @@
 ### New Features
 
 - **OpenCode support**: Requests to `opencode.ai` now send a stable `x-opencode-session` conversation id for better routing and prompt caching.
+- **GPT-6+ reasoning detection**: Models whose GPT major version is 6 or higher (for example `gpt-6.1-sol`, `gpt-6.2-terra`, `gpt-6.3-preview`) are now recognized as reasoning models. They resolve the OpenAI reasoning profile with a `medium` default effort and use the OpenAI thinking adapter on `api.openai.com`, including reasoning summaries. A new `gptMinMajor` matcher keeps future GPT versions covered automatically.
+- **OpenCode Go prompt cache key**: For OpenAI-protocol models marked `opencodeGoPromptCacheKey`, requests to `opencode.ai`'s `/inference/go/openai/v1/chat/completions` now carry a `prompt_cache_key` derived from the stable conversation id to improve prompt-cache reuse. The key is added only for trusted internal requests and never overrides a caller-supplied value.
+- **OpenCode Qwen 3.8 thinking adapter**: `qwen3.8-flash` and `qwen-3.8-flash` on `opencode.ai` now route through the Qwen thinking adapter, keeping `thinking_budget` while dropping the conflicting `reasoning_effort`.
+
+### Bug Fixes
+
+- **MCP add server on duplicates**: Adding an MCP server that already exists no longer implicitly starts the existing record. The add form now reads the nested registration result, enables only a newly registered server, refuses duplicates with an "already exists" message, and fails closed with a localized error when the registration id is missing or invalid.
 
 ---
 
