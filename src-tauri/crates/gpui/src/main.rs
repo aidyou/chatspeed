@@ -3328,7 +3328,14 @@ impl Observer {
             // Until the child has its own action scope, render its preview without those callbacks.
             let entries = rows.iter().filter_map(|row| {
                 let text = match row {
-                    Row::Assistant(view) => &view.markdown,
+                    Row::Assistant(view) => {
+                        return Some(v_flex().gap_1()
+                            .when_some(view.reasoning.as_deref().filter(|text| !text.is_empty()), |row, text| {
+                                row.child(plain_text(text, cx.theme().muted_foreground))
+                            })
+                            .when(!view.markdown.is_empty(), |row| row.child(plain_text(&view.markdown, foreground)))
+                            .into_any_element());
+                    }
                     Row::User(view) => &view.text,
                     Row::Tool(view) => &view.summary,
                     Row::Activity(view) => &view.summary,
