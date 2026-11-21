@@ -3,6 +3,58 @@
 use gpui_kit::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+pub fn geometry_values(
+    _window: &Window,
+    width: f32,
+    height: f32,
+) -> Vec<(&'static str, serde_json::Value)> {
+    let size = (
+        chatspeed_gpui::prefs::WORKFLOW_WINDOW_SIZE_KEY,
+        serde_json::json!({"width": width, "height": height}),
+    );
+    #[cfg(target_os = "windows")]
+    if let Some(position) = window_position(_window) {
+        return vec![size, ("workflow_window_position", position)];
+    }
+    vec![size]
+}
+
+#[cfg(target_os = "windows")]
+fn window_position(window: &Window) -> Option<serde_json::Value> {
+    use windows_sys::Win32::{Foundation::*, Graphics::Gdi::*, UI::WindowsAndMessaging::*};
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return None;
+    };
+    let hwnd = handle.hwnd.get() as HWND;
+    let mut frame = RECT::default();
+    if unsafe { IsIconic(hwnd) != 0 || GetWindowRect(hwnd, &mut frame) == 0 } {
+        return None;
+    }
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL) };
+    let mut info: MONITORINFOEXW = unsafe { std::mem::zeroed() };
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    if monitor.is_null() || unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) } == 0 {
+        return None;
+    }
+    let work = info.monitorInfo.rcWork;
+    if frame.left < work.left
+        || frame.top < work.top
+        || frame.right > work.right
+        || frame.bottom > work.bottom
+    {
+        return None;
+    }
+    let end = info
+        .szDevice
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(info.szDevice.len());
+    Some(
+        serde_json::json!({"x": frame.left, "y": frame.top, "screen_name": String::from_utf16_lossy(&info.szDevice[..end])}),
+    )
+}
+
 /// Move only when the saved monitor name and the entire outer frame match a
 /// current work area. Wayland does not expose absolute toplevel positioning.
 #[cfg(target_os = "windows")]

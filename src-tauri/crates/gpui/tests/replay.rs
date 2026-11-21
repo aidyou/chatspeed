@@ -343,12 +343,14 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
     }
     assert!(worker.save_sidebar(false));
     assert!(worker.save_sidebar(true));
+    worker.save_geometry(vec![("workflow_window_size", json!({"width": 1100, "height": 700}))]);
+    worker.save_geometry(vec![("workflow_window_size", json!({"width": 1200, "height": 800}))]);
     drop(worker);
-    let saved_on_close = saved_rx.try_recv().is_ok();
+    let saves_on_close = saved_rx.try_iter().count();
     done.store(true, Ordering::Relaxed);
     server.join().unwrap();
     std::fs::remove_file(discovery).unwrap();
-    assert!(saved_on_close, "normal shutdown must drain the pending sidebar save");
+    assert_eq!(saves_on_close, 2, "shutdown must drain one sidebar and one coalesced geometry save");
     assert!(
         listed,
         "sidebar list must arrive while settings are stalled"

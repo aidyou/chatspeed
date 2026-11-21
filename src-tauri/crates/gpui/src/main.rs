@@ -412,6 +412,8 @@ struct Observer {
     applied_primary: u32,
     palette_applied: bool,
     /// Size to apply on the next frame, from the remembered workflow geometry.
+    geometry_ready: bool,
+    geometry_restore_pending: bool,
     pending_window_size: Option<Size<Pixels>>,
     #[cfg(target_os = "windows")]
     pending_window_position: Option<(i32, i32, String)>,
@@ -629,6 +631,18 @@ impl Observer {
                 break;
             }
         });
+        cx.observe_window_bounds(window, |this, window, _| {
+            if !this.geometry_ready || window.is_maximized() || window.is_fullscreen() {
+                return;
+            }
+            let bounds = window.bounds();
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            if !(width.is_finite() && height.is_finite() && width > 0. && height > 0.) {
+                return;
+            }
+            this.worker.save_geometry(ui::window_pin::geometry_values(window, width, height));
+        }).detach();
         let observer = Self {
             worker,
             options,
@@ -661,6 +675,8 @@ impl Observer {
             appearance_dark: false,
             applied_primary: DEFAULT_PRIMARY,
             palette_applied: false,
+            geometry_ready: false,
+            geometry_restore_pending: false,
             pending_window_size: None,
             #[cfg(target_os = "windows")]
             pending_window_position: None,
@@ -2459,7 +2475,10 @@ impl Observer {
         }
         set_primary(config["primary_color"].as_str().unwrap_or("green"));
         self.proxy_targets = config["chat_completion_proxy"].clone();
-        self.adopt_window_size(config);
+        if !self.geometry_ready && !self.geometry_restore_pending {
+            self.geometry_restore_pending = true;
+            self.adopt_window_size(config);
+        }
         #[cfg(target_os = "windows")]
         if !std::mem::replace(&mut self.window_position_read, true) {
             self.pending_window_position =
@@ -3556,6 +3575,17 @@ impl Render for Observer {
                     if !window.is_maximized() && !window.is_fullscreen() {
                         ui::window_pin::restore_position(window, x, y, &name);
                     }
+                });
+            });
+        }
+
+        if std::mem::take(&mut self.geometry_restore_pending) {
+            let observer = cx.entity().downgrade();
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |window, _| {
+                    window.on_next_frame(move |_, cx| {
+                        let _ = observer.update(cx, |this, _| this.geometry_ready = true);
+                    });
                 });
             });
         }

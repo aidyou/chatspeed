@@ -19,11 +19,17 @@ pub struct Worker {
     pub commands: mpsc::Sender<Command>,
     pub updates: mpsc::Receiver<Update>,
     sidebar_collapsed: Option<watch::Sender<Option<bool>>>,
+    geometry: Option<watch::Sender<Vec<(&'static str, Value)>>>,
     stop: watch::Sender<bool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Worker {
+    pub fn save_geometry(&self, values: Vec<(&'static str, Value)>) {
+        if let Some(tx) = &self.geometry {
+            tx.send_replace(values);
+        }
+    }
     pub fn save_sidebar(&self, collapsed: bool) -> bool {
         self.sidebar_collapsed.as_ref().is_some_and(|tx| tx.send(Some(collapsed)).is_ok())
     }
@@ -41,6 +47,8 @@ impl Worker {
         let (tx, updates) = mpsc::channel(128);
         let (stop, mut stopped) = watch::channel(false);
         let (sidebar_collapsed, mut sidebar) = watch::channel(None);
+        let (geometry, mut bounds) = watch::channel(Vec::<(&'static str, Value)>::new());
+        let geometry_options = options.clone();
         let prefs_options = options.clone();
         let prefs_tx = tx.clone();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -67,11 +75,25 @@ impl Worker {
                             }
                         }
                     });
+                    let geometry_writer = tokio::spawn(async move {
+                        while bounds.changed().await.is_ok() {
+                            while matches!(tokio::time::timeout(Duration::from_millis(300), bounds.changed()).await, Ok(Ok(()))) {}
+                            let values = bounds.borrow_and_update().clone();
+                            if !geometry_options.demo {
+                                for (key, value) in values {
+                                    let _ = tokio::time::timeout(Duration::from_millis(750), native::data_command(
+                                        &geometry_options, "set_config", json!({"key": key, "value": value}),
+                                    )).await;
+                                }
+                            }
+                        }
+                    });
                     tokio::select! {
                         _ = stopped.changed() => {},
                         _ = coordinate(options, rx, tx) => {},
                     }
                     let _ = writer.await;
+                    let _ = geometry_writer.await;
                 });
                 // Runtime drop cancels every selected-session and list task as well.
             })?;
@@ -79,6 +101,7 @@ impl Worker {
             commands,
             updates,
             sidebar_collapsed: Some(sidebar_collapsed),
+            geometry: Some(geometry),
             stop,
             thread: Some(thread),
         })
@@ -88,6 +111,7 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.sidebar_collapsed.take();
+        self.geometry.take();
         let _ = self.stop.send(true);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
