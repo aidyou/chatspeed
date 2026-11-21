@@ -822,7 +822,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 401,
+      "modelCount": 389,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -1131,7 +1131,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 92,
+      "modelCount": 93,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -1371,7 +1371,7 @@
       "documentationUrl": "https://docs.keln.ai/models-pricing/",
       "id": "keln",
       "logo": "https://models.dev/logos/keln.svg",
-      "modelCount": 14,
+      "modelCount": 13,
       "name": "Keln",
       "protocol": "openai",
       "responses": false
@@ -1391,7 +1391,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 466,
+      "modelCount": 465,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1511,7 +1511,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway",
       "logo": "https://models.dev/logos/llmgateway.svg",
-      "modelCount": 216,
+      "modelCount": 218,
       "name": "DevPass (LLM Gateway)",
       "protocol": "openai",
       "responses": false
@@ -1521,7 +1521,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 503,
+      "modelCount": 506,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1875,7 +1875,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 613,
+      "modelCount": 614,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -1885,7 +1885,7 @@
       "documentationUrl": "https://docs.near.ai/",
       "id": "nearai",
       "logo": "https://models.dev/logos/nearai.svg",
-      "modelCount": 59,
+      "modelCount": 61,
       "name": "NEAR AI Cloud",
       "protocol": "openai",
       "responses": false
@@ -1895,7 +1895,7 @@
       "documentationUrl": "https://docs.tokenfactory.nebius.com/",
       "id": "nebius",
       "logo": "https://models.dev/logos/nebius.svg",
-      "modelCount": 23,
+      "modelCount": 24,
       "name": "Nebius Token Factory",
       "protocol": "openai",
       "responses": false
@@ -2090,7 +2090,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 380,
+      "modelCount": 379,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2252,7 +2252,7 @@
       "documentationUrl": "https://docs.primeintellect.ai/inference/overview",
       "id": "prime",
       "logo": "https://models.dev/logos/prime.svg",
-      "modelCount": 73,
+      "modelCount": 69,
       "name": "Prime Inference",
       "protocol": "openai",
       "responses": false
@@ -3291,9 +3291,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "b4d18c032055dc7d8c356408eb512c54a9ed00b916ef4b8874745141e59beac0",
-    "generatedAt": "2026-11-20T11:43:19Z",
+    "catalogSha256": "b7f48c971f688d49e374f12066a3ddeea5e3cc695d088b8b389a017e7ddf80e6",
+    "generatedAt": "2026-11-21T11:05:49Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "6c4a0f7ac5dd31ee05a4792fe960975a9f679c8c"
+    "revision": "80aacae4596cdd508ca1640cc9b5b9632c880274"
   }
 }
