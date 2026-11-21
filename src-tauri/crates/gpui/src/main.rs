@@ -491,6 +491,9 @@ struct Observer {
     child_epoch: u64,
     child_model: Model,
     child_approval_drafts: BTreeMap<String, Entity<TextareaState>>,
+    child_question_text: BTreeMap<usize, Entity<TextareaState>>,
+    child_question_choices: BTreeMap<usize, usize>,
+    child_question_id: Option<String>,
     child_markdown: BTreeMap<String, (String, Entity<TextViewState>)>,
     child_connected: Option<bool>,
     child_pending: BTreeSet<String>,
@@ -739,6 +742,9 @@ impl Observer {
             child_epoch: 0,
             child_model: Model::default(),
             child_approval_drafts: BTreeMap::new(),
+            child_question_text: BTreeMap::new(),
+            child_question_choices: BTreeMap::new(),
+            child_question_id: None,
             child_markdown: BTreeMap::new(),
             child_connected: None,
             child_pending: BTreeSet::new(),
@@ -2057,6 +2063,26 @@ impl Observer {
         cx.notify();
     }
 
+    fn ensure_child_question_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.child_model.awaiting_user_tool_call_id.clone();
+        if self.child_question_id != id {
+            self.child_question_id = id.clone();
+            self.child_question_text.clear();
+            self.child_question_choices.clear();
+        }
+        let Some(id) = id else { return; };
+        let count = self.child_rows.values().flatten().find_map(|row| match row {
+            Row::Tool(tool) if tool.tool_call_id == id => Some(tool.choices.len()),
+            _ => None,
+        }).unwrap_or_default();
+        for index in 0..count {
+            self.child_question_text.entry(index).or_insert_with(|| cx.new(|cx| {
+                TextareaState::new(window, cx).auto_grow(1, 6)
+                    .placeholder(t!("ask_user_other_placeholder").to_string())
+            }));
+        }
+    }
+
     fn current_child_matches(&self, epoch: u64, session: &str) -> bool {
         self.child_epoch == epoch
             && self.active_child.as_ref().and_then(|card| card.task_id.as_deref()) == Some(session)
@@ -2069,6 +2095,9 @@ impl Observer {
         self.child_rows.clear();
         self.child_markdown.clear();
         self.child_approval_drafts.clear();
+        self.child_question_text.clear();
+        self.child_question_choices.clear();
+        self.child_question_id = None;
         self.child_model = Model::default();
         self.child_connected = None;
     }
@@ -3407,6 +3436,58 @@ impl Observer {
         Some(ui::approval::approval_card(tool, self.child_approval_drafts.get(&tool.tool_call_id), self.child_approval_drafts.len(), dispatch, cx))
     }
 
+    fn child_question(&self, session: &str, tool: &ToolView, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use gpui_kit::component::{button::Button, input::Textarea};
+        if self.child_connected != Some(true) || self.child_question_id.as_ref() != Some(&tool.tool_call_id)
+            || tool.choices.is_empty() || Self::ask_user_projected_answer(tool)
+        {
+            return None;
+        }
+        let epoch = self.child_epoch;
+        let mut panel = v_flex().gap_2();
+        for (index, group) in tool.choices.iter().enumerate() {
+            for (option, label) in group.options.iter().cloned().chain(std::iter::once(t!("ask_user_other").to_string())).enumerate() {
+                let session = session.to_owned();
+                let id = tool.tool_call_id.clone();
+                panel = panel.child(Button::new(format!("child-choice-{index}-{option}"))
+                    .label(if self.child_question_choices.get(&index) == Some(&option) { format!("✓ {label}") } else { label })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.current_child_matches(epoch, &session) && this.child_question_id.as_ref() == Some(&id) {
+                            this.child_question_choices.insert(index, option);
+                            cx.notify();
+                        }
+                    })));
+            }
+            if let Some(input) = self.child_question_text.get(&index) {
+                panel = panel.child(Textarea::new(input));
+            }
+        }
+        let session = session.to_owned();
+        let tool = tool.clone();
+        Some(panel.child(Button::new("child-answer-submit").label(t!("session_save").to_string())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.current_child_matches(epoch, &session) || this.child_connected != Some(true)
+                    || this.child_model.awaiting_user_tool_call_id.as_ref() != Some(&tool.tool_call_id) {
+                    return;
+                }
+                let notes: Vec<_> = (0..tool.choices.len()).map(|index| this.child_question_text.get(&index)
+                    .map(|input| input.read(cx).value().trim().to_owned()).unwrap_or_default()).collect();
+                let drafts: Vec<_> = notes.iter().enumerate().map(|(index, note)| presentation::AskUserDraft {
+                    choice: this.child_question_choices.get(&index).copied().or_else(|| (!note.is_empty()).then_some(tool.choices[index].options.len())),
+                    supplement: note,
+                }).collect();
+                let Ok(content) = presentation::ask_user_response(&tool.choices, &drafts) else {
+                    this.show_toast(ToastKind::Warning, t!("ask_user_required").to_string(), cx);
+                    return;
+                };
+                let signal = serde_json::json!({"type":"user_message", "content":content,
+                    "metadata":{"ui_visibility":"hide", "ask_user_response":true, "requested_tool_call_id":tool.tool_call_id}});
+                if this.worker.commands.try_send(Command::Signal { id: session.clone(), signal }).is_err() {
+                    this.show_toast(ToastKind::Error, t!("ask_user_submit_failed").to_string(), cx);
+                }
+            }))).into_any_element())
+    }
+
     fn child_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let card = self.active_child.as_ref()?;
         let id = card.task_id.as_ref()?;
@@ -3428,6 +3509,9 @@ impl Observer {
                     }
                     Row::User(view) => &view.text,
                     Row::Tool(view) => {
+                        if let Some(question) = self.child_question(id, view, cx) {
+                            return Some(v_flex().gap_2().child(plain_text(&view.summary, foreground)).child(question).into_any_element());
+                        }
                         if let Some(card) = self.child_approval_card(id, view, cx) {
                             return Some(card);
                         }
@@ -3837,6 +3921,7 @@ impl Render for Observer {
             });
         }
         self.ensure_ask_user_fields(window, cx);
+        self.ensure_child_question_fields(window, cx);
         let child_ids = &self.child_model.pending_tool_ids;
         let question = self.child_model.awaiting_user_tool_call_id.as_ref();
         self.child_approval_drafts.retain(|id, _| child_ids.contains(id) && question != Some(id));
