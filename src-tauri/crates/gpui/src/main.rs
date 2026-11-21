@@ -3466,7 +3466,7 @@ impl Observer {
         }
         let session = session.to_owned();
         let tool = tool.clone();
-        Some(panel.child(Button::new("child-answer-submit").label(t!("session_save").to_string())
+        Some(panel.child(Button::new("child-answer-submit").label(t!("submit_answer").to_string())
             .on_click(cx.listener(move |this, _, _, cx| {
                 if !this.current_child_matches(epoch, &session) || this.child_connected != Some(true)
                     || this.child_model.awaiting_user_tool_call_id.as_ref() != Some(&tool.tool_call_id) {
@@ -3478,9 +3478,16 @@ impl Observer {
                     choice: this.child_question_choices.get(&index).copied().or_else(|| (!note.is_empty()).then_some(tool.choices[index].options.len())),
                     supplement: note,
                 }).collect();
-                let Ok(content) = presentation::ask_user_response(&tool.choices, &drafts) else {
-                    this.show_toast(ToastKind::Warning, t!("ask_user_required").to_string(), cx);
-                    return;
+                let content = match presentation::ask_user_response(&tool.choices, &drafts) {
+                    Ok(content) => content,
+                    Err(error) => {
+                        let message = match error {
+                            presentation::AskUserDraftError::OtherRequired => t!("ask_user_other_required"),
+                            presentation::AskUserDraftError::Required => t!("ask_user_required"),
+                        };
+                        this.show_toast(ToastKind::Warning, message.to_string(), cx);
+                        return;
+                    }
                 };
                 let signal = serde_json::json!({"type":"user_message", "content":content,
                     "metadata":{"ui_visibility":"hide", "ask_user_response":true, "requested_tool_call_id":tool.tool_call_id}});
