@@ -23,6 +23,12 @@ pub enum AutomationAction {
 }
 
 #[derive(Clone, Deserialize)]
+pub struct AutomationRun {
+    pub status: String,
+    pub scheduled_for: String,
+}
+
+#[derive(Clone, Deserialize)]
 pub struct AutomationSummary {
     pub automation_id: String,
     pub title: String,
@@ -226,6 +232,7 @@ pub enum Command {
         title: Option<String>,
     },
     ListAutomations,
+    ListAutomationRuns(String),
     ActOnAutomation { id: String, action: AutomationAction },
     CreateAutomation(Value),
     Stop {
@@ -344,6 +351,7 @@ pub enum UpdateKind {
         result: Result<(), String>,
     },
     Automations(Result<Vec<AutomationSummary>, String>),
+    AutomationRuns(String, Result<Vec<AutomationRun>, String>),
     AutomationCreated(Result<(), String>),
     Sessions(Vec<Session>),
     Snapshot(Page),

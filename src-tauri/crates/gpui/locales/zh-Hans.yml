@@ -34,6 +34,8 @@ automation_delete_confirm: 确定永久删除此自动化吗？
 automation_disable: 停用
 automation_empty: 暂无自动化
 automation_enable: 启用
+automation_history: 历史
+automation_history_empty: 暂无运行记录
 automation_name: 任务名称
 automation_prompt: 任务指令
 automation_required_fields: 请输入名称、任务指令和有效时间（HH:MM）。

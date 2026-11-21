@@ -750,6 +750,20 @@ fn automation_list(observer: &Observer, cx: &mut Context<Observer>) -> AnyElemen
                         }
                     }))
             }))
+            .child(div().id("automation-history").cursor_pointer().text_xs().child(t!("automation_history").to_string())
+                .on_click(cx.listener({
+                    let id = entry.automation_id.clone();
+                    move |this, _, _, cx| {
+                        if this.automation_history.as_ref().is_some_and(|(current, _)| *current == id) {
+                            this.automation_history = None;
+                        } else if this.worker.commands.try_send(chatspeed_gpui::types::Command::ListAutomationRuns(id.clone())).is_ok() {
+                            this.automation_history = Some((id.clone(), None));
+                        } else {
+                            this.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
+                        }
+                        cx.notify();
+                    }
+                })))
             .child(div().id("delete-automation").cursor_pointer().child(Icon::new("delete"))
                 .on_click(cx.listener({
                     let id = entry.automation_id.clone();
@@ -772,6 +786,15 @@ fn automation_list(observer: &Observer, cx: &mut Context<Observer>) -> AnyElemen
                         }).detach();
                     }
                 }))));
+        if let Some((_, runs)) = observer.automation_history.as_ref().filter(|(id, _)| *id == entry.automation_id) {
+            let history = match runs {
+                None => vec!["…".to_string()],
+                Some(Err(error)) => vec![error.clone()],
+                Some(Ok(runs)) if runs.is_empty() => vec![t!("automation_history_empty").to_string()],
+                Some(Ok(runs)) => runs.iter().map(|run| format!("{} · {}", run.scheduled_for, status_label(&run.status))).collect(),
+            };
+            rows = rows.child(v_flex().pl_4().text_xs().text_color(cx.theme().muted_foreground).children(history.into_iter().map(|line| div().child(line))));
+        }
     }
     if found { rows.into_any_element() } else { empty_tab(t!("automation_empty").to_string(), cx) }
 }

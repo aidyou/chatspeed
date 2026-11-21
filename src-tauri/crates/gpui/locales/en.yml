@@ -34,6 +34,8 @@ automation_delete_confirm: Permanently delete this automation?
 automation_disable: Disable
 automation_empty: No automations yet
 automation_enable: Enable
+automation_history: History
+automation_history_empty: No runs yet
 automation_name: Task name
 automation_prompt: Task instructions
 automation_required_fields: Enter a name, instructions, and a valid time (HH:MM).

@@ -453,6 +453,15 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     return;
                 }
             }
+            Command::ListAutomationRuns(id) => {
+                let path = format!("/control/v1/automations/{id}/runs");
+                let result = native::control_get(&options, &path)
+                    .await
+                    .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()));
+                if !send(&tx, 0, UpdateKind::AutomationRuns(id, result)).await {
+                    return;
+                }
+            }
             Command::ActOnAutomation { id, action } => {
                 let (operation, payload) = automation_request(action);
                 let path = format!("/control/v1/automations/{id}/{operation}");

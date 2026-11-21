@@ -393,6 +393,7 @@ struct Observer {
     model: Model,
     sessions: Vec<Session>,
     automations: Option<Result<Vec<AutomationSummary>, String>>,
+    automation_history: Option<(String, Option<Result<Vec<AutomationRun>, String>>)>,
     pending_decisions: BTreeMap<String, Vec<PendingDecision>>,
     selected: Option<String>,
     connected: bool,
@@ -651,6 +652,7 @@ impl Observer {
             model: Model::default(),
             sessions: Vec::new(),
             automations: None,
+            automation_history: None,
             pending_decisions: BTreeMap::new(),
             selected: None,
             connected: false,
@@ -2173,6 +2175,13 @@ impl Observer {
                     }
                 },
                 UpdateKind::Automations(result) => self.automations = Some(result),
+                UpdateKind::AutomationRuns(id, result) => {
+                    if let Some((current, runs)) = &mut self.automation_history {
+                        if *current == id {
+                            *runs = Some(result);
+                        }
+                    }
+                }
                 UpdateKind::AutomationCreated(result) => {
                     if result.is_ok() && self.rail_tab == ui::sidebar::RailTab::Automation {
                         self.refresh_automations();
