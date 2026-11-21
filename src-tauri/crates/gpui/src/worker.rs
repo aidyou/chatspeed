@@ -488,6 +488,13 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     return;
                 }
             }
+            Command::ReadEfficiency { session, reply } => {
+                let options = options.clone();
+                tokio::spawn(async move {
+                    let result = native::workflow_command(&options, "get_workflow_efficiency_report", json!({"session_id": session}), None).await;
+                    let _ = reply.send(result);
+                });
+            }
             Command::ListAutomations => {
                 let result = native::control_get(&options, "/control/v1/automations")
                     .await
@@ -520,6 +527,41 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     return;
                 }
             }
+            Command::AnalyzeImages { target, query, paths, mut reply } => {
+                let options = options.clone();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        _ = reply.closed() => {},
+                        result = analyze_images(options, target, query, paths) => { let _ = reply.send(result); }
+                    }
+                });
+            }
+            Command::ReadAutomation { id, reply } => {
+                let result = native::control_get(&options, &format!("/control/v1/automations/{id}")).await;
+                let _ = reply.send(result);
+            }
+            Command::DraftAutomation { id, body, reply } => {
+                let input = json!({"automation_id": id, "spec": body["spec"], "intent": null});
+                let result = native::control_post(&options, "/control/v1/automation-draft", input).await.and_then(|plan| {
+                    if plan["base_revision"] != body["expected_revision"] {
+                        return Err(rust_i18n::t!("automation_action_failed").to_string());
+                    }
+                    Ok(plan)
+                });
+                let _ = reply.send(result);
+            }
+            Command::ApplyAutomation(body) => {
+                let path = "/control/v1/automation-apply";
+                let result = match native::connect(&options).await {
+                    Some(client) => client.post_with_idempotency(&path, &body, &idempotency_key("update-automation")).await.map(|_| ()).map_err(|error| error.to_string()),
+                    None => Err(rust_i18n::t!("automation_action_failed").to_string()),
+                };
+                let update = match result {
+                    Ok(()) => UpdateKind::Automations(native::control_get(&options, "/control/v1/automations").await.and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()))),
+                    Err(error) => UpdateKind::Error(error),
+                };
+                if !send(&tx, 0, update).await { return; }
+            }
             Command::CreateAutomation(spec) => {
                 let result = match native::connect(&options).await {
                     Some(client) => client
@@ -549,6 +591,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 }
             }
             Command::StartNew {
+                agent_id,
                 prompt,
                 attached_context,
                 metadata,
@@ -565,7 +608,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                     continue;
                 }
-                match start_session(&options, &prompt, attached_context, metadata).await {
+                match start_session(&options, agent_id, &prompt, attached_context, metadata).await {
                     Ok(id) => {
                         if !send(&tx, 0, UpdateKind::Opened(id)).await {
                             return;
@@ -959,7 +1002,41 @@ async fn fetch_tools(options: Options, tx: mpsc::Sender<Update>) {
     let _ = send(&tx, 0, UpdateKind::Tools(tools)).await;
 }
 
-/// A unique idempotency key for one user-initiated workflow command.
+async fn analyze_images(options: Options, mut target: Value, query: String, paths: Vec<std::path::PathBuf>) -> Option<String> {
+    use base64::Engine as _;
+    use std::io::Read as _;
+    if paths.is_empty() || paths.len() > 4 { return None; }
+    let images = tokio::task::spawn_blocking(move || {
+        let mut remaining = 8 * 1024 * 1024;
+        let mut images = Vec::new();
+        for path in paths {
+            let mut bytes = Vec::new();
+            let limit = remaining.min(4 * 1024 * 1024);
+            if !std::fs::metadata(&path).ok()?.is_file() { return None; }
+            let file = std::fs::File::open(path).ok()?;
+            if !file.metadata().ok()?.is_file() { return None; }
+            file.take((limit + 1) as u64).read_to_end(&mut bytes).ok()?;
+            if bytes.len() > limit { return None; }
+            remaining -= bytes.len();
+            let mime = match image::guess_format(&bytes).ok()? {
+                image::ImageFormat::Png => "image/png",
+                image::ImageFormat::Jpeg => "image/jpeg",
+                image::ImageFormat::WebP => "image/webp",
+                _ => return None,
+            };
+            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+            images.push(format!("data:{mime};base64,{encoded}"));
+        }
+        Some(images)
+    }).await.ok()??;
+    target["query"] = query.into();
+    target["images"] = json!(images);
+    let discovery = chatspeed_runtime_client::load_discovery(options.discovery.as_deref()).ok()?;
+    let client = chatspeed_runtime_client::RuntimeClient::with_timeout(&discovery, Duration::from_secs(65)).ok()?;
+    let result: Value = client.post_json("/control/v1/workflows/vision", &target).await.ok()?;
+    result["description"].as_str().filter(|s| !s.trim().is_empty()).map(str::to_owned)
+}
+
 fn idempotency_key(command: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -974,6 +1051,7 @@ fn idempotency_key(command: &str) -> String {
 /// start carries the first prompt the engine runs.
 async fn start_session(
     options: &Options,
+    agent_id: Option<String>,
     prompt: &str,
     attached_context: Option<String>,
     metadata: Option<Value>,
@@ -981,21 +1059,15 @@ async fn start_session(
     let client = native::connect(options)
         .await
         .ok_or_else(|| "runtime unavailable".to_string())?;
-    let agents = client
-        .get("/control/v1/agents")
-        .await
-        .map_err(|error| error.to_string())?;
-    let agent_id = agents
-        .as_array()
-        .and_then(|agents| {
-            agents
-                .iter()
-                .find(|agent| agent["role"] == "primary")
-                .or_else(|| agents.first())
-        })
-        .and_then(|agent| agent["id"].as_str())
-        .ok_or_else(|| "no agent configured".to_string())?
-        .to_owned();
+    let agent_id = if let Some(id) = agent_id {
+        id
+    } else {
+        let agents = client.get("/control/v1/agents").await.map_err(|error| error.to_string())?;
+        agents.as_array().and_then(|agents| {
+            agents.iter().find(|agent| agent["role"] == "primary").or_else(|| agents.first())
+        }).and_then(|agent| agent["id"].as_str())
+            .ok_or_else(|| "no agent configured".to_string())?.to_owned()
+    };
     let created = client
         .post(
             "/control/v1/workflows",

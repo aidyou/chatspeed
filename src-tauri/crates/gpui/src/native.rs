@@ -200,6 +200,7 @@ pub fn list_dir(path: &str) -> Result<Vec<DirEntry>, String> {
     if !metadata.is_dir() {
         return Err(format!("{path} is not a directory"));
     }
+    let statuses = directory_git_status(root);
     let entries = std::fs::read_dir(root).map_err(|error| error.to_string())?;
     let mut list = Vec::new();
     for entry in entries.flatten() {
@@ -213,15 +214,55 @@ pub fn list_dir(path: &str) -> Result<Vec<DirEntry>, String> {
             .map(|kind| kind.is_dir())
             // A symlink to a directory follows the link so it can be expanded.
             .unwrap_or_else(|_| entry.path().is_dir());
-        list.push(DirEntry { name, path, is_dir });
+        let git_status = statuses.get(&name).cloned();
+        list.push(DirEntry { name, path, is_dir, git_status });
     }
     list.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
     Ok(list)
 }
 
+fn directory_git_status(root: &Path) -> std::collections::BTreeMap<String, String> {
+    let Ok(output) = std::process::Command::new("git")
+        .current_dir(root)
+        .args(["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "status.relativePaths=true", "status", "--short", "-z", "--no-renames", "--untracked-files=normal", "--ignore-submodules=all", "--", "."])
+        .output()
+    else {
+        return Default::default();
+    };
+    if !output.status.success() {
+        return Default::default();
+    }
+    parse_git_status(&output.stdout)
+}
+
+fn parse_git_status(output: &[u8]) -> std::collections::BTreeMap<String, String> {
+    let mut statuses = std::collections::BTreeMap::new();
+    for record in output.split(|byte| *byte == 0) {
+        if record.get(2) != Some(&b' ') {
+            continue;
+        }
+        let path = String::from_utf8_lossy(&record[3..]);
+        let Some(name) = path.split('/').next().filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        let status = String::from_utf8_lossy(&record[..2]).trim().to_owned();
+        statuses.entry(name.to_owned()).or_insert(status);
+    }
+    statuses
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_status_preserves_spaces_and_groups_child_paths() {
+        let statuses = parse_git_status(b" M src/main.rs\0?? new file.txt\0A  added\0bad\0");
+        assert_eq!(statuses.get("src").map(String::as_str), Some("M"));
+        assert_eq!(statuses.get("new file.txt").map(String::as_str), Some("??"));
+        assert_eq!(statuses.get("added").map(String::as_str), Some("A"));
+        assert_eq!(statuses.len(), 3);
+    }
 
     // `gpui_kit` is not imported here, so the built-in attribute is unambiguous.
     #[test]

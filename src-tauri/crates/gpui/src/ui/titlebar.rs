@@ -112,6 +112,201 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
     });
 }
 
+pub(super) fn edit_automation(observer: &mut Observer, id: String, window: &mut Window, cx: &mut Context<Observer>) {
+    use chatspeed_gpui::types::Command;
+    use gpui_kit::component::{button::{Button, ButtonVariants}, input::{Input, InputState}, WindowExt};
+    let (reply, response) = tokio::sync::oneshot::channel();
+    if observer.worker.commands.try_send(Command::ReadAutomation { id: id.clone(), reply }).is_err() {
+        observer.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
+        return;
+    }
+    cx.spawn_in(window, async move |owner, cx| {
+        let result = response.await.unwrap_or_else(|_| Err(t!("automation_action_failed").to_string()));
+        let _ = owner.update_in(cx, |this, window, cx| {
+            let view = match result {
+                Ok(view) => view,
+                Err(error) => { this.show_toast(crate::ToastKind::Error, error, cx); return; }
+            };
+            if window.has_active_dialog(cx) { return; }
+            let input = cx.new(|cx| {
+                let mut input = InputState::new(window, cx).placeholder(t!("automation_name").to_string());
+                input.set_value(view["title"].as_str().unwrap_or_default(), window, cx);
+                input
+            });
+            let prompt = cx.new(|cx| {
+                let mut input = gpui_kit::component::input::TextareaState::new(window, cx);
+                input.set_value(view["prompt"].as_str().unwrap_or_default(), window, cx);
+                input
+            });
+            let current_schedule = automation_schedule_input(&view);
+            let schedule = cx.new(|cx| {
+                let mut input = InputState::new(window, cx).placeholder(t!("automation_schedule_input").to_string());
+                input.set_value(current_schedule.as_str(), window, cx);
+                input
+            });
+            let owner = cx.entity().downgrade();
+            window.open_dialog(cx, move |dialog, _, _| {
+                let (input_state, owner, id, view) = (input.clone(), owner.clone(), id.clone(), view.clone());
+                let (prompt_state, schedule_state) = (prompt.clone(), schedule.clone());
+                dialog.title(t!("automation_edit").to_string()).child(v_flex().gap_2()
+                    .child(Input::new(&input))
+                    .when(view["prompt_file_path"].is_null(), |form| form.child(t!("automation_prompt").to_string()).child(gpui_kit::component::input::Textarea::new(&prompt)))
+                    .child(t!("automation_schedule_input").to_string()).child(Input::new(&schedule)))
+                    .footer(h_flex().justify_end().gap_2()
+                        .child(Button::new("rename-automation-cancel").label(t!("action_cancel").to_string()).on_click(|_, window, cx| window.close_dialog(cx)))
+                        .child(Button::new("rename-automation-save").primary().label(t!("session_save").to_string()).on_click(move |_, window, cx| {
+                            let title = input_state.read(cx).value();
+                            let saved = owner.update(cx, |this, cx| {
+                                let body = automation_title_update(&view, title.as_ref()).and_then(|mut body| {
+                                    let prompt = prompt_state.read(cx).value();
+                                    let prompt = prompt.trim();
+                                    if view["prompt_file_path"].is_null() {
+                                        if prompt.is_empty() {
+                                            return None;
+                                        }
+                                        if view["prompt"].as_str().map(str::trim) != Some(prompt) {
+                                            body["spec"]["prompt"] = prompt.into();
+                                        }
+                                    }
+                                    let schedule = schedule_state.read(cx).value();
+                                    let schedule = schedule.trim();
+                                    if schedule.is_empty() && !automation_schedule_input(&view).is_empty() {
+                                        return None;
+                                    }
+                                    if !schedule.is_empty() && schedule != automation_schedule_input(&view) {
+                                        let (kind, config) = parse_automation_schedule(schedule)?;
+                                        if kind == "once" && view["continuous_context"].as_bool() == Some(true) { return None; }
+                                        let mut merged = if view["schedule_kind"].as_str() == Some(kind) {
+                                            view["schedule_config"].as_object().cloned().unwrap_or_default()
+                                        } else {
+                                            serde_json::Map::new()
+                                        };
+                                        if let Some(fields) = config.as_object() {
+                                            merged.extend(fields.clone());
+                                        }
+                                        body["spec"]["schedule_kind"] = kind.into();
+                                        body["spec"]["schedule_config"] = merged.into();
+                                    }
+                                    Some(body)
+                                });
+                                let Some(body) = body else {
+                                    this.show_toast(crate::ToastKind::Warning, t!("automation_required_fields").to_string(), cx);
+                                    return None;
+                                };
+                                let (reply, response) = tokio::sync::oneshot::channel();
+                                if this.worker.commands.try_send(Command::DraftAutomation { id: id.clone(), body, reply }).is_ok() {
+                                    return Some(response);
+                                }
+                                this.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
+                                None
+                            }).ok().flatten();
+                            if let Some(response) = saved {
+                                window.close_dialog(cx);
+                                let owner = owner.clone();
+                                window.spawn(cx, async move |cx| {
+                                    let result = response.await.unwrap_or_else(|_| Err(t!("automation_action_failed").to_string()));
+                                    let _ = owner.update_in(cx, |this, window, cx| match result {
+                                        Ok(plan) => review_automation(plan, window, cx),
+                                        Err(error) => this.show_toast(crate::ToastKind::Error, error, cx),
+                                    });
+                                }).detach();
+                            }
+                        })))
+            });
+        });
+    }).detach();
+}
+
+fn review_automation(plan: serde_json::Value, window: &mut Window, cx: &mut Context<Observer>) {
+    use chatspeed_gpui::types::Command;
+    use gpui_kit::component::{button::{Button, ButtonVariants}, WindowExt};
+    if window.has_active_dialog(cx) { return; }
+    let owner = cx.entity().downgrade();
+    window.open_dialog(cx, move |dialog, _, _| {
+        let owner = owner.clone();
+        let expansion = plan["permission_summary"]["permission_expansion"] == true;
+        let ready = plan["status"] == "ready" && plan["plan_hash"].is_string();
+        let request = serde_json::json!({"plan": plan, "expected_plan_hash": plan["plan_hash"], "acknowledge_permission_changes": expansion});
+        dialog.title(t!("automation_review_plan").to_string())
+            .child(div().max_h(px(360.)).id("automation-plan").overflow_y_scroll()
+                .child(serde_json::to_string_pretty(&plan).unwrap_or_default()))
+            .footer(h_flex().justify_end().gap_2()
+                .child(Button::new("cancel-plan").label(t!("action_cancel").to_string()).on_click(|_, window, cx| window.close_dialog(cx)))
+                .when(ready, |footer| footer.child(Button::new("apply-plan").primary()
+                    .label(if expansion { t!("automation_acknowledge_apply").to_string() } else { t!("session_save").to_string() })
+                    .on_click(move |_, window, cx| {
+                        let queued = owner.update(cx, |this, cx| {
+                            if this.worker.commands.try_send(Command::ApplyAutomation(request.clone())).is_ok() { return true; }
+                            this.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
+                            false
+                        }).unwrap_or(false);
+                        if queued { window.close_dialog(cx); }
+                    }))))
+    });
+}
+
+fn automation_schedule_input(view: &serde_json::Value) -> String {
+    let config = &view["schedule_config"];
+    match view["schedule_kind"].as_str() {
+        Some("interval") => config["interval_minutes"].as_u64().map(|minutes| format!("{minutes}m")).unwrap_or_default(),
+        Some("once") => config["run_at"].as_str().unwrap_or_default().to_owned(),
+        Some("daily") => config["times"].as_array()
+            .filter(|times| !times.is_empty())
+            .map(|times| times.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(", "))
+            .unwrap_or_else(|| config["time"].as_str().unwrap_or_default().to_owned()),
+        _ => String::new(),
+    }
+}
+
+fn automation_title_update(view: &serde_json::Value, title: &str) -> Option<serde_json::Value> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let revision = view.get("revision")?.as_u64()?;
+    let mut spec = serde_json::Map::new();
+    for field in [
+        "prompt", "prompt_file_path", "agent_id", "agent_config", "allowed_paths",
+        "shell_config", "schedule_kind", "schedule_config", "continuous_context",
+        "self_review", "enabled",
+    ] {
+        spec.insert(field.to_owned(), view.get(field)?.clone());
+    }
+    spec.insert("title".into(), title.into());
+    Some(serde_json::json!({"spec": spec, "expected_revision": revision}))
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn automation_rename_preserves_spec_and_revision() {
+    let view = serde_json::json!({
+        "automation_id": "a", "revision": 4, "title": "Old",
+        "prompt": null, "prompt_file_path": "/project/task.md", "agent_id": "agent",
+        "agent_config": {"custom": true}, "allowed_paths": ["/project"],
+        "shell_config": null, "schedule_kind": "daily", "schedule_config": {"time": "09:00"},
+        "continuous_context": true, "self_review": true, "enabled": false,
+    });
+    let mut expected = view.clone();
+    let fields = expected.as_object_mut().unwrap();
+    fields.remove("automation_id");
+    fields.remove("revision");
+    expected["title"] = "New".into();
+    assert_eq!(automation_title_update(&view, " New "), Some(serde_json::json!({"spec": expected, "expected_revision": 4})));
+    assert_eq!(automation_schedule_input(&view), "09:00");
+    for (kind, config, expected) in [
+        ("daily", serde_json::json!({"times": ["09:00", "18:00"]}), "09:00, 18:00"),
+        ("interval", serde_json::json!({"interval_minutes": 30}), "30m"),
+        ("once", serde_json::json!({"run_at": "2030-01-02 09:30"}), "2030-01-02 09:30"),
+    ] {
+        let view = serde_json::json!({"schedule_kind": kind, "schedule_config": config});
+        let input = automation_schedule_input(&view);
+        assert_eq!(input, expected);
+        assert_eq!(parse_automation_schedule(&input).map(|(kind, _)| kind), Some(kind));
+    }
+    assert!(automation_title_update(&view, " ").is_none());
+    assert!(automation_title_update(&serde_json::json!({"revision": 4}), "New").is_none());
+}
+
 fn parse_automation_schedule(value: &str) -> Option<(&'static str, serde_json::Value)> {
     let value = value.trim();
     if let Some(minutes) = value.strip_suffix('m') {

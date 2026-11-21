@@ -750,6 +750,11 @@ fn automation_list(observer: &Observer, cx: &mut Context<Observer>) -> AnyElemen
                         }
                     }))
             }))
+            .child(div().id("edit-automation").cursor_pointer().text_xs().child(t!("automation_edit").to_string())
+                .on_click(cx.listener({
+                    let id = entry.automation_id.clone();
+                    move |this, _, window, cx| super::titlebar::edit_automation(this, id.clone(), window, cx)
+                })))
             .child(div().id("automation-history").cursor_pointer().text_xs().child(t!("automation_history").to_string())
                 .on_click(cx.listener({
                     let id = entry.automation_id.clone();

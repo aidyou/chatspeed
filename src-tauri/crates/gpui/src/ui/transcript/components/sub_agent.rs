@@ -1,7 +1,6 @@
 //! Delegated-task card and its separate transcript surface.
 
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 
@@ -129,16 +128,7 @@ pub(crate) fn sub_agent_card(
                                 .child(t!("sub_agent_delegated_task").to_string()),
                         )
                         .child(div().flex_1())
-                        .children(open_transcript)
-                        .when(!card.usage.is_empty(), |view| {
-                            view.child(
-                                div()
-                                    .flex_none()
-                                    .text_size(px(10.))
-                                    .text_color(muted)
-                                    .child(card.usage.clone()),
-                            )
-                        }),
+                        .children(open_transcript),
                 )
                 .child(rows)
                 .child(task)

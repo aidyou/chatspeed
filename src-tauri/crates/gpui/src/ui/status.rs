@@ -37,6 +37,76 @@ pub fn status(model: &Model, running: bool, answered: bool, cx: &App) -> AnyElem
     render_status(live_state(model, running, answered), cx)
 }
 
+pub fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer>) -> AnyElement {
+    use gpui_kit::component::v_flex;
+    let model = &observer.model;
+    let key = "workflow-status-details";
+    let mut panel = v_flex().w_full().text_xs().gap_1().child(
+        div().id(key).cursor_pointer().child(t!("snapshot_task_state").to_string())
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.into(), cx))),
+    );
+    if observer.expanded.contains(key) {
+        panel = panel.child(div().id("workflow-efficiency").cursor_pointer()
+            .child(if observer.efficiency_loading { "…".to_owned() } else { t!("status_efficiency").to_string() })
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.efficiency_loading { return; }
+                let Some(session) = this.selected.clone() else { return; };
+                let generation = this.model.generation;
+                let (reply, response) = tokio::sync::oneshot::channel();
+                if this.worker.commands.try_send(chatspeed_gpui::types::Command::ReadEfficiency { session, reply }).is_err() {
+                    this.efficiency_report = Some(Err(t!("status_error").to_string()));
+                    cx.notify();
+                    return;
+                }
+                this.efficiency_loading = true;
+                cx.notify();
+                cx.spawn(async move |owner, cx| {
+                    let result = response.await.unwrap_or_else(|_| Err(t!("status_error").to_string()));
+                    let _ = owner.update(cx, |this, cx| {
+                        if !this.model.accepts(generation) { return; }
+                        this.efficiency_loading = false;
+                        this.efficiency_report = Some(result);
+                        cx.notify();
+                    });
+                }).detach();
+            })));
+        if let Some(report) = &observer.efficiency_report {
+            match report {
+                Ok(report) => {
+                    let metrics = &report["mainAgent"]["metrics"];
+                    panel = panel.child(format!("{}: {}", t!("sub_agent_tools"), metrics["totalToolCalls"].as_u64().unwrap_or_default()));
+                }
+                Err(error) => panel = panel.child(error.clone()),
+            }
+        }
+        if let Some((used, max)) = model.current_context_tokens.zip(model.max_context_tokens).filter(|(_, max)| *max > 0) {
+            panel = panel.child(format!("{}: {:.0}%", t!("sub_agent_context"), (100. * used as f64 / max as f64).min(100.)));
+        }
+        if !model.todo_list.is_empty() {
+            let complete = model.todo_list.iter().filter(|item| matches!(item["status"].as_str(), Some("completed" | "failed" | "data_missing"))).count();
+            panel = panel.child(format!("{}: {complete}/{}", t!("todo_items"), model.todo_list.len()));
+            for item in model.todo_list.iter().take(10) {
+                if let Some(title) = item["subject"].as_str().or_else(|| item["title"].as_str()) {
+                    panel = panel.child(div().text_ellipsis().child(title.to_owned()));
+                }
+            }
+        }
+        let recent: Vec<_> = model.tool_order.iter().rev()
+            .filter_map(|id| model.tools.get(id))
+            .map(tool_name)
+            .filter(|name| !name.is_empty() && !matches!(*name, "complete_workflow" | "answer_user"))
+            .take(3)
+            .collect();
+        if !recent.is_empty() {
+            panel = panel.child(t!("snapshot_recent_actions").to_string());
+            for name in recent {
+                panel = panel.child(div().text_ellipsis().child(name.to_owned()));
+            }
+        }
+    }
+    panel.into_any_element()
+}
+
 fn render_status(live: Option<Live>, cx: &App) -> AnyElement {
     let muted = cx.theme().muted_foreground;
     let Some(live) = live else {

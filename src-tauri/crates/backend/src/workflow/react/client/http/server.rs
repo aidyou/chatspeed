@@ -7962,6 +7962,10 @@ mod chat_route_tests {
         let http = reqwest::Client::new();
 
         let unauthorized = [
+            http.post(url(&plane, "/control/v1/workflows/vision"))
+                .header("Content-Type", "application/json")
+                .body(r#"{"agent_id":"test","query":"","images":[]}"#)
+                .send(),
             http.post(url(&plane, MODELS_LIST_PATH))
                 .body(start_body("chat-1"))
                 .send(),

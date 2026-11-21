@@ -25,7 +25,9 @@ auto_approve_plan_hint: "计划提交后直接进入实施阶段"
 auto_compress_disabled: "自动压缩：关闭"
 auto_compress_enabled: "自动压缩：开启"
 auto_compress_hint: "自动汇总过长的上下文"
+automation_acknowledge_apply: 确认权限变更并应用
 automation_action_failed: 无法执行定时任务操作
+automation_review_plan: 审核自动化计划
 automation_agent_label: "代理：%{agent}"
 automation_agent_required: 暂无可用代理
 automation_create_failed: 无法创建定时任务
@@ -35,6 +37,7 @@ automation_delete: 删除自动化
 automation_delete_confirm: 确定永久删除此自动化吗？
 automation_disable: 停用
 automation_empty: 暂无自动化
+automation_edit: 编辑
 automation_enable: 启用
 automation_history: 历史
 automation_history_empty: 暂无运行记录
@@ -258,6 +261,7 @@ status_awaiting_sub_agent: 等待子代理
 status_awaiting_user: 等待回答
 status_cancelled: 已取消
 status_completed: 已完成
+status_efficiency: 效率分析
 status_error: 出错
 status_executing: 执行中
 status_failed: 失败

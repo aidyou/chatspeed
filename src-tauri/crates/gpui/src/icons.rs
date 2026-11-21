@@ -21,6 +21,7 @@ const MUTE: &str = "\u{13f7c}";
 
 pub fn glyph(name: &str) -> &'static str {
     match name {
+        "fullscreen-off" => "\u{e686}",
         "talk" => "\u{e649}",
         "assistant" => "\u{e6d0}",
         "reasoning" => "\u{e64c}",
@@ -330,6 +331,7 @@ mod tests {
             "assistant",
             "bash",
             "caret-right",
+            "fullscreen-off",
             "double-arrow-up",
         ] {
             let ch = glyph(name).chars().next().unwrap();

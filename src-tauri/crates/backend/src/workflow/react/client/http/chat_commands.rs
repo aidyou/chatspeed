@@ -98,10 +98,132 @@ pub trait RuntimeChatPlane: Send + Sync + 'static {
     fn chat_state(&self) -> Arc<ChatState>;
 }
 
+#[cfg(test)]
+mod vision_input_tests {
+    use super::vision_image_part;
+
+    #[test]
+    fn accepts_png_bytes_only_with_matching_media_type() {
+        use base64::Engine as _;
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .expect("encode test image");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes.into_inner());
+        let url = format!("data:image/png;base64,{encoded}");
+        assert_eq!(vision_image_part(&url), Some(serde_json::json!({
+            "type": "image_url", "image_url": {"url": url}
+        })));
+        assert!(vision_image_part(&format!("data:image/jpeg;base64,{encoded}")).is_none());
+    }
+
+    #[test]
+    fn rejects_paths_remote_urls_and_malformed_images() {
+        for input in ["/tmp/photo.png", "https://example.com/image.png", "data:image/png;base64,!!!!", "data:image/png;base64,AAAA"] {
+            assert!(vision_image_part(input).is_none());
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VisionRequest {
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    query: String,
+    images: Vec<String>,
+}
+
+fn vision_image_part(input: &str) -> Option<serde_json::Value> {
+    use base64::Engine as _;
+    let (header, encoded) = input.split_once(',')?;
+    let format = match header {
+        "data:image/png;base64" => image::ImageFormat::Png,
+        "data:image/jpeg;base64" => image::ImageFormat::Jpeg,
+        "data:image/webp;base64" => image::ImageFormat::WebP,
+        _ => return None,
+    };
+    if encoded.len() > 6 * 1024 * 1024 {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    if image::guess_format(&bytes).ok()? != format {
+        return None;
+    }
+    let reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let (width, height) = reader.into_dimensions().ok()?;
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 20_000_000 {
+        return None;
+    }
+    Some(serde_json::json!({"type": "image_url", "image_url": {"url": input}}))
+}
+
+async fn analyze_workflow_images(State(state): State<ControlPlaneState>, Json(body): Json<VisionRequest>) -> Response {
+    use crate::ai::chat::openai::OpenAIChat;
+    use crate::ai::traits::chat::{AiChatTrait, FinishReason};
+    use serde_json::{json, Value};
+    let plane = match require_chat_plane(&state) { Ok(plane) => plane, Err(response) => return response };
+    let chat = plane.chat_state();
+    let Ok(_ticket) = chat.admit_work(crate::lifecycle::WorkKind::ChatTurn) else { return runtime_unavailable_response(); };
+    let store = plane.main_store();
+    let (config, agent_id) = match (body.session_id, body.agent_id) {
+        (Some(id), None) => match store.get_workflow(&id) {
+            Ok(Some(workflow)) => (workflow.agent_config.and_then(|s| serde_json::from_str::<Value>(&s).ok()).unwrap_or_default(), workflow.agent_id),
+            _ => return invalid_input("Unknown workflow".into()),
+        },
+        (None, Some(id)) => (Value::Null, id),
+        _ => return invalid_input("Expected one workflow or agent target".into()),
+    };
+    let Ok(Some(agent)) = store.get_agent(&agent_id) else { return invalid_input("Unknown agent".into()); };
+    let agent_model = agent.models.and_then(|models| models.vision).and_then(|model| serde_json::to_value(model).ok()).unwrap_or_default();
+    let global: Value = store.get_config("vision_model", Value::Null);
+    let selected = [&config["models"]["vision"], &agent_model, &global].into_iter().find_map(|candidate| {
+        let provider_id = &candidate["id"];
+        let id = provider_id.as_i64()
+            .or_else(|| provider_id.as_str()?.trim().parse().ok())
+            .filter(|id| *id > 0)?;
+        let model = candidate["model"].as_str().filter(|model| !model.trim().is_empty())?;
+        let provider = store.config.get_ai_model_by_id(id).ok()?;
+        (!provider.disabled && !provider.api_protocol.eq_ignore_ascii_case("decision") && provider.models.iter().any(|m| m.id == model)).then_some((id, model))
+    });
+    let Some((id, model)) = selected else { return invalid_input("No configured vision model".into()); };
+    if body.images.is_empty() || body.images.len() > 4 || body.query.len() > 65536 {
+        return invalid_input("Invalid image count or query size".into());
+    }
+    let prompt = [config["image_recognition_prompt"].as_str(), agent.image_recognition_prompt.as_deref()].into_iter().flatten().find(|s| !s.trim().is_empty()).unwrap_or(crate::workflow::react::prompts::DEFAULT_IMAGE_RECOGNITION_PROMPT);
+    let mut content = vec![json!({"type":"text", "text": format!("{prompt}\n\nCurrent user request:\n{}", body.query)})];
+    for image in &body.images {
+        let Some(part) = vision_image_part(image) else { return invalid_input("Invalid image data".into()); };
+        content.push(part);
+    }
+    // Use a private callback, never the dispatcher that executes model tool calls.
+    let rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callback_rejected = rejected.clone();
+    let executor = OpenAIChat::for_vision(store);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(60), executor.chat(
+        id, model, uuid::Uuid::new_v4().to_string(), vec![json!({"role":"user","content":content})], None,
+        Some(ChatMetadata { stream: Some(false), ..Default::default() }), move |chunk| {
+            if matches!(chunk.r#type, MessageType::ToolCalls | MessageType::ToolResults | MessageType::Error) || chunk.finish_reason == Some(FinishReason::ToolCalls) {
+                callback_rejected.store(true, Ordering::Relaxed);
+            }
+        },
+    )).await;
+    let description = result.ok().and_then(Result::ok).and_then(|output| {
+        let value: Value = serde_json::from_str(&output).ok()?;
+        let text = value["content"].as_str()?.trim();
+        (!text.is_empty() && text.len() <= 128 * 1024).then(|| text.to_owned())
+    });
+    match description {
+        Some(text) if !rejected.load(Ordering::Relaxed) => Json(json!({"description":text})).into_response(),
+        _ => dto::error_response(StatusCode::BAD_GATEWAY, "vision_failed", "Image analysis failed".into()),
+    }
+}
+
 /// Builds the runtime chat/model router extension.
 pub fn chat_router() -> Router<ControlPlaneState> {
     Router::new()
         .route(MODELS_LIST_PATH, post(list_runtime_models))
+        .route("/control/v1/workflows/vision", post(analyze_workflow_images).layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)))
         .route(
             CHAT_START_PATH,
             post(start_runtime_chat).layer(axum::extract::DefaultBodyLimit::max(

@@ -126,6 +126,7 @@ pub struct DirEntry {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    pub git_status: Option<String>,
 }
 
 /// Durable transcript row; aliases exist only at the HTTP compatibility boundary.
@@ -232,14 +233,28 @@ pub enum Command {
         title: Option<String>,
     },
     ListAutomations,
+    ReadEfficiency {
+        session: String,
+        reply: tokio::sync::oneshot::Sender<Result<Value, String>>,
+    },
     ListAutomationRuns(String),
     ActOnAutomation { id: String, action: AutomationAction },
     CreateAutomation(Value),
+    AnalyzeImages {
+        target: Value,
+        query: String,
+        paths: Vec<std::path::PathBuf>,
+        reply: tokio::sync::oneshot::Sender<Option<String>>,
+    },
+    ReadAutomation { id: String, reply: tokio::sync::oneshot::Sender<Result<Value, String>> },
+    DraftAutomation { id: String, body: Value, reply: tokio::sync::oneshot::Sender<Result<Value, String>> },
+    ApplyAutomation(Value),
     Stop {
         id: String,
     },
     /// Creates a session and starts it with the first prompt.
     StartNew {
+        agent_id: Option<String>,
         prompt: String,
         attached_context: Option<String>,
         metadata: Option<Value>,

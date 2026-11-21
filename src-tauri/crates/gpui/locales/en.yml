@@ -25,7 +25,9 @@ auto_approve_plan_hint: "Start implementation as soon as a plan is submitted"
 auto_compress_disabled: "Auto compression off"
 auto_compress_enabled: "Auto compression on"
 auto_compress_hint: "Roll up long context automatically"
+automation_acknowledge_apply: Acknowledge permission changes and apply
 automation_action_failed: Could not perform the scheduled task action
+automation_review_plan: Review automation plan
 automation_agent_label: "Agent: %{agent}"
 automation_agent_required: No agent is available
 automation_create_failed: Could not create the scheduled task
@@ -35,6 +37,7 @@ automation_delete: Delete automation
 automation_delete_confirm: Permanently delete this automation?
 automation_disable: Disable
 automation_empty: No automations yet
+automation_edit: Edit
 automation_enable: Enable
 automation_history: History
 automation_history_empty: No runs yet
@@ -258,6 +261,7 @@ status_awaiting_sub_agent: Awaiting sub-agent
 status_awaiting_user: Awaiting answer
 status_cancelled: Cancelled
 status_completed: Completed
+status_efficiency: Efficiency analysis
 status_error: Error
 status_executing: Executing
 status_failed: Failed

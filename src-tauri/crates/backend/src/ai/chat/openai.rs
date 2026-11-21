@@ -378,8 +378,28 @@ struct PreparedToolCalls {
 #[derive(Clone)]
 pub struct OpenAIChat {
     stop_flag: Arc<Mutex<bool>>,
+    vision_only: bool,
     client: DefaultApiClient,
     main_store: Arc<MainStore>,
+}
+
+fn vision_response_requests_tools(response: &Value) -> bool {
+    response["choices"].as_array().into_iter().flatten().any(|choice| {
+        let message = &choice["message"];
+        let calls = &message["tool_calls"];
+        matches!(choice["finish_reason"].as_str(), Some("tool_calls" | "function_call"))
+            || (!calls.is_null() && !calls.as_array().is_some_and(Vec::is_empty))
+            || !message["function_call"].is_null()
+    })
+}
+
+#[cfg(test)]
+#[test]
+fn vision_rejects_unsolicited_tool_output() {
+    assert!(!vision_response_requests_tools(&json!({"choices":[{"message":{"content":"A photo", "tool_calls":[]}}]})));
+    assert!(vision_response_requests_tools(&json!({"choices":[{"message":{"content":"A photo"}}, {"finish_reason":"tool_calls"}]})));
+    assert!(vision_response_requests_tools(&json!({"choices":[{"message":{"tool_calls":[{}]}}]})));
+    assert!(vision_response_requests_tools(&json!({"choices":[{"message":{"function_call":{}}}]})));
 }
 
 impl OpenAIChat {
@@ -387,9 +407,14 @@ impl OpenAIChat {
     pub fn new(main_store: Arc<MainStore>) -> Self {
         Self {
             stop_flag: Arc::new(Mutex::new(false)),
+            vision_only: false,
             client: DefaultApiClient::new(ErrorFormat::OpenAI),
             main_store,
         }
+    }
+
+    pub(crate) fn for_vision(main_store: Arc<MainStore>) -> Self {
+        Self { vision_only: true, ..Self::new(main_store) }
     }
 
     async fn wait_for_transient_retry(&self, delay_seconds: u64) -> bool {
@@ -754,6 +779,14 @@ impl OpenAIChat {
             log_error_diagnostic(&err.diagnostic());
             err
         })?;
+
+        if self.vision_only && vision_response_requests_tools(&parsed) {
+            return Err(AiError::ApiRequestFailed {
+                status_code: 502,
+                provider: provider_name,
+                details: FailureMessage::leaf("Unexpected tool call in image analysis".to_owned()),
+            });
+        }
 
         // Extract content from the response
         let raw_content = parsed["choices"]
@@ -1909,6 +1942,10 @@ impl AiChatTrait for OpenAIChat {
             }
         }
 
+        if self.vision_only {
+            payload = json!({"model": final_model, "messages": messages, "stream": false});
+        }
+
         let internal_api_key = INTERNAL_CCPROXY_API_KEY.read().clone();
         let mut headers_json = json!({
             "x-cs-model-id": final_model,
@@ -1962,7 +1999,7 @@ impl AiChatTrait for OpenAIChat {
 
         let base_endpoint =
             Self::get_endpoint(&messages, &tools, &model_detail.models, &final_model);
-        let use_responses_api = Self::should_use_responses_api(
+        let use_responses_api = !self.vision_only && Self::should_use_responses_api(
             base_endpoint,
             &model_detail.metadata,
             openai_responses::RESPONSES_API_ENABLED,

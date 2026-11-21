@@ -204,6 +204,9 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
                 .text_ellipsis()
                 .child(name.clone()),
         )
+        .children(entry.git_status.as_ref().map(|status| {
+            div().text_xs().text_color(secondary).child(status.clone())
+        }))
         .child(actions(&path, is_dir, false, cx))
         .on_click(cx.listener(move |this, _, window, cx| {
             if is_dir {

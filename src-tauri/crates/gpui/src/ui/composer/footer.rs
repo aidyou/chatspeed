@@ -26,7 +26,8 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let can_stop = observer.model.can_stop();
     let can_send = (!observer.composer.read(cx).value().trim().is_empty()
         || !observer.attachments.is_empty())
-        && !observer.start_pending;
+        && !observer.start_pending
+        && observer.vision_task.is_none();
 
     h_flex()
         .w_full()
@@ -72,7 +73,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                     view.cursor_pointer().hover(|style| style.bg(hover))
                 })
                 .child(
-                    Icon::new("send")
+                    Icon::new(if observer.vision_task.is_some() { "loading" } else { "send" })
                         .size(16.)
                         .color(if can_send { accent } else { muted }),
                 )

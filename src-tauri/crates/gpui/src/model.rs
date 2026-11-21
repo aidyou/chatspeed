@@ -44,6 +44,10 @@ pub struct Model {
     /// Last workflow payload, which carries `agent_config` for the composer's
     /// agent, model and sandbox selectors.
     pub workflow: Value,
+    pub todo_list: Vec<Value>,
+    pub sub_agent_progress: BTreeMap<String, Value>,
+    pub current_context_tokens: Option<u64>,
+    pub max_context_tokens: Option<u64>,
     pub queued_messages: Vec<QueuedMessage>,
     finished_queue_ids: BTreeSet<String>,
     snapshot_queue_ids: BTreeSet<String>,
@@ -128,6 +132,10 @@ impl Model {
         }
         if !page.workflow.is_null() {
             self.workflow = page.workflow.clone();
+            let todo = page.workflow.get("todo_list").or_else(|| page.workflow.get("todoList"));
+            self.todo_list = todo.and_then(|value| {
+                value.as_array().cloned().or_else(|| serde_json::from_str(value.as_str()?).ok())
+            }).unwrap_or_default();
         }
         // Older-message pages may omit the workflow payload; keep the roots the
         // snapshot established instead of clearing them on every page.
@@ -136,6 +144,8 @@ impl Model {
             self.roots = crate::types::workflow_roots(&page.workflow);
         }
         let context = &page.execution_context;
+        self.current_context_tokens = context["current_context_tokens"].as_u64().or_else(|| context["currentContextTokens"].as_u64());
+        self.max_context_tokens = context["max_context_tokens"].as_u64().or_else(|| context["maxContextTokens"].as_u64());
         self.execution_state = context["state"].as_str().unwrap_or("pending").to_ascii_lowercase();
         self.tail_rewind_kind = page.tail_rewind_kind.unwrap_or_default();
         self.can_rewind_tail = page.can_rewind_tail;
@@ -344,6 +354,41 @@ impl Model {
     pub fn event(&mut self, event: Value) {
         let kind = event["type"].as_str().unwrap_or_default();
         match kind {
+            "sub_agent_progress" => {
+                if let Some(id) = event["sub_agent_id"].as_str().filter(|id| !id.is_empty()) {
+                    let progress = self.sub_agent_progress.entry(id.to_owned()).or_insert_with(|| serde_json::json!({}));
+                    let incoming = event["updated_at_ms"].as_i64();
+                    if incoming.zip(progress["updated_at_ms"].as_i64()).is_some_and(|(new, old)| new < old) {
+                        return;
+                    }
+                    if let Some(timestamp) = incoming {
+                        progress["updated_at_ms"] = timestamp.into();
+                    }
+                    for key in ["agent_name", "task", "title", "workflow_state"] {
+                        if event[key].as_str().is_some_and(|value| !value.is_empty()) {
+                            progress[key] = event[key].clone();
+                        }
+                    }
+                    for key in ["tool_calls_count", "current_context_tokens", "max_context_tokens"] {
+                        if event[key].as_u64().is_some() {
+                            progress[key] = event[key].clone();
+                        }
+                    }
+                }
+            }
+            "sync_todo" => {
+                if let Some(items) = event["todo_list"].as_array() {
+                    self.todo_list.clone_from(items);
+                }
+            }
+            "context_usage" => {
+                if let Some(tokens) = event["current_context_tokens"].as_u64().or_else(|| event["total_tokens"].as_u64()) {
+                    self.current_context_tokens = Some(tokens);
+                }
+                if let Some(tokens) = event["max_context_tokens"].as_u64() {
+                    self.max_context_tokens = Some(tokens);
+                }
+            }
             "chunk" | "reasoning_chunk" => self.delta(
                 event["content"].as_str().unwrap_or_default(),
                 kind == "reasoning_chunk",
@@ -546,6 +591,37 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_progress_keeps_context_when_terminal_event_omits_it() {
+        let mut model = Model::default();
+        model.event(json!({"type":"sub_agent_progress","sub_agent_id":"child","tool_calls_count":2,"current_context_tokens":50,"max_context_tokens":200}));
+        assert_eq!(model.sub_agent_progress["child"]["tool_calls_count"], 2);
+        model.event(json!({"type":"sub_agent_progress","sub_agent_id":"child","tool_calls_count":3,"updated_at_ms":20}));
+        model.event(json!({"type":"sub_agent_progress","sub_agent_id":"child","tool_calls_count":1,"updated_at_ms":10}));
+        assert_eq!(model.sub_agent_progress["child"]["tool_calls_count"], 3);
+        assert_eq!(model.sub_agent_progress["child"]["current_context_tokens"], 50);
+        assert_eq!(model.sub_agent_progress["child"]["max_context_tokens"], 200);
+        model.select();
+        assert!(model.sub_agent_progress.is_empty());
+    }
+
+    #[test]
+    fn status_details_hydrate_then_follow_runtime_events() {
+        let mut model = Model::default();
+        model.page(Page {
+            workflow: json!({"todoList": "[{\"subject\":\"First\",\"status\":\"pending\"}]"}),
+            execution_context: json!({"currentContextTokens": 10, "maxContextTokens": 100}),
+            ..Page::default()
+        }, false);
+        assert_eq!(model.todo_list[0]["subject"], "First");
+        assert_eq!(model.current_context_tokens, Some(10));
+        model.event(json!({"type":"sync_todo","todo_list":[]}));
+        model.event(json!({"type":"context_usage","current_context_tokens":25}));
+        assert!(model.todo_list.is_empty());
+        assert_eq!(model.current_context_tokens, Some(25));
+        assert_eq!(model.max_context_tokens, Some(100));
+    }
 
     #[test]
     fn footer_actions_follow_snapshot_execution_and_live_state() {

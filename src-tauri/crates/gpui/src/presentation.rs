@@ -672,7 +672,6 @@ pub struct SubAgentView {
     pub result_preview: String,
     pub result_key: String,
     pub has_result: bool,
-    pub usage: String,
     pub cost_key: String,
     pub cost: Option<CostView>,
 }
@@ -1519,38 +1518,37 @@ fn collect_sub_agent_completions(messages: &[Message]) -> BTreeMap<String, Value
     completions
 }
 
-fn usage_summary(usage: &Value) -> String {
-    let duration = usage["duration_ms"].as_u64().unwrap_or(0);
-    let mut parts = Vec::new();
-    if duration > 0 {
-        let seconds = duration / 1000;
-        parts.push(if seconds >= 60 {
-            format!("{}m{}s", seconds / 60, seconds % 60)
-        } else {
-            format!("{seconds}s")
-        });
+pub fn live_child_card(id: &str, progress: &Value) -> Option<SubAgentView> {
+    let status = progress["workflow_state"].as_str().unwrap_or("running");
+    let task = progress["task"].as_str().filter(|task| !task.trim().is_empty())?;
+    let message = Message {
+        role: "tool".into(),
+        metadata: serde_json::json!({
+            "tool_name": "sub_agent_run",
+            "sub_agent_id": id,
+            "sub_agent_name": progress["agent_name"],
+            "sub_agent_task": task,
+            "sub_agent_status": status,
+        }),
+        ..Message::default()
+    };
+    let mut card = sub_agent_view(&message, &BTreeMap::new())?;
+    card.key = format!("child-progress-{id}");
+    card.task_key = format!("{}:task", card.key);
+    if let Some(count) = progress["tool_calls_count"].as_u64() {
+        card.tools = format!("{count} tools");
     }
-    let cost = usage["self_usage"]["estimated_cost"]
-        .as_f64()
-        .or(usage["estimated_cost"].as_f64());
-    if let Some(cost) = cost {
-        if cost > 0.0 {
-            parts.push(format!("${cost:.4}"));
-        }
-    }
-    let tokens = usage["self_usage"]["total_tokens"]
-        .as_u64()
-        .or(usage["total_tokens"].as_u64());
-    if let Some(tokens) = tokens {
-        if tokens > 0 {
-            parts.push(if tokens >= 1000 {
-                format!("{:.1}k tokens", tokens as f64 / 1000.0)
-            } else {
-                format!("{tokens} tokens")
-            });
-        }
-    }
-    parts.join(" · ")
+    Some(card)
+}
+
+#[cfg(test)]
+#[test]
+fn live_child_card_shows_tool_count_without_a_completion_message() {
+    let progress = serde_json::json!({"task":"Inspect files", "agent_name":"Explorer", "workflow_state":"executing", "tool_calls_count":3});
+    let card = live_child_card("child-1", &progress).expect("live card");
+    assert_eq!(card.task_id.as_deref(), Some("child-1"));
+    assert!(card.status.is_running());
+    assert_eq!(card.tools, "3 tools");
 }
 
 fn sub_agent_view(
@@ -1574,6 +1572,8 @@ fn sub_agent_view(
         .unwrap_or(Value::Null);
     let completion_result = if completion["result"].is_object() {
         completion["result"].clone()
+    } else if completion.is_null() && data["result"].is_object() {
+        data["result"].clone()
     } else {
         completion.clone()
     };
@@ -1609,12 +1609,13 @@ fn sub_agent_view(
         .unwrap_or(0);
     let context = completion_result["current_context_tokens"]
         .as_u64()
-        .zip(completion_result["max_context_tokens"].as_u64())
+        .or_else(|| completion_result["currentContextTokens"].as_u64())
+        .zip(completion_result["max_context_tokens"].as_u64().or_else(|| completion_result["maxContextTokens"].as_u64()))
         .map(|(current, max)| {
             if max > 0 {
                 format!(
                     "{}% ctx",
-                    (current as f64 / max as f64 * 100.0).round() as u64
+                    (current as f64 / max as f64 * 100.0).min(100.0).round() as u64
                 )
             } else {
                 "--".into()
@@ -1671,12 +1672,6 @@ fn sub_agent_view(
     } else {
         result
     };
-    let usage = usage_summary(
-        completion_result
-            .get("usage_summary")
-            .or(completion.get("usage_summary"))
-            .unwrap_or(&Value::Null),
-    );
     let cost = CostView::parse(
         completion_result
             .get("usage_summary")
@@ -1701,7 +1696,6 @@ fn sub_agent_view(
         context,
         task,
         result,
-        usage,
         cost,
         key,
     })
@@ -2806,6 +2800,22 @@ mod tests {
         assert_eq!(card.tools, "4 tools");
         assert_eq!(card.context, "25% ctx");
         assert!(card.result.contains("All good"));
+    }
+
+    #[test]
+    fn sub_agent_card_reads_inline_terminal_context_without_separate_observation() {
+        let row = tool(10, "sub_agent_run", json!({
+            "data": {"result": {"task_id": "child-1", "status": "completed",
+                "tool_calls_count": 4, "current_context_tokens": 50, "max_context_tokens": 200,
+                "result": "Done"}}
+        }));
+        let rows = project(vec![row], &[]);
+        let [Row::SubAgent(card)] = rows.as_slice() else {
+            panic!("expected one child card");
+        };
+        assert_eq!(card.status, SubAgentStatus::Completed);
+        assert_eq!(card.tools, "4 tools");
+        assert_eq!(card.context, "25% ctx");
     }
 
     #[test]
