@@ -1796,7 +1796,9 @@ impl Observer {
                     && this.model.accepts(generation)
                     && this.model.can_stop()
                 {
-                    let _ = this.worker.commands.try_send(Command::Stop { id });
+                    if this.worker.commands.try_send(Command::Stop { id }).is_err() {
+                        this.show_toast(ToastKind::Error, t!("stop_submit_failed").to_string(), cx);
+                    }
                     cx.notify();
                 }
             });

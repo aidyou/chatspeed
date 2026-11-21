@@ -267,6 +267,7 @@ status_running: 運行中
 status_stopping: 停止中
 status_thinking: 思考中
 stop_confirm: 確定停止目前正在執行的工作？
+stop_submit_failed: 無法傳送停止請求
 stop_workflow: 停止
 sub_agent_agent: 代理
 sub_agent_approved: 通過

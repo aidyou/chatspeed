@@ -267,6 +267,7 @@ status_running: Running
 status_stopping: Stopping
 status_thinking: Thinking
 stop_confirm: Stop the running workflow?
+stop_submit_failed: Could not send the stop request
 stop_workflow: Stop
 sub_agent_agent: Agent
 sub_agent_approved: Approved
