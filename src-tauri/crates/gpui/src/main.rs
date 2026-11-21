@@ -490,6 +490,7 @@ struct Observer {
     /// Child transcripts requested but not loaded yet.
     child_epoch: u64,
     child_model: Model,
+    child_approval_drafts: BTreeMap<String, Entity<TextareaState>>,
     child_markdown: BTreeMap<String, (String, Entity<TextViewState>)>,
     child_connected: Option<bool>,
     child_pending: BTreeSet<String>,
@@ -737,6 +738,7 @@ impl Observer {
             ask_user_text: BTreeMap::new(),
             child_epoch: 0,
             child_model: Model::default(),
+            child_approval_drafts: BTreeMap::new(),
             child_markdown: BTreeMap::new(),
             child_connected: None,
             child_pending: BTreeSet::new(),
@@ -2066,6 +2068,7 @@ impl Observer {
         self.child_pending.clear();
         self.child_rows.clear();
         self.child_markdown.clear();
+        self.child_approval_drafts.clear();
         self.child_model = Model::default();
         self.child_connected = None;
     }
@@ -3375,17 +3378,25 @@ impl Observer {
                 {
                     return;
                 }
-                let signal = serde_json::json!({
+                let mut signal = serde_json::json!({
                     "type": "approval", "id": id,
                     "approved": !matches!(decision, Decision::Reject),
                     "approve_all": matches!(decision, Decision::Whitelist),
                 });
+                if matches!(decision, Decision::Reject) {
+                    if let Some(input) = this.child_approval_drafts.get(&id) {
+                        let reason = input.read(cx).value().trim().to_owned();
+                        if !reason.is_empty() {
+                            signal["rejection_message"] = Value::String(reason);
+                        }
+                    }
+                }
                 if this.worker.commands.try_send(Command::Signal { id: session.clone(), signal }).is_err() {
                     this.show_toast(ToastKind::Error, t!("approval_submit_failed").to_string(), cx);
                 }
             });
         };
-        Some(ui::approval::approval_card(tool, None, 1, dispatch, cx))
+        Some(ui::approval::approval_card(tool, self.child_approval_drafts.get(&tool.tool_call_id), 1, dispatch, cx))
     }
 
     fn child_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -3818,6 +3829,18 @@ impl Render for Observer {
             });
         }
         self.ensure_ask_user_fields(window, cx);
+        let child_ids = &self.child_model.pending_tool_ids;
+        let question = self.child_model.awaiting_user_tool_call_id.as_ref();
+        self.child_approval_drafts.retain(|id, _| child_ids.contains(id) && question != Some(id));
+        for id in child_ids.iter().filter(|id| question != Some(*id)) {
+            self.child_approval_drafts.entry(id.clone()).or_insert_with(|| {
+                cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .placeholder(t!("approval_rejection_reason").into_owned())
+                        .auto_grow(2, 4)
+                })
+            });
+        }
 
         // The resize band owns the press; this frame follows the pointer while
         // it stays held, so the drag survives leaving the band.
