@@ -488,6 +488,7 @@ struct Observer {
     approval_drafts: BTreeMap<String, Entity<TextareaState>>,
     ask_user_text: BTreeMap<String, Entity<TextareaState>>,
     /// Child transcripts requested but not loaded yet.
+    child_epoch: u64,
     child_pending: BTreeSet<String>,
     /// Agents, model providers and skills the composer selectors list.
     agents: Vec<serde_json::Value>,
@@ -731,6 +732,7 @@ impl Observer {
             ask_user_choice: BTreeMap::new(),
             approval_drafts: BTreeMap::new(),
             ask_user_text: BTreeMap::new(),
+            child_epoch: 0,
             child_pending: BTreeSet::new(),
             agents: Vec::new(),
             models: Vec::new(),
@@ -2051,8 +2053,12 @@ impl Observer {
     fn open_child(&mut self, card: SubAgentView, cx: &mut Context<Self>) {
         let Some(id) = card.task_id.clone() else { return; };
         self.active_child = Some(card);
-        if !self.child_pending.contains(&id) && self.worker.commands.try_send(Command::Child {
+        self.child_epoch = self.child_epoch.wrapping_add(1);
+        self.child_pending.clear();
+        self.child_rows.clear();
+        if self.worker.commands.try_send(Command::Child {
             generation: self.model.generation,
+            epoch: self.child_epoch,
             session: id.clone(),
         }).is_ok() {
             self.child_pending.insert(id);
@@ -2278,10 +2284,16 @@ impl Observer {
                     }
                     self.show_toast(ToastKind::Error, message, cx);
                 }
-                UpdateKind::Child(id, result) => {
+                UpdateKind::Child(epoch, id, result) => {
+                    if epoch != self.child_epoch || self.active_child.as_ref().and_then(|card| card.task_id.as_ref()) != Some(&id) {
+                        continue;
+                    }
                     self.child_pending.remove(&id);
                     match result {
-                        Ok(page) => self.child_rows.insert(id, presentation::project(page.messages, self.roots())),
+                        Ok(page) => {
+                            let roots = workflow_roots(&page.workflow);
+                            self.child_rows.insert(id, presentation::project(page.messages, &roots))
+                        },
                         Err(err) => {
                             self.show_toast(ToastKind::Error, err, cx);
                             None

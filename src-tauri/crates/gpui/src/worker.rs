@@ -535,14 +535,14 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
-            Command::Child { generation, session } => {
+            Command::Child { generation, epoch, session } => {
                 let options = options.clone();
                 let tx = tx.clone();
                 tokio::spawn(async move {
                     let path = format!("/control/v1/workflows/{session}?limit={PAGE_LIMIT}");
                     let result = native::control_get(&options, &path).await
                         .and_then(|value| serde_json::from_value(value).map_err(|err| err.to_string()));
-                    let _ = send(&tx, generation, UpdateKind::Child(session, result)).await;
+                    let _ = send(&tx, generation, UpdateKind::Child(epoch, session, result)).await;
                 });
             }
             Command::ListDir { path } => {
