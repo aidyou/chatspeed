@@ -40,7 +40,8 @@ automation_history: 历史
 automation_history_empty: 暂无运行记录
 automation_name: 任务名称
 automation_prompt: 任务指令
-automation_required_fields: 请输入名称、任务指令和有效时间（HH:MM）。
+automation_required_fields: 请输入名称、任务指令和有效排程。
+automation_schedule_input: "每日：09:00，18:00；间隔：30m（最少 5m）；单次：YYYY-MM-DD HH:MM（本地时间）"
 automation_run: 立即运行
 awaiting_approval: 等待用户审批
 chat_hub: ChatHub

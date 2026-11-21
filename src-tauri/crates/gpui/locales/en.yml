@@ -40,7 +40,8 @@ automation_history: History
 automation_history_empty: No runs yet
 automation_name: Task name
 automation_prompt: Task instructions
-automation_required_fields: Enter a name, instructions, and a valid time (HH:MM).
+automation_required_fields: Enter a name, instructions, and a valid schedule.
+automation_schedule_input: "Daily: 09:00, 18:00 · Interval: 30m (minimum 5m) · Once: YYYY-MM-DD HH:MM (local time)"
 automation_run: Run now
 awaiting_approval: Awaiting approval
 chat_hub: ChatHub

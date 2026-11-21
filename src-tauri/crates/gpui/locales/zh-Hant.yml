@@ -40,7 +40,8 @@ automation_history: 歷程
 automation_history_empty: 暫無執行紀錄
 automation_name: 任務名稱
 automation_prompt: 任務指令
-automation_required_fields: 請輸入名稱、任務指令和有效時間（HH:MM）。
+automation_required_fields: 請輸入名稱、任務指令和有效排程。
+automation_schedule_input: "每日：09:00，18:00；間隔：30m（最少 5m）；單次：YYYY-MM-DD HH:MM（本機時間）"
 automation_run: 立即執行
 awaiting_approval: 等待用戶審批
 chat_hub: ChatHub

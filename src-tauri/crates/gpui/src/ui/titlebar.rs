@@ -81,16 +81,16 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
             .on_click(move |_, window, cx| {
                 let name = title_state.read(cx).value().trim().to_owned();
                 let prompt = prompt_state.read(cx).value().trim().to_owned();
-                let schedule = parse_daily_schedule(time_state.read(cx).value().as_ref());
+                let schedule = parse_automation_schedule(time_state.read(cx).value().as_ref());
                 let accepted = owner.update(cx, |this, cx| {
                     if this.automation_pending { return false; }
-                    let Some(schedule) = schedule.filter(|_| !name.is_empty() && !prompt.is_empty()) else {
+                    let Some((kind, schedule)) = schedule.filter(|_| !name.is_empty() && !prompt.is_empty()) else {
                         this.show_toast(crate::ToastKind::Warning, t!("automation_required_fields").to_string(), cx);
                         return false;
                     };
                     let spec = serde_json::json!({
                         "title": name, "prompt": prompt, "agent_id": agent,
-                        "allowed_paths": [], "schedule_kind": "daily", "schedule_config": schedule,
+                        "allowed_paths": [], "schedule_kind": kind, "schedule_config": schedule,
                         "continuous_context": false, "self_review": false, "enabled": true,
                     });
                     if this.worker.commands.try_send(chatspeed_gpui::types::Command::CreateAutomation(spec)).is_err() {
@@ -105,11 +105,28 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         dialog.title(t!("create_automation").to_string()).child(v_flex().gap_2()
             .child(div().text_size(px(12.)).text_color(cx.theme().muted_foreground).child(t!("automation_agent_label", agent = agent_label.as_str()).to_string()))
             .child(Input::new(&title)).child(Textarea::new(&prompt))
-            .child(t!("automation_daily_time").to_string()).child(Input::new(&time)))
+            .child(t!("automation_schedule_input").to_string()).child(Input::new(&time)))
             .footer(h_flex().justify_end().gap_2()
                 .child(Button::new("create-automation-cancel").label(t!("action_cancel").to_string()).on_click(|_, window, cx| window.close_dialog(cx)))
                 .child(submit))
     });
+}
+
+fn parse_automation_schedule(value: &str) -> Option<(&'static str, serde_json::Value)> {
+    let value = value.trim();
+    if let Some(minutes) = value.strip_suffix('m') {
+        let minutes = minutes.trim().parse::<u32>().ok().filter(|n| *n >= 5)?;
+        return Some(("interval", serde_json::json!({"interval_minutes": minutes})));
+    }
+    if let Some((date, time)) = value.split_once(' ') {
+        let parts: Vec<_> = date.split('-').collect();
+        if parts.len() == 3 && parts[0].len() == 4 && parts[1].len() == 2 && parts[2].len() == 2
+            && parts.iter().all(|part| part.bytes().all(|b| b.is_ascii_digit())) && valid_daily_time(time)
+        {
+            return Some(("once", serde_json::json!({"run_at": value})));
+        }
+    }
+    parse_daily_schedule(value).map(|schedule| ("daily", schedule))
 }
 
 fn parse_daily_schedule(value: &str) -> Option<serde_json::Value> {
@@ -127,6 +144,10 @@ fn daily_schedule_normalizes_times() {
     assert_eq!(parse_daily_schedule("18:00，09:00, 09:00"), Some(serde_json::json!({"time":"09:00","times":["09:00","18:00"]})));
     assert!(parse_daily_schedule("09:00, 24:00").is_none());
     assert!(parse_daily_schedule("").is_none());
+    assert_eq!(parse_automation_schedule("30m"), Some(("interval", serde_json::json!({"interval_minutes":30}))));
+    assert!(parse_automation_schedule("4m").is_none());
+    assert_eq!(parse_automation_schedule("2030-01-02 09:30"), Some(("once", serde_json::json!({"run_at":"2030-01-02 09:30"}))));
+    assert!(parse_automation_schedule("2030-01-02 29:30").is_none());
 }
 
 fn valid_daily_time(time: &str) -> bool {
