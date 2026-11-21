@@ -3374,8 +3374,16 @@ impl Observer {
                 if !this.current_child_matches(epoch, &session)
                     || this.child_connected != Some(true)
                     || !this.child_model.pending_tool_ids.contains(&id)
-                    || matches!(decision, Decision::Batch)
                 {
+                    return;
+                }
+                if matches!(decision, Decision::Batch) {
+                    let tool_ids = this.child_approval_drafts.keys()
+                        .filter(|id| this.child_model.pending_tool_ids.contains(*id))
+                        .cloned().collect();
+                    if this.worker.commands.try_send(Command::ApprovalBatch { session: session.clone(), tool_ids }).is_err() {
+                        this.show_toast(ToastKind::Error, t!("approval_submit_failed").to_string(), cx);
+                    }
                     return;
                 }
                 let mut signal = serde_json::json!({
@@ -3396,7 +3404,7 @@ impl Observer {
                 }
             });
         };
-        Some(ui::approval::approval_card(tool, self.child_approval_drafts.get(&tool.tool_call_id), 1, dispatch, cx))
+        Some(ui::approval::approval_card(tool, self.child_approval_drafts.get(&tool.tool_call_id), self.child_approval_drafts.len(), dispatch, cx))
     }
 
     fn child_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
