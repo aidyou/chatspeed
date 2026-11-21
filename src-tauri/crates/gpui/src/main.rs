@@ -2055,6 +2055,11 @@ impl Observer {
         cx.notify();
     }
 
+    fn current_child_matches(&self, epoch: u64, session: &str) -> bool {
+        self.child_epoch == epoch
+            && self.active_child.as_ref().and_then(|card| card.task_id.as_deref()) == Some(session)
+    }
+
     fn close_child(&mut self) {
         self.worker.set_child(None);
         self.active_child = None;
@@ -2294,7 +2299,7 @@ impl Observer {
                     self.show_toast(ToastKind::Error, message, cx);
                 }
                 UpdateKind::Child(epoch, id, result) => {
-                    if epoch != self.child_epoch || self.active_child.as_ref().and_then(|card| card.task_id.as_ref()) != Some(&id) {
+                    if !self.current_child_matches(epoch, &id) {
                         continue;
                     }
                     match *result {
