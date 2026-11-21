@@ -142,6 +142,14 @@ model_slot_vision: "视觉模型"
 new_task: 新建任务
 no_sessions: 暂无工作流会话
 not_supported_native: 原生窗口暂未支持
+file_editor_close: 关闭
+file_editor_conflict: 磁盘上的文件已更改。当前编辑仍保留，请复制改动后再重新打开文件。
+file_editor_discard: 放弃并关闭
+file_editor_open_error: "无法打开 UTF-8 文本文件（上限 50 MiB）：%{reason}"
+file_editor_save: 保存
+file_editor_save_error: "无法保存文件：%{reason}"
+file_editor_saving: 正在保存…
+file_editor_unsaved: 有未保存的改动。
 open_file: 打开文件
 paths_empty: 暂无授权目录
 personality_coach: "教练"

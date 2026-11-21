@@ -142,6 +142,14 @@ model_slot_vision: "視覺模型"
 new_task: 新建任務
 no_sessions: 暫無工作流會話
 not_supported_native: 原生視窗暫未支援
+file_editor_close: 關閉
+file_editor_conflict: 磁碟上的檔案已變更。目前的編輯仍保留，請複製變更後再重新開啟檔案。
+file_editor_discard: 捨棄並關閉
+file_editor_open_error: "無法開啟 UTF-8 文字檔案（上限 50 MiB）：%{reason}"
+file_editor_save: 儲存
+file_editor_save_error: "無法儲存檔案：%{reason}"
+file_editor_saving: 正在儲存…
+file_editor_unsaved: 有未儲存的變更。
 open_file: 開啟檔案
 paths_empty: 暫無授權目錄
 personality_coach: "教練"

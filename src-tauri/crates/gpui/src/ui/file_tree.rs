@@ -200,11 +200,11 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
                 .text_ellipsis()
                 .child(name.clone()),
         )
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(cx.listener(move |this, _, window, cx| {
             if is_dir {
                 this.toggle_dir(path.clone(), cx);
             } else {
-                this.not_implemented(format!("{} · {}", t!("open_file"), name), cx);
+                super::file_editor::open(this, path.clone(), window, cx);
             }
         }))
         .into_any_element()

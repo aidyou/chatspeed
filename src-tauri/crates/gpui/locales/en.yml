@@ -142,6 +142,14 @@ model_slot_vision: "Vision model"
 new_task: New task
 no_sessions: No workflow sessions yet
 not_supported_native: Not available in the native window yet
+file_editor_close: Close
+file_editor_conflict: The file changed on disk. Your edits are still open; copy them before reopening the file.
+file_editor_discard: Discard and close
+file_editor_open_error: "Could not open UTF-8 text file (50 MiB limit): %{reason}"
+file_editor_save: Save
+file_editor_save_error: "Could not save the file: %{reason}"
+file_editor_saving: Saving…
+file_editor_unsaved: You have unsaved changes.
 open_file: Open file
 paths_empty: No authorized paths
 personality_coach: "Coach"

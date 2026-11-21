@@ -204,6 +204,7 @@ pub fn trigger(element: impl IntoElement) -> Trigger {
 
 pub mod approval;
 pub mod composer;
+pub(crate) mod file_editor;
 pub mod file_tree;
 pub mod frame;
 pub mod sidebar;

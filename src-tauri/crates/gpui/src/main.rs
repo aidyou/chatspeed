@@ -451,6 +451,7 @@ struct Observer {
     dir_entries: BTreeMap<String, Vec<DirEntry>>,
     dir_errors: BTreeMap<String, String>,
     dir_pending: BTreeSet<String>,
+    file_editor: ui::file_editor::FileEditor,
     /// The first authorized root opens once per selected workflow, matching
     /// `FileTree.vue`'s mount behaviour.
     files_auto_expanded: bool,
@@ -688,6 +689,7 @@ impl Observer {
             dir_entries: BTreeMap::new(),
             dir_errors: BTreeMap::new(),
             dir_pending: BTreeSet::new(),
+            file_editor: Default::default(),
             files_auto_expanded: false,
             title_drag: false,
             composer,
@@ -3801,21 +3803,21 @@ impl Render for Observer {
                                 .h_full()
                                 .min_w_0()
                                 .min_h_0()
-                                .child(
+                                .child(if let Some(panel) = ui::file_editor::panel(self, cx) {
+                                    panel
+                                } else {
                                     v_flex()
-                                        .relative()
                                         .flex_1()
                                         .min_h_0()
-                                        .min_w_0()
-                                        .child(content)
                                         .child(
-                                            self.timeline_scroll
-                                                .scrollbar_input
-                                                .overlay(&self.timeline_scroll.scroll),
+                                            v_flex().relative().flex_1().min_h_0().min_w_0()
+                                                .child(content)
+                                                .child(self.timeline_scroll.scrollbar_input.overlay(&self.timeline_scroll.scroll))
+                                                .children(self.child_overlay(cx)),
                                         )
-                                        .children(self.child_overlay(cx)),
-                                )
-                                .child(ui::composer::composer(self, cx)),
+                                        .child(ui::composer::composer(self, cx))
+                                        .into_any_element()
+                                }),
                         ),
                 )
                 .child(
