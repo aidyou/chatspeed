@@ -360,5 +360,18 @@
         }
       }
     }
+  },
+  {
+    "name": "parallel-search",
+    "description": "Free web search and page retrieval; user-provided search objectives, search queries, and requested URLs are sent to Parallel",
+    "website": "https://docs.parallel.ai/integrations/mcp/search-mcp",
+    "config": {
+      "mcpServers": {
+        "parallel-search": {
+          "type": "streamable_http",
+          "url": "https://search.parallel.ai/mcp"
+        }
+      }
+    }
   }
 ]
