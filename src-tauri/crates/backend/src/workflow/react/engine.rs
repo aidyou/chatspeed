@@ -2291,7 +2291,8 @@ impl WorkflowExecutor {
                 .dispatch_ui(parent_session_id.clone(), payload.clone())
                 .await
         } else {
-            Ok(())
+            let _ = self.gateway.send(&parent_session_id, payload).await;
+            return;
         };
 
         if let Err(e) = dispatch_result {

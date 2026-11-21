@@ -384,6 +384,15 @@ fn build_terminal_sub_agent_result(
         }
     };
 
+    if let Ok(Some(context)) = main_store.get_execution_context(task_id) {
+        if let Some(current) = context.current_context_tokens {
+            result["current_context_tokens"] = json!(current);
+        }
+        if let Some(max) = context.max_context_tokens.filter(|max| *max > 0) {
+            result["max_context_tokens"] = json!(max);
+        }
+    }
+
     let terminal_status = result
         .get("status")
         .and_then(Value::as_str)
@@ -1723,8 +1732,10 @@ impl ToolDefinition for TaskTool {
                                     .and_then(Value::as_u64)
                                     .unwrap_or(0)
                                     as usize,
-                                current_context_tokens: None,
-                                max_context_tokens: None,
+                                current_context_tokens: completion_result["current_context_tokens"]
+                                    .as_u64().and_then(|tokens| usize::try_from(tokens).ok()),
+                                max_context_tokens: completion_result["max_context_tokens"]
+                                    .as_u64().and_then(|tokens| usize::try_from(tokens).ok()),
                                 is_error,
                                 updated_at_ms: chrono::Utc::now().timestamp_millis(),
                             },
@@ -2636,6 +2647,11 @@ mod tests {
             )
             .expect("failed to create child workflow");
 
+        let mut context = crate::workflow::react::types::ExecutionContext::new("billing-child".to_owned());
+        context.current_context_tokens = Some(50);
+        context.max_context_tokens = Some(200);
+        store.upsert_execution_context(&context).expect("persist child context");
+
         let result = build_terminal_sub_agent_result(
             store.as_ref(),
             "billing-child",
@@ -2653,6 +2669,8 @@ mod tests {
 
         assert_eq!(result["status"], "failed");
         assert_eq!(result["error_type"], "llm_billing");
+        assert_eq!(result["current_context_tokens"], 50);
+        assert_eq!(result["max_context_tokens"], 200);
         assert_eq!(result["error_metadata"]["upstream_status_code"], 402);
         assert_eq!(result["error_metadata"]["provider"], "provider");
         assert_eq!(

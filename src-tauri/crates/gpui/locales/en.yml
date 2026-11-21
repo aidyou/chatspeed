@@ -261,7 +261,21 @@ status_awaiting_sub_agent: Awaiting sub-agent
 status_awaiting_user: Awaiting answer
 status_cancelled: Cancelled
 status_completed: Completed
+status_convergence: Convergence score
+status_edit_calls: Edit calls
 status_efficiency: Efficiency analysis
+status_global_model: Global setting
+status_parallel_rounds: Parallel rounds
+status_execution: Execution score
+status_main_agent: Main
+status_models: Models
+status_read_calls: Read calls
+status_read_coverage: Pre-edit read coverage
+status_repeated_reads: Repeated reads
+status_search_calls: Search calls
+status_sub_agents: Sub-agents
+status_title_model: Title model
+status_verification_calls: Verification calls
 status_error: Error
 status_executing: Executing
 status_failed: Failed

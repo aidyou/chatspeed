@@ -5,7 +5,10 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["gui"]
+default = ["fast", "chat-hub"]
+fast = ["gui", "gpui-kit/gpui-fast"]
+webview-prototype = ["fast", "chat-hub"]
+chat-hub = ["gui", "dep:gtk", "dep:wry"]
 gui = ["dep:alacritty_terminal", "dep:gpui-kit", "dep:image", "dep:rodio", "dep:raw-window-handle", "dep:x11rb", "dep:windows-sys", "dep:objc2-app-kit", "dep:tempfile"]
 
 [[bin]]
@@ -14,6 +17,7 @@ path = "src/main.rs"
 required-features = ["gui"]
 
 [dependencies]
+wry = { version = "0.57", optional = true }
 alacritty_terminal = { version = "0.26", default-features = false, optional = true }
 chatspeed-runtime-client = { path = "../client" }
 chatspeed-contracts = { path = "../contracts" }
@@ -39,6 +43,11 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSVi
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13.2", optional = true }
+gtk = { version = "0.18", optional = true }
+
+[[example]]
+name = "webview_probe"
+required-features = ["webview-prototype"]
 
 [build-dependencies]
 embed-resource = "3"

@@ -207,14 +207,14 @@ fn rail(
                     "plugin",
                     skin,
                     cx,
-                    |this, cx| this.not_implemented(t!("plugin_panel"), cx),
+                    |this, _, cx| this.not_implemented(t!("plugin_panel"), cx),
                 ))
                 .child(rail_action(
                     "rail-chathub",
                     "connected",
                     skin,
                     cx,
-                    |this, cx| this.not_implemented(t!("chat_hub"), cx),
+                    super::titlebar::toggle_chat_hub,
                 ))
                 // Vue keeps the terminal entry separately so the docked ChatHub
                 // page is only opened by its own entry.
@@ -223,7 +223,7 @@ fn rail(
                     "bash",
                     skin,
                     cx,
-                    super::terminal::toggle,
+                    |this, _, cx| super::terminal::toggle(this, cx),
                 )),
         )
         .into_any_element()
@@ -283,7 +283,7 @@ fn rail_action(
     icon: &'static str,
     skin: &Surfaces,
     cx: &mut Context<Observer>,
-    run: impl Fn(&mut Observer, &mut Context<Observer>) + 'static,
+    run: impl Fn(&mut Observer, &mut Window, &mut Context<Observer>) + 'static,
 ) -> AnyElement {
     let hover = skin.hover;
     div()
@@ -297,7 +297,7 @@ fn rail_action(
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(18.).color(cx.theme().muted_foreground))
-        .on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
+        .on_click(cx.listener(move |this, _, window, cx| run(this, window, cx)))
         .into_any_element()
 }
 
@@ -875,7 +875,7 @@ fn compact(
                     "plugin",
                     skin,
                     cx,
-                    |this, cx| this.not_implemented(t!("plugin_panel"), cx),
+                    |this, _, cx| this.not_implemented(t!("plugin_panel"), cx),
                 ))
                 .child(compact_entry(
                     "compact-chathub",
@@ -883,7 +883,7 @@ fn compact(
                     40.,
                     skin,
                     cx,
-                    |this, cx| this.not_implemented(t!("chat_hub"), cx),
+                    super::titlebar::toggle_chat_hub,
                 ))
                 // Vue keeps the terminal entry separately so the docked ChatHub
                 // page is only opened by its own entry.
@@ -893,7 +893,7 @@ fn compact(
                     48.,
                     skin,
                     cx,
-                    super::terminal::toggle,
+                    |this, _, cx| super::terminal::toggle(this, cx),
                 )),
         )
         .into_any_element()
@@ -907,7 +907,7 @@ fn compact_entry(
     height: f32,
     skin: &Surfaces,
     cx: &mut Context<Observer>,
-    run: impl Fn(&mut Observer, &mut Context<Observer>) + 'static,
+    run: impl Fn(&mut Observer, &mut Window, &mut Context<Observer>) + 'static,
 ) -> AnyElement {
     let hover = skin.hover;
     div()
@@ -922,7 +922,7 @@ fn compact_entry(
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(18.).color(cx.theme().muted_foreground))
-        .on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
+        .on_click(cx.listener(move |this, _, window, cx| run(this, window, cx)))
         .into_any_element()
 }
 

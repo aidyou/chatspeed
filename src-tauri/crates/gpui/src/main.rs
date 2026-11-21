@@ -49,6 +49,8 @@ use std::{
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod sound_player;
+#[cfg(feature = "chat-hub")]
+mod chat_hub;
 mod ui;
 
 /// ChatSpeed's default primary preset. `primary_color` in the runtime config
@@ -407,6 +409,12 @@ struct Observer {
     sessions: Vec<Session>,
     automations: Option<Result<Vec<AutomationSummary>, String>>,
     automation_history: Option<(String, Option<Result<Vec<AutomationRun>, String>>)>,
+    status_title_model: Value,
+    status_panel_tab: usize,
+    status_panel_mode: ui::status::PanelMode,
+    status_panel_position: Option<Point<Pixels>>,
+    status_panel_drag: Option<Point<Pixels>>,
+    efficiency_updated_at: Option<Instant>,
     efficiency_report: Option<Result<Value, String>>,
     efficiency_loading: bool,
     pending_decisions: BTreeMap<String, Vec<PendingDecision>>,
@@ -441,6 +449,8 @@ struct Observer {
     window_position_read: bool,
     copy_flash: Arc<Mutex<Option<CopyFlash>>>,
     /// Sidebar collapse state, matching the Vue compact sidebar.
+    #[cfg(feature = "chat-hub")]
+    chat_hub: Option<chat_hub::ChatHub>,
     sidebar_collapsed: bool,
     sidebar_changed: bool,
     pending_settings: BTreeMap<(String, &'static str), (bool, Option<Instant>)>,
@@ -732,6 +742,12 @@ impl Observer {
             sessions: Vec::new(),
             automations: None,
             automation_history: None,
+            status_title_model: Value::Null,
+            status_panel_tab: 0,
+            status_panel_mode: ui::status::PanelMode::Circle,
+            status_panel_position: None,
+            status_panel_drag: None,
+            efficiency_updated_at: None,
             efficiency_report: None,
             efficiency_loading: false,
             pending_decisions: BTreeMap::new(),
@@ -769,6 +785,8 @@ impl Observer {
             #[cfg(target_os = "windows")]
             window_position_read: false,
             copy_flash: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "chat-hub")]
+            chat_hub: None,
             sidebar_collapsed: false,
             sidebar_changed: false,
             pending_settings: BTreeMap::new(),
@@ -947,6 +965,8 @@ impl Observer {
         self.approval_drafts.clear();
         self.rewind_pending = false;
         self.markdown.clear();
+        self.status_panel_tab = 0;
+        self.efficiency_updated_at = None;
         self.efficiency_report = None;
         self.efficiency_loading = false;
         self.expanded.clear();
@@ -1665,6 +1685,8 @@ impl Observer {
         self.approval_drafts.clear();
         self.rows.clear();
         self.markdown.clear();
+        self.status_panel_tab = 0;
+        self.efficiency_updated_at = None;
         self.efficiency_report = None;
         self.efficiency_loading = false;
         self.expanded.clear();
@@ -2773,6 +2795,7 @@ impl Observer {
                 .as_bool()
                 .unwrap_or(false);
         }
+        self.status_title_model = config["conversation_title_gen_model"].clone();
         self.send_with_shift = config["send_message_key"].as_str() == Some("Shift+Enter");
         self.show_menu_button = config["show_menu_button"].as_bool().unwrap_or(true);
         self.show_today_cost = config["show_today_cost_stats"].as_bool().unwrap_or(false);
@@ -4368,6 +4391,27 @@ impl Render for Observer {
         // paints later siblings over earlier ones, so the shadow is a gradient
         // strip drawn after the body instead of a shadow on the bar itself.
         let shadow = ui::surfaces(self.appearance_dark).titlebar_border;
+        #[cfg(feature = "chat-hub")]
+        let hub_dock = self.chat_hub.as_ref().map(|hub| {
+            let control = |id, label, action: fn(&chat_hub::ChatHub) -> wry::Result<()>| {
+                div().id(id).px_2().cursor_pointer().child(label).on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(hub) = &this.chat_hub {
+                        if let Err(error) = action(hub) {
+                            this.show_toast(ToastKind::Error, error.to_string(), cx);
+                        }
+                    }
+                }))
+            };
+            v_flex().w(px(480.)).max_w(relative(0.55)).h_full().min_h_0()
+                .child(h_flex().gap_2()
+                    .child(control("hub-reload", "↻", chat_hub::ChatHub::reload))
+                    .child(control("hub-zoom-out", "−", |hub| hub.zoom(0.8)))
+                    .child(control("hub-zoom-reset", "100%", |hub| hub.zoom(1.0)))
+                    .child(control("hub-zoom-in", "+", |hub| hub.zoom(1.25))))
+                .child(hub.dock()).into_any_element()
+        });
+        #[cfg(not(feature = "chat-hub"))]
+        let hub_dock: Option<AnyElement> = None;
         let frame = ui::frame::window_frame(
             v_flex()
                 .size_full()
@@ -4411,7 +4455,8 @@ impl Render for Observer {
                                         .into_any_element()
                                 })
                                 .children(ui::terminal::render(self, cx)),
-                        ),
+                        )
+                        .children(hub_dock),
                 )
                 .child(
                     div()
@@ -4432,7 +4477,19 @@ impl Render for Observer {
         );
         // Configuration dialogs float above the whole frame instead of growing
         // the composer, like Vue's appended-to-body popovers.
-        let mut shell = div().size_full().relative().child(frame);
+        let mut shell = div().id("workflow-shell").size_full().relative().child(frame)
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if let Some(offset) = this.status_panel_drag {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        this.status_panel_position = Some(event.position - offset);
+                        cx.notify();
+                    } else {
+                        this.status_panel_drag = None;
+                    }
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.status_panel_drag = None))
+            .children(ui::status::overlay(self, window, cx));
         if self.quick_panel.is_some() {
             shell = shell.child(ui::composer::panels::overlay(self, cx));
         }

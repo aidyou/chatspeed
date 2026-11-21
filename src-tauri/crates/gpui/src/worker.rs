@@ -536,6 +536,13 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 });
             }
+            Command::ListChatHubs(reply) => {
+                let options = options.clone();
+                tokio::spawn(async move {
+                    let result = native::data_command(&options, "get_all_chat_hubs", json!({})).await;
+                    let _ = reply.send(result);
+                });
+            }
             Command::ReadAutomation { id, reply } => {
                 let result = native::control_get(&options, &format!("/control/v1/automations/{id}")).await;
                 let _ = reply.send(result);

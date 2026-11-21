@@ -213,6 +213,7 @@ pub fn panel(observer: &Observer, cx: &mut Context<Observer>) -> Option<AnyEleme
     }
     Some(
         v_flex()
+            .occlude()
             .w_full()
             .min_w_0()
             .max_h(px(300.))

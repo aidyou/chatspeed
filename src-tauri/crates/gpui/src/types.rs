@@ -237,6 +237,7 @@ pub enum Command {
         session: String,
         reply: tokio::sync::oneshot::Sender<Result<Value, String>>,
     },
+    ListChatHubs(tokio::sync::oneshot::Sender<Result<Value, String>>),
     ListAutomationRuns(String),
     ActOnAutomation { id: String, action: AutomationAction },
     CreateAutomation(Value),

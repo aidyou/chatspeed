@@ -47,9 +47,6 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         answered,
         cx,
     ));
-    if observer.selected.is_some() {
-        column = column.child(status::workflow_details(observer, cx));
-    }
     let panel = suggestions::panel(observer, cx);
     // Vue floats the panel above the box instead of pushing the transcript up.
     let mut frame = v_flex()

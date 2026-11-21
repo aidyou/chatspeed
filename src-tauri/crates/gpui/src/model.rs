@@ -364,7 +364,7 @@ impl Model {
                     if let Some(timestamp) = incoming {
                         progress["updated_at_ms"] = timestamp.into();
                     }
-                    for key in ["agent_name", "task", "title", "workflow_state"] {
+                    for key in ["agent_name", "task", "title", "workflow_state", "status", "summary", "wait_reason"] {
                         if event[key].as_str().is_some_and(|value| !value.is_empty()) {
                             progress[key] = event[key].clone();
                         }
