@@ -549,6 +549,34 @@ const SIDEBAR_MIN_WIDTH: f32 = 200.;
 
 const COPY_FLASH: Duration = Duration::from_secs(3);
 
+const MAX_DRAFT_BYTES: u64 = 2 * 1024 * 1024;
+
+fn read_text_drafts(path: &std::path::Path) -> BTreeMap<String, String> {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else { return BTreeMap::new(); };
+    let mut bytes = Vec::new();
+    if file.take(MAX_DRAFT_BYTES + 1).read_to_end(&mut bytes).is_err()
+        || bytes.len() as u64 > MAX_DRAFT_BYTES
+    {
+        return BTreeMap::new();
+    }
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn local_draft_reader_ignores_invalid_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("drafts.json");
+    assert!(read_text_drafts(&path).is_empty());
+    std::fs::write(&path, br#"{"first":"draft"}"#).unwrap();
+    assert_eq!(read_text_drafts(&path).get("first").map(String::as_str), Some("draft"));
+    std::fs::write(&path, b"invalid").unwrap();
+    assert!(read_text_drafts(&path).is_empty());
+    std::fs::File::create(&path).unwrap().set_len(MAX_DRAFT_BYTES + 1).unwrap();
+    assert!(read_text_drafts(&path).is_empty());
+}
+
 impl Observer {
     fn new(worker: Worker, options: Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let composer = cx.new(|cx| {
@@ -773,15 +801,7 @@ impl Observer {
             task,
         };
         if let Some(path) = observer.draft_file() {
-            use std::io::Read;
-            if let Ok(file) = std::fs::File::open(path) {
-                let mut bytes = Vec::new();
-                if file.take(2 * 1024 * 1024 + 1).read_to_end(&mut bytes).is_ok() && bytes.len() <= 2 * 1024 * 1024 {
-                    if let Ok(drafts) = serde_json::from_slice::<BTreeMap<String, String>>(&bytes) {
-                        observer.drafts.extend(drafts.into_iter().map(|(id, text)| (Some(id), (text, Vec::new()))));
-                    }
-                }
-            }
+            observer.drafts.extend(read_text_drafts(&path).into_iter().map(|(id, text)| (Some(id), (text, Vec::new()))));
         }
         observer.request_catalogue();
         observer
