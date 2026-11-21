@@ -16,6 +16,7 @@ arguments_label: 參數
 ask_user_other: 其他
 ask_user_other_placeholder: 輸入你的回答
 ask_user_other_required: 請為「其他」填寫回答內容
+approval_submit_failed: 無法傳送審批決定
 ask_user_required: 請先為每個問題選擇一個選項
 ask_user_submit_failed: 無法傳送回答
 attachment_unsupported: "只能新增圖片檔案"

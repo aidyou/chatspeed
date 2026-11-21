@@ -3354,14 +3354,47 @@ impl Observer {
         self.child_markdown = next;
     }
 
+    fn child_approval_card(&self, session: &str, tool: &ToolView, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.child_connected != Some(true)
+            || tool.name == "ask_user"
+            || !self.child_model.pending_tool_ids.contains(&tool.tool_call_id)
+        {
+            return None;
+        }
+        let owner = cx.entity().downgrade();
+        let session = session.to_owned();
+        let epoch = self.child_epoch;
+        let id = tool.tool_call_id.clone();
+        let dispatch = move |decision, _: &mut Window, cx: &mut App| {
+            use ui::approval::Decision;
+            let _ = owner.update(cx, |this, cx| {
+                if !this.current_child_matches(epoch, &session)
+                    || this.child_connected != Some(true)
+                    || !this.child_model.pending_tool_ids.contains(&id)
+                    || matches!(decision, Decision::Batch)
+                {
+                    return;
+                }
+                let signal = serde_json::json!({
+                    "type": "approval", "id": id,
+                    "approved": !matches!(decision, Decision::Reject),
+                    "approve_all": matches!(decision, Decision::Whitelist),
+                });
+                if this.worker.commands.try_send(Command::Signal { id: session.clone(), signal }).is_err() {
+                    this.show_toast(ToastKind::Error, t!("approval_submit_failed").to_string(), cx);
+                }
+            });
+        };
+        Some(ui::approval::approval_card(tool, None, 1, dispatch, cx))
+    }
+
     fn child_overlay(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let card = self.active_child.as_ref()?;
         let id = card.task_id.as_ref()?;
         let foreground = cx.theme().foreground;
         let hover = cx.theme().muted;
         let content = if let Some(rows) = self.child_rows.get(id) {
-            // The primary row renderer binds decision callbacks to the parent.
-            // Until the child has its own action scope, render its preview without those callbacks.
+            // Child decisions use only the child-scoped callbacks below.
             let entries = rows.iter().filter_map(|row| {
                 let text = match row {
                     Row::Assistant(view) => {
@@ -3375,12 +3408,25 @@ impl Observer {
                             .into_any_element());
                     }
                     Row::User(view) => &view.text,
-                    Row::Tool(view) => &view.summary,
-                    Row::Activity(view) => &view.summary,
+                    Row::Tool(view) => {
+                        if let Some(card) = self.child_approval_card(id, view, cx) {
+                            return Some(card);
+                        }
+                        &view.summary
+                    }
+                    Row::Activity(view) => {
+                        let mut group = v_flex().gap_1().child(plain_text(&view.summary, foreground));
+                        for tool in view.items.iter().filter_map(|item| item.tool.as_ref()) {
+                            if let Some(card) = self.child_approval_card(id, tool, cx) {
+                                group = group.child(div().id(tool.tool_call_id.clone()).child(card));
+                            }
+                        }
+                        return Some(group.into_any_element());
+                    }
                     _ => return None,
                 };
                 (!text.is_empty()).then(|| plain_text(text, foreground).into_any_element())
-            });
+            }).collect::<Vec<_>>();
             ui::transcript::child_transcript(entries, cx)
         } else if self.child_pending.contains(id) {
             ui::transcript::child_loading(cx)
