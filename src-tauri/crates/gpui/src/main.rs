@@ -2943,7 +2943,25 @@ impl Observer {
         let target = key.clone();
         let expanded = self.expanded.contains(&key);
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
-        ui::transcript::messages::user_bubble(view, key, expanded, on_toggle, cx)
+        self.message_with_copy(
+            ui::transcript::messages::user_bubble(view, key, expanded, on_toggle, cx),
+            &view.text,
+            cx,
+        )
+    }
+
+    fn message_with_copy(&self, message: AnyElement, text: &str, cx: &mut Context<Self>) -> AnyElement {
+        let text = text.to_owned();
+        v_flex().min_w_0().child(message)
+            .when(!text.is_empty(), |row| {
+                row.child(h_flex().justify_end().child(ui::icon_button(
+                    "copy-message", "copy", cx.theme().muted_foreground, cx.theme().muted,
+                    cx.listener(move |_, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    }),
+                )))
+            })
+            .into_any_element()
     }
 
     fn thought_row(
@@ -2977,7 +2995,11 @@ impl Observer {
             )
         });
         let markdown = (!view.markdown.is_empty()).then(|| self.markdown_view(&view.key));
-        ui::transcript::messages::assistant_message(thought, markdown)
+        self.message_with_copy(
+            ui::transcript::messages::assistant_message(thought, markdown),
+            &view.markdown,
+            cx,
+        )
     }
 
     fn tool_icon_color(&self, tool: &ToolView) -> Rgba {
