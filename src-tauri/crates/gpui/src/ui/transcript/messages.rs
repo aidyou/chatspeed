@@ -140,7 +140,6 @@ pub(crate) fn thought(
                 .child(crate::ui::chrome_label(title.clone())),
         )
         .child(crate::ui::disclosure_caret("thought-header", open, muted))
-        .tooltip(crate::ui::tip(title))
         .on_click(on_toggle);
     v_flex()
         .w_full()

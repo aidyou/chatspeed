@@ -604,8 +604,14 @@ struct Observer {
     /// Temperature slider shared by the model dialog's active slot.
     model_temperature_slider: Entity<SliderState>,
     _model_slider_subscription: Subscription,
+    model_context_input: Entity<InputState>,
+    model_max_tokens_input: Entity<InputState>,
+    _model_numeric_subscriptions: Vec<Subscription>,
     /// Active tab of the tool configuration dialog.
     tool_panel_tab: usize,
+    /// Optimistic shell-rule decisions, so the segmented control repaints before
+    /// the agent-config acknowledgement arrives.
+    shell_rule_decisions: BTreeMap<String, String>,
     /// Open new-task dialog; `true` inherits the current workflow configuration.
     new_task_inherit: Option<bool>,
     skills_draft: Option<SkillsDraft>,
@@ -843,6 +849,47 @@ impl Observer {
                 cx.notify();
             },
         );
+        let model_context_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("128000".to_string())
+        });
+        let model_max_tokens_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("0".to_string()));
+        let model_numeric_subscriptions = vec![
+            cx.subscribe_in(
+                &model_context_input,
+                window,
+                |this, state, event: &InputEvent, _, cx| {
+                    if !matches!(event, InputEvent::Change) {
+                        return;
+                    }
+                    let Ok(value) = state.read(cx).value().trim().parse::<u64>() else {
+                        return;
+                    };
+                    let slot = this.model_config_slot.clone();
+                    if let Some(draft) = this.model_config_draft.as_mut() {
+                        draft[slot.as_str()]["contextSize"] = serde_json::json!(value);
+                    }
+                    cx.notify();
+                },
+            ),
+            cx.subscribe_in(
+                &model_max_tokens_input,
+                window,
+                |this, state, event: &InputEvent, _, cx| {
+                    if !matches!(event, InputEvent::Change) {
+                        return;
+                    }
+                    let Ok(value) = state.read(cx).value().trim().parse::<u64>() else {
+                        return;
+                    };
+                    let slot = this.model_config_slot.clone();
+                    if let Some(draft) = this.model_config_draft.as_mut() {
+                        draft[slot.as_str()]["maxTokens"] = serde_json::json!(value);
+                    }
+                    cx.notify();
+                },
+            ),
+        ];
         let mut observer = Self {
             worker,
             options,
@@ -984,7 +1031,11 @@ impl Observer {
             model_config_draft: None,
             model_temperature_slider,
             _model_slider_subscription: model_slider_subscription,
+            model_context_input,
+            model_max_tokens_input,
+            _model_numeric_subscriptions: model_numeric_subscriptions,
             tool_panel_tab: 0,
+            shell_rule_decisions: BTreeMap::new(),
             new_task_inherit: None,
             skills_draft: None,
             tool_draft: None,
@@ -2413,6 +2464,7 @@ impl Observer {
             QuickPanel::Mcp | QuickPanel::Tools => {
                 self.tool_panel_tab = 0;
                 self.tool_draft = Some(ToolDraft::from_config(&config));
+                self.shell_rule_decisions.clear();
                 // Vue refreshes the catalogue whenever the panel opens, so a
                 // tool removed by the server (for example through
                 // `disabled_tools`) disappears instead of staying cached.
@@ -2428,6 +2480,7 @@ impl Observer {
                 let temperature = slot["temperature"].as_f64().unwrap_or(-0.1) as f32;
                 self.model_temperature_slider
                     .update(cx, |state, cx| state.set_value(temperature, window, cx));
+                self.sync_model_inputs(&slot, window, cx);
             }
             QuickPanel::Personality => {}
         }
@@ -3242,6 +3295,16 @@ impl Observer {
                 self.request_catalogue();
             }
         }
+    }
+
+    /// Keeps the dialog's numeric fields aligned with the active slot config.
+    fn sync_model_inputs(&mut self, config: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        let context = config["contextSize"].as_u64().unwrap_or(128000);
+        let max = config["maxTokens"].as_u64().unwrap_or(0);
+        self.model_context_input
+            .update(cx, |state, cx| state.set_value(context.to_string(), window, cx));
+        self.model_max_tokens_input
+            .update(cx, |state, cx| state.set_value(max.to_string(), window, cx));
     }
 
     /// Persists both panel positions as one global preference.
@@ -4326,9 +4389,9 @@ impl Observer {
                 );
             }
             let viewport_id = SharedString::from(format!("diff-scroll-{}", tool.key));
+            let mut outer = div().relative().w_full().min_w_0();
             let mut viewport = div()
                 .id(viewport_id)
-                .relative()
                 .w_full()
                 .min_w_0()
                 .max_h(px(520.))
@@ -4348,14 +4411,16 @@ impl Observer {
                         }
                     }));
             }
-            let mut content = viewport.child(diff);
+            outer = outer.child(viewport.child(diff));
             if let Some((handle, input)) = scrollbar {
-                content = content.child(input.overlay_named(
+                // The scrollbar is a sibling of the scroll view, so it stays
+                // fixed over the diff instead of scrolling with its content.
+                outer = outer.child(input.overlay_named(
                     &handle,
                     SharedString::from(format!("diff-bar-{}", tool.key)),
                 ));
             }
-            detail = detail.child(content);
+            detail = detail.child(outer);
         }
         if let Some(command) = &tool.command {
             // Vue's command frame is a selectable `pre`; the native renderer has

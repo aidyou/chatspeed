@@ -27,8 +27,10 @@ auto_compress_enabled: "自动压缩：开启"
 auto_compress_hint: "自动汇总过长的上下文"
 automation_acknowledge_apply: 确认权限变更并应用
 automation_action_failed: 无法执行定时任务操作
+automation_add_directory: 添加目录…
 automation_allowed_paths: 允许的目录
 automation_allowed_paths_hint: "多个绝对路径用逗号分隔"
+automation_model: 模型
 automation_continuous_context: 持续上下文
 automation_frequency: 执行频率
 automation_frequency_daily: 每天
@@ -43,6 +45,7 @@ automation_tab_advanced: 附加信息
 automation_tab_basic: 基本信息
 automation_task_title: 任务标题
 automation_review_plan: 审核自动化计划
+automation_select_file: 选择文件…
 automation_agent_label: "代理：%{agent}"
 automation_agent_required: 暂无可用代理
 automation_create_failed: 无法创建定时任务

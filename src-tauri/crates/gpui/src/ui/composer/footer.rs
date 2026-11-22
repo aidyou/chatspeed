@@ -47,11 +47,11 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 .when(observer.selected.is_some(), |row| {
                     row.child(sandbox_selector(observer, hover, muted, cx))
                         .child(clear_context(observer, hover, muted, cx))
-                })
-                .when(observer.can_continue(), |row| {
-                    row.child(continue_button(accent, cx))
                 }),
         )
+        .when(observer.can_continue(), |row| {
+            row.child(continue_button(accent, cx))
+        })
         .when(can_stop, |row| {
             row.child(icon_action(
                 "stop-workflow",
@@ -78,6 +78,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                         .color(if can_send { accent } else { muted }),
                 )
                 .tooltip(crate::ui::tip(t!("send").to_string()))
+                .tooltip_show_delay(crate::ui::TOOLTIP_DELAY)
                 .on_click(cx.listener(|this, _, window, cx| this.send_message(window, cx))),
         )
         .into_any_element()
@@ -167,7 +168,6 @@ fn pill(
                 .text_ellipsis()
                 .child(crate::ui::chrome_label(label.clone())),
         )
-        .tooltip(crate::ui::tip(label))
         .when(caret, |row| {
             row.child(Icon::new("caret-down").size(10.).color(color))
         })
@@ -570,6 +570,7 @@ fn quick_actions(
         .hover(move |style| style.bg(hover))
         .child(Icon::new("add").size(14.).color(muted))
         .tooltip(crate::ui::tip(t!("quick_actions").to_string()))
+        .tooltip_show_delay(crate::ui::TOOLTIP_DELAY)
         .when(active_count > 0, |button| {
             button.child(
                 div()
@@ -585,6 +586,8 @@ fn quick_actions(
                     .rounded_full()
                     .bg(accent)
                     .text_size(px(10.))
+                    .line_height(px(15.))
+                    .text_align(TextAlign::Center)
                     .text_color(gpui_kit::white())
                     .child(active_count.to_string()),
             )
@@ -941,6 +944,19 @@ fn menu_section(title: String, border: Hsla, muted: Hsla) -> AnyElement {
         .into_any_element()
 }
 
+fn menu_section_plain(title: String, muted: Hsla) -> AnyElement {
+    div()
+        .w_full()
+        .pt_1()
+        .pb_1()
+        .px_2()
+        .text_size(px(10.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(muted)
+        .child(title.to_uppercase())
+        .into_any_element()
+}
+
 /// Sandbox execution mode, mirroring Vue's badge and its three options.
 fn sandbox_selector(
     observer: &Observer,
@@ -983,8 +999,9 @@ fn sandbox_selector(
                 .rounded_full()
                 .bg(cx.theme().primary)
                 .text_size(px(9.))
-                .font_weight(FontWeight::BOLD)
                 .line_height(px(15.))
+                .text_align(TextAlign::Center)
+                .font_weight(FontWeight::BOLD)
                 .text_color(cx.theme().primary_foreground)
                 .child(badge),
         )
@@ -1031,9 +1048,8 @@ fn sandbox_selector(
             let pending = observer.config_pending.contains(&(session.clone(), "sandbox"));
             let mut list = v_flex().id("composer-sandbox-list").w(px(280.)).gap(px(2.))
                 .when(pending, |list| list.opacity(0.55))
-                .child(menu_section(
+                .child(menu_section_plain(
                     t!("sandbox_execution_mode").to_string(),
-                    cx.theme().border,
                     cx.theme().muted_foreground,
                 ));
             for (value, title, hint) in options.clone() {

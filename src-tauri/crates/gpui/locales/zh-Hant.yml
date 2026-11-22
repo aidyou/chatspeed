@@ -27,8 +27,10 @@ auto_compress_enabled: "自動壓縮：開啟"
 auto_compress_hint: "自動彙總過長的上下文"
 automation_acknowledge_apply: 確認權限變更並套用
 automation_action_failed: 無法執行排程任務操作
+automation_add_directory: 新增目錄…
 automation_allowed_paths: 允許的目錄
 automation_allowed_paths_hint: "多個絕對路徑用逗號分隔"
+automation_model: 模型
 automation_continuous_context: 持續上下文
 automation_frequency: 執行頻率
 automation_frequency_daily: 每天
@@ -43,6 +45,7 @@ automation_tab_advanced: 附加資訊
 automation_tab_basic: 基本資訊
 automation_task_title: 任務標題
 automation_review_plan: 審核自動化計畫
+automation_select_file: 選擇檔案…
 automation_agent_label: "代理：%{agent}"
 automation_agent_required: 暫無可用代理
 automation_create_failed: 無法建立排程任務

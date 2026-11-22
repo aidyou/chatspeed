@@ -54,19 +54,13 @@ impl AsyncRead for BodyStream {
 }
 
 pub struct ReqwestHttpClient {
-    client: reqwest::Client,
     user_agent: HeaderValue,
     proxy: Option<Url>,
 }
 
 impl ReqwestHttpClient {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            client,
             user_agent: HeaderValue::from_static("chatspeed-gpui"),
             proxy: std::env::var("HTTPS_PROXY")
                 .or_else(|_| std::env::var("https_proxy"))
@@ -86,7 +80,6 @@ fn fail_head(
 }
 
 fn forward_request(
-    client: reqwest::Client,
     method: http::Method,
     url: String,
     headers: Vec<(String, String)>,
@@ -108,6 +101,20 @@ fn forward_request(
                 }
             };
             runtime.block_on(async move {
+                // The client owns hyper's connector, which captures the current
+                // Tokio reactor. Build it inside this runtime: constructing it on
+                // the GPUI thread made the first web request panic with
+                // "there is no reactor running".
+                let client = match reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::limited(10))
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(error) => {
+                        fail_head(&mut head, error.into());
+                        return;
+                    }
+                };
                 let method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
                     Ok(method) => method,
                     Err(error) => {
@@ -203,7 +210,6 @@ impl HttpClient for ReqwestHttpClient {
         &self,
         request: Request<AsyncBody>,
     ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
-        let client = self.client.clone();
         Box::pin(async move {
             use futures::AsyncReadExt;
             let (parts, mut body) = request.into_parts();
@@ -221,7 +227,6 @@ impl HttpClient for ReqwestHttpClient {
                 .collect();
             let (sender, receiver) = tokio::sync::oneshot::channel();
             forward_request(
-                client,
                 parts.method,
                 parts.uri.to_string(),
                 headers,

@@ -23,6 +23,9 @@ pub(crate) fn field_bg(cx: &App) -> Hsla {
     }
 }
 
+/// Hover hints appear faster than the library's 500ms default.
+pub(crate) const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
+
 /// Rotates an icon between two angles when a disclosure state flips.
 ///
 /// The animation id includes the target angle, so each toggle starts a fresh
@@ -35,14 +38,17 @@ pub(crate) fn rotating_icon(
     from: f32,
     to: f32,
 ) -> AnyElement {
-    let id = SharedString::from(format!("{}-{to}", id.into()));
+    // A spring retargets from its current angle, so repeated toggles stay smooth
+    // and never restart from a stale one-shot phase.
     Icon::new(icon)
         .size(size)
         .color(color)
-        .with_animation(
-            id,
-            Animation::new(std::time::Duration::from_millis(160)).with_easing(ease_in_out),
-            move |icon, phase| icon.rotate(from + (to - from) * phase),
+        .with_spring(
+            id.into(),
+            SpringAnimation::new(SpringConfig::new(420., 32., 1.))
+                .to(to.to_radians())
+                .from(from.to_radians()),
+            move |icon, angle| icon.rotate(angle),
         )
         .into_any_element()
 }
@@ -221,7 +227,11 @@ pub(super) fn icon_button_element(
             window.prevent_default();
             cx.stop_propagation();
         })
-        .when_some(hint, |button, text| button.tooltip(tip(text)))
+        .when_some(hint, |button, text| {
+            button
+                .tooltip(tip(text))
+                .tooltip_show_delay(TOOLTIP_DELAY)
+        })
         .on_click(on_click)
         .into_any_element()
 }

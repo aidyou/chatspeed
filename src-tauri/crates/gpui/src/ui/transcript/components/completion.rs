@@ -123,7 +123,6 @@ pub(crate) fn finish_task_card(
                 cx.theme().muted_foreground,
             ))
             .cursor_pointer()
-            .tooltip(crate::ui::tip(view.label.clone()))
             .on_click(on_toggle);
     }
     // A column's default cross-axis stretch would make the press target span the

@@ -27,8 +27,10 @@ auto_compress_enabled: "Auto compression on"
 auto_compress_hint: "Roll up long context automatically"
 automation_acknowledge_apply: Acknowledge permission changes and apply
 automation_action_failed: Could not perform the scheduled task action
+automation_add_directory: Add directory…
 automation_allowed_paths: Allowed directories
 automation_allowed_paths_hint: "Comma-separated absolute paths"
+automation_model: Model
 automation_continuous_context: Continuous context
 automation_frequency: Frequency
 automation_frequency_daily: Daily
@@ -43,6 +45,7 @@ automation_tab_advanced: Additional information
 automation_tab_basic: Basic information
 automation_task_title: Task title
 automation_review_plan: Review automation plan
+automation_select_file: Select file…
 automation_agent_label: "Agent: %{agent}"
 automation_agent_required: No agent is available
 automation_create_failed: Could not create the scheduled task
