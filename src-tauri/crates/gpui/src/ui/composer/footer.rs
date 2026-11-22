@@ -317,7 +317,7 @@ fn agent_selector(
 
 /// One selectable model, either a provider entry or a proxy alias.
 #[derive(Clone)]
-pub(super) struct ModelChoice {
+pub(crate) struct ModelChoice {
     pub provider_id: i64,
     pub model: String,
     pub name: String,
@@ -341,7 +341,7 @@ fn provider_model(observer: &Observer, provider_id: i64, model: &str) -> Option<
 }
 
 /// Model choices for one slot, matching Vue's `buildCurrentModelOptions`.
-pub(super) fn model_choices(observer: &Observer, config: &Value) -> (String, Vec<ModelChoice>) {
+pub(crate) fn model_choices(observer: &Observer, config: &Value) -> (String, Vec<ModelChoice>) {
     let current = config["model"].as_str().unwrap_or("");
     let provider_id = config["id"].as_i64().unwrap_or_default();
     if provider_id == 0 && current.contains('@') {
@@ -434,7 +434,7 @@ pub(super) fn model_choices(observer: &Observer, config: &Value) -> (String, Vec
 }
 
 /// Applies a choice to a slot config, copying Vue's capability fields.
-pub(super) fn apply_model_choice(config: &Value, choice: &ModelChoice) -> Value {
+pub(crate) fn apply_model_choice(config: &Value, choice: &ModelChoice) -> Value {
     let mut next = config.clone();
     next["id"] = Value::from(choice.provider_id);
     next["model"] = Value::from(choice.model.clone());

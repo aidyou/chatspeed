@@ -30,6 +30,9 @@ automation_action_failed: 无法执行定时任务操作
 automation_add_directory: 添加目录…
 automation_allowed_paths: 允许的目录
 automation_allowed_paths_hint: "多个绝对路径用逗号分隔"
+automation_execution_date: 执行日期
+automation_execution_time: 执行时间
+automation_interval_minutes: 间隔分钟
 automation_model: 模型
 automation_continuous_context: 持续上下文
 automation_frequency: 执行频率
@@ -74,6 +77,13 @@ automation_weekday_thu: 周四
 automation_weekday_fri: 周五
 automation_weekday_sat: 周六
 automation_weekday_sun: 周日
+automation_weekday_short_mon: 一
+automation_weekday_short_tue: 二
+automation_weekday_short_wed: 三
+automation_weekday_short_thu: 四
+automation_weekday_short_fri: 五
+automation_weekday_short_sat: 六
+automation_weekday_short_sun: 日
 automation_required_fields: 请输入名称、任务指令和有效排程。
 automation_schedule_input: "每日：09:00，18:00；间隔：30m（最少 5m）；单次：YYYY-MM-DD HH:MM（本地时间）"
 automation_run: 立即运行

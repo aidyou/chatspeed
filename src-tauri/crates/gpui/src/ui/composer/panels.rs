@@ -739,7 +739,7 @@ fn model_params(
     let context_minus = cx.listener(move |this, _, window, cx| {
         edit_slot(this, &context_minus_slot, |config| {
             let value = config["contextSize"].as_f64().unwrap_or(128000.);
-            config["contextSize"] = json!((value - 1024.).max(1024.));
+            config["contextSize"] = json!((value - 1024.).max(0.));
         });
         let config = this
             .model_config_draft
@@ -754,7 +754,7 @@ fn model_params(
     let context_plus = cx.listener(move |this, _, window, cx| {
         edit_slot(this, &context_plus_slot, |config| {
             let value = config["contextSize"].as_f64().unwrap_or(128000.);
-            config["contextSize"] = json!((value + 1024.).min(2_000_000.));
+            config["contextSize"] = json!(value + 1024.);
         });
         let config = this
             .model_config_draft

@@ -16,7 +16,7 @@ use gpui_kit::*;
 use crate::ui::{status, Icon};
 use crate::Observer;
 
-mod footer;
+pub(crate) mod footer;
 pub(crate) mod message_queue;
 pub mod panels;
 pub mod suggestions;

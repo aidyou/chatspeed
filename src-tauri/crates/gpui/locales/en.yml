@@ -30,6 +30,9 @@ automation_action_failed: Could not perform the scheduled task action
 automation_add_directory: Add directory…
 automation_allowed_paths: Allowed directories
 automation_allowed_paths_hint: "Comma-separated absolute paths"
+automation_execution_date: Execution date
+automation_execution_time: Execution time
+automation_interval_minutes: Interval (minutes)
 automation_model: Model
 automation_continuous_context: Continuous context
 automation_frequency: Frequency
@@ -74,6 +77,13 @@ automation_weekday_thu: Thu
 automation_weekday_fri: Fri
 automation_weekday_sat: Sat
 automation_weekday_sun: Sun
+automation_weekday_short_mon: M
+automation_weekday_short_tue: T
+automation_weekday_short_wed: W
+automation_weekday_short_thu: T
+automation_weekday_short_fri: F
+automation_weekday_short_sat: S
+automation_weekday_short_sun: S
 automation_required_fields: Enter a name, instructions, and a valid schedule.
 automation_schedule_input: "Daily: 09:00, 18:00 · Interval: 30m (minimum 5m) · Once: YYYY-MM-DD HH:MM (local time)"
 automation_run: Run now

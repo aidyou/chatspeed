@@ -30,6 +30,9 @@ automation_action_failed: 無法執行排程任務操作
 automation_add_directory: 新增目錄…
 automation_allowed_paths: 允許的目錄
 automation_allowed_paths_hint: "多個絕對路徑用逗號分隔"
+automation_execution_date: 執行日期
+automation_execution_time: 執行時間
+automation_interval_minutes: 間隔分鐘
 automation_model: 模型
 automation_continuous_context: 持續上下文
 automation_frequency: 執行頻率
@@ -74,6 +77,13 @@ automation_weekday_thu: 週四
 automation_weekday_fri: 週五
 automation_weekday_sat: 週六
 automation_weekday_sun: 週日
+automation_weekday_short_mon: 一
+automation_weekday_short_tue: 二
+automation_weekday_short_wed: 三
+automation_weekday_short_thu: 四
+automation_weekday_short_fri: 五
+automation_weekday_short_sat: 六
+automation_weekday_short_sun: 日
 automation_required_fields: 請輸入名稱、任務指令和有效排程。
 automation_schedule_input: "每日：09:00，18:00；間隔：30m（最少 5m）；單次：YYYY-MM-DD HH:MM（本機時間）"
 automation_run: 立即執行

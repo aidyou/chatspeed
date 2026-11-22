@@ -46,8 +46,8 @@ pub(crate) fn rotating_icon(
         .with_spring(
             id.into(),
             SpringAnimation::new(SpringConfig::new(420., 32., 1.))
-                .to(to.to_radians())
-                .from(from.to_radians()),
+                .to(to)
+                .from(from),
             move |icon, angle| icon.rotate(angle),
         )
         .into_any_element()

@@ -498,10 +498,6 @@ struct Observer {
     /// Network proxy the docked pages have to use, read from the runtime settings.
     #[cfg(feature = "chat-hub")]
     chat_hub_proxy: Option<chat_hub::ProxySettings>,
-    #[cfg(feature = "chat-hub")]
-    chat_hub_proxy_loaded: bool,
-    #[cfg(feature = "chat-hub")]
-    chat_hub_proxy_loading: bool,
     sidebar_collapsed: bool,
     sidebar_changed: bool,
     pending_settings: BTreeMap<(String, &'static str), (bool, Option<Instant>)>,
@@ -956,10 +952,6 @@ impl Observer {
             pending_chat_hub: None,
             #[cfg(feature = "chat-hub")]
             chat_hub_proxy: None,
-            #[cfg(feature = "chat-hub")]
-            chat_hub_proxy_loaded: false,
-            #[cfg(feature = "chat-hub")]
-            chat_hub_proxy_loading: false,
             sidebar_collapsed: false,
             sidebar_changed: false,
             pending_settings: BTreeMap::new(),
@@ -3331,6 +3323,10 @@ impl Observer {
                 .unwrap_or(false);
         }
         self.status_title_model = config["conversation_title_gen_model"].clone();
+        #[cfg(feature = "chat-hub")]
+        {
+            self.chat_hub_proxy = chat_hub::proxy_from_config(config);
+        }
         self.send_with_shift = config["send_message_key"].as_str() == Some("Shift+Enter");
         self.show_menu_button = config["show_menu_button"].as_bool().unwrap_or(true);
         self.show_today_cost = config["show_today_cost_stats"].as_bool().unwrap_or(false);
@@ -3540,34 +3536,6 @@ impl Observer {
         .detach();
     }
 
-    /// Loads the network settings the docked pages need for their proxy. A page
-    /// reads them while it is built, so the first open waits for this round trip.
-    #[cfg(feature = "chat-hub")]
-    fn ensure_chat_hub_proxy(&mut self, cx: &mut Context<Self>) {
-        if self.chat_hub_proxy_loaded || self.chat_hub_proxy_loading {
-            return;
-        }
-        self.chat_hub_proxy_loading = true;
-        let options = self.options.clone();
-        cx.spawn(async move |owner, cx| {
-            let config = chatspeed_gpui::native::data_command(
-                &options,
-                "get_all_config",
-                serde_json::json!({}),
-            )
-            .await
-            .ok();
-            let _ = owner.update(cx, |this, cx| {
-                this.chat_hub_proxy_loading = false;
-                this.chat_hub_proxy_loaded = true;
-                this.chat_hub_proxy =
-                    config.as_ref().and_then(chat_hub::proxy_from_config);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     /// Queues a chat site; the next render owns the window the page needs.
     #[cfg(feature = "chat-hub")]
     fn request_chat_hub(&mut self, site: chat_hub::Site, cx: &mut Context<Self>) {
@@ -3583,11 +3551,6 @@ impl Observer {
             return;
         };
         if self.chat_hub.is_none() {
-            if !self.chat_hub_proxy_loaded {
-                self.ensure_chat_hub_proxy(cx);
-                self.pending_chat_hub = Some(site);
-                return;
-            }
             let background: gpui_kit::Rgba = cx.theme().background.into();
             let background = (
                 (background.r * 255.).round() as u8,

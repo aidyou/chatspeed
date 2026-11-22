@@ -45,12 +45,24 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
     if observer.automation_pending || window.has_active_dialog(cx) {
         return;
     }
-    let Some(agent) = observer.current_agent_id().or_else(|| {
-        observer
-            .agents
-            .iter()
-            .find_map(|agent| agent["id"].as_str().map(str::to_owned))
-    }) else {
+    let primary_agents: Vec<(String, String)> = observer
+        .agents
+        .iter()
+        .filter(|entry| {
+            entry["role"].as_str() == Some("primary") && entry["disabled"] != serde_json::json!(true)
+        })
+        .filter_map(|entry| {
+            Some((
+                entry["id"].as_str()?.to_owned(),
+                entry["name"].as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    let Some(agent) = observer
+        .current_agent_id()
+        .filter(|id| primary_agents.iter().any(|(primary, _)| primary == id))
+        .or_else(|| primary_agents.first().map(|(id, _)| id.clone()))
+    else {
         observer.show_toast(
             crate::ToastKind::Warning,
             t!("automation_agent_required").to_string(),
@@ -58,25 +70,23 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         );
         return;
     };
-    let agent_label = observer
-        .agents
+    let agent_label = primary_agents
         .iter()
-        .find(|entry| entry["id"].as_str() == Some(agent.as_str()))
-        .and_then(|entry| entry["name"].as_str())
-        .unwrap_or(&agent)
-        .to_owned();
+        .find(|(id, _)| id == &agent)
+        .map(|(_, name)| name.clone())
+        .unwrap_or_else(|| agent.clone());
     let title =
         cx.new(|cx| InputState::new(window, cx).placeholder(t!("automation_name").to_string()));
     let prompt = cx
         .new(|cx| TextareaState::new(window, cx).placeholder(t!("automation_prompt").to_string()));
-    let time = cx.new(|cx| {
-        let mut input = InputState::new(window, cx).placeholder("09:00");
-        input.set_value("09:00", window, cx);
+    let interval = cx.new(|cx| {
+        let mut input = InputState::new(window, cx).placeholder("30");
+        input.set_value("30", window, cx);
         input
     });
-    let paths = cx.new(|cx| {
-        InputState::new(window, cx).placeholder(t!("automation_allowed_paths_hint").to_string())
-    });
+    let daily_times = std::rc::Rc::new(std::cell::RefCell::new(vec![cx.new(|cx| {
+        gpui_kit::component::time_field::TimeFieldState::new(window, cx)
+    })]));
     let prompt_file = cx.new(|cx| {
         InputState::new(window, cx).placeholder(t!("automation_prompt_file_hint").to_string())
     });
@@ -86,6 +96,13 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
     let end_date = cx.new(|cx| {
         gpui_kit::component::date_picker::DatePickerState::new(window, cx)
     });
+    let once_date = cx.new(|cx| {
+        gpui_kit::component::date_picker::DatePickerState::new(window, cx)
+    });
+    let once_time = cx.new(|cx| {
+        gpui_kit::component::time_field::TimeFieldState::new(window, cx)
+    });
+    let allowed_paths = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
     let shell = cx.new(|cx| {
         InputState::new(window, cx).placeholder(t!("automation_shell_command_hint").to_string())
     });
@@ -98,21 +115,17 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
     let enabled = std::rc::Rc::new(std::cell::Cell::new(true));
     // Bits 1..=7 are Monday..=Sunday, matching the backend's weekday numbers.
     let weekdays = std::rc::Rc::new(std::cell::Cell::new(0b1111_1110u32));
-    let agents: Vec<(String, String)> = observer
-        .agents
-        .iter()
-        .filter_map(|entry| {
-            Some((
-                entry["id"].as_str()?.to_owned(),
-                entry["name"].as_str()?.to_owned(),
-            ))
-        })
-        .collect();
+    let agents = primary_agents;
     let selected_agent = std::rc::Rc::new(std::cell::RefCell::new(agent.clone()));
     let selected_agent_label =
         std::rc::Rc::new(std::cell::RefCell::new(agent_label.clone()));
     let agent_config = observer.agent_config();
-    let model_label = observer.model_label();
+    let act_config = agent_config["models"]["act"].clone();
+    let (_, model_choices) =
+        crate::ui::composer::footer::model_choices(observer, &act_config);
+    let selected_model = std::rc::Rc::new(std::cell::RefCell::new(act_config));
+    let selected_model_label =
+        std::rc::Rc::new(std::cell::RefCell::new(observer.model_label()));
     let owner = cx.entity().downgrade();
     window.open_dialog(cx, move |dialog, window, cx| {
         use crate::ui::menu_popover::MenuPopover;
@@ -121,15 +134,20 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         let agents = agents.clone();
         let selected_agent = selected_agent.clone();
         let selected_agent_label = selected_agent_label.clone();
-        let model_label = model_label.clone();
-        let (title_state, prompt_state, time_state, paths_state) =
-            (title.clone(), prompt.clone(), time.clone(), paths.clone());
+        let model_choices = model_choices.clone();
+        let selected_model = selected_model.clone();
+        let selected_model_label = selected_model_label.clone();
+        let daily_times_state = daily_times.clone();
+        let allowed_paths_state = allowed_paths.clone();
+        let (title_state, prompt_state, interval_state) =
+            (title.clone(), prompt.clone(), interval.clone());
         let (prompt_file_state, start_state, end_state, shell_state) = (
             prompt_file.clone(),
             start_date.clone(),
             end_date.clone(),
             shell.clone(),
         );
+        let (once_date_state, once_time_state) = (once_date.clone(), once_time.clone());
         let (agent_for_submit, owner) = (selected_agent.clone(), owner.clone());
         let (tab_state, frequency_state, weekdays_state) =
             (tab.clone(), frequency.clone(), weekdays.clone());
@@ -143,23 +161,61 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         let (submit_frequency, submit_weekdays) =
             (frequency_state.clone(), weekdays_state.clone());
         let submit_agent_config = agent_config.clone();
+        let submit_model = selected_model.clone();
+        let submit_daily_times = daily_times_state.clone();
+        let submit_allowed_paths = allowed_paths_state.clone();
+        let submit_title_state = title_state.clone();
+        let submit_prompt_state = prompt_state.clone();
+        let submit_prompt_file_state = prompt_file_state.clone();
+        let submit_interval_state = interval_state.clone();
+        let submit_shell_state = shell_state.clone();
+        let submit_start_state = start_state.clone();
+        let submit_end_state = end_state.clone();
+        let submit_once_date_state = once_date_state.clone();
+        let submit_once_time_state = once_time_state.clone();
         let submit = Button::new("create-automation-submit")
             .primary()
             .label(t!("create_automation").to_string())
             .on_click(move |_, window, cx| {
-                let name = title_state.read(cx).value().trim().to_owned();
-                let prompt = prompt_state.read(cx).value().trim().to_owned();
-                let prompt_file = prompt_file_state.read(cx).value().trim().to_owned();
-                let shell_command = shell_state.read(cx).value().trim().to_owned();
-                let mut schedule = parse_automation_schedule(time_state.read(cx).value().as_ref());
-                let allowed_paths: Vec<String> = paths_state
-                    .read(cx)
-                    .value()
-                    .split([',', '，', '\n'])
-                    .map(str::trim)
-                    .filter(|path| !path.is_empty())
-                    .map(str::to_owned)
-                    .collect();
+                let name = submit_title_state.read(cx).value().trim().to_owned();
+                let prompt = submit_prompt_state.read(cx).value().trim().to_owned();
+                let prompt_file = submit_prompt_file_state.read(cx).value().trim().to_owned();
+                let shell_command = submit_shell_state.read(cx).value().trim().to_owned();
+                let schedule_value = match submit_frequency.get() {
+                    0 => submit_daily_times
+                        .borrow()
+                        .iter()
+                        .map(|state| state.read(cx).time().format("%H:%M").to_string())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    1 => format!(
+                        "{}m",
+                        submit_interval_state
+                            .read(cx)
+                            .value()
+                            .trim()
+                            .parse::<u32>()
+                            .unwrap_or(30)
+                            .clamp(5, 259_200)
+                    ),
+                    _ => {
+                        let date = submit_once_date_state
+                            .read(cx)
+                            .date_time()
+                            .format("%Y-%m-%d")
+                            .map(|value| value.to_string())
+                            .unwrap_or_default();
+                        let time = submit_once_time_state
+                            .read(cx)
+                            .time()
+                            .format("%H:%M")
+                            .to_string();
+                        format!("{date} {time}")
+                    }
+                };
+                let mut schedule = parse_automation_schedule(&schedule_value);
+                let allowed_paths: Vec<String> =
+                    submit_allowed_paths.borrow().clone();
                 let accepted = owner.update(cx, |this, cx| {
                     if this.automation_pending { return false; }
                     let Some((kind, mut schedule_config)) = schedule.take().filter(|_| {
@@ -173,13 +229,13 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             .filter(|day| submit_weekdays.get() & (1 << day) != 0)
                             .collect();
                         schedule_config["weekdays"] = serde_json::json!(days);
-                        let start = start_state
+                        let start = submit_start_state
                             .read(cx)
                             .date_time()
                             .format("%Y-%m-%d")
                             .map(|value| value.to_string())
                             .unwrap_or_default();
-                        let end = end_state
+                        let end = submit_end_state
                             .read(cx)
                             .date_time()
                             .format("%Y-%m-%d")
@@ -201,6 +257,8 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     } else {
                         serde_json::json!({ "command": shell_command })
                     };
+                    let mut submit_config = submit_agent_config.clone();
+                    submit_config["models"]["act"] = submit_model.borrow().clone();
                     let spec = serde_json::json!({
                         "title": name,
                         "prompt": prompt,
@@ -210,7 +268,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             serde_json::json!(prompt_file)
                         },
                         "agent_id": agent_for_submit.borrow().clone(),
-                        "agent_config": submit_agent_config.clone(),
+                        "agent_config": submit_config,
                         "allowed_paths": allowed_paths,
                         "shell_config": shell_config,
                         "schedule_kind": kind,
@@ -228,43 +286,64 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 }).unwrap_or(false);
                 if accepted { window.close_dialog(cx); }
             });
-        let mut tabs = h_flex().w_full().gap(px(4.)).child(
-            Button::new("automation-tab-basic")
-                .label(t!("automation_tab_basic").to_string())
-                .when(tab_state.get() == 0, |button| button.primary())
-                .on_click({
-                    let tab_state = tab_state.clone();
-                    move |_, window, _| {
-                        tab_state.set(0);
-                        window.refresh();
-                    }
-                }),
-        );
-        tabs = tabs.child(
-            Button::new("automation-tab-advanced")
-                .label(t!("automation_tab_advanced").to_string())
-                .when(tab_state.get() == 1, |button| button.primary())
-                .on_click({
-                    let tab_state = tab_state.clone();
-                    move |_, window, _| {
-                        tab_state.set(1);
-                        window.refresh();
-                    }
-                }),
-        );
+        let border = cx.theme().border;
+        let primary = cx.theme().primary;
+        let muted = cx.theme().muted_foreground;
+        let mut tabs = h_flex()
+            .w_full()
+            .items_end()
+            .gap(px(24.))
+            .mt(px(16.))
+            .border_b_1()
+            .border_color(border);
+        for (index, label) in [
+            (0usize, t!("automation_tab_basic").to_string()),
+            (1, t!("automation_tab_advanced").to_string()),
+        ] {
+            let active = tab_state.get() == index;
+            tabs = tabs.child(
+                div()
+                    .id(("automation-tab", index))
+                    .flex_none()
+                    .pb(px(8.))
+                    .cursor_pointer()
+                    .text_size(px(13.))
+                    .text_color(if active { primary } else { muted })
+                    .when(active, |tab| {
+                        tab.border_b_2().border_color(primary)
+                    })
+                    .child(label)
+                    .on_click({
+                        let tab_state = tab_state.clone();
+                        move |_, window, _| {
+                            tab_state.set(index);
+                            window.refresh();
+                        }
+                    }),
+            );
+        }
         let label_color = cx.theme().muted_foreground;
         let field = |label: String, control: AnyElement| {
+            let (required, label) = match label.strip_prefix('*') {
+                Some(label) => (true, label.to_owned()),
+                None => (false, label),
+            };
             h_flex()
                 .w_full()
                 .min_w_0()
                 .items_start()
                 .gap(px(12.))
                 .child(
-                    div()
+                    h_flex()
                         .w(px(120.))
                         .flex_none()
+                        .justify_end()
+                        .gap(px(2.))
                         .text_size(px(12.))
                         .text_color(label_color)
+                        .when(required, |row| {
+                            row.child(div().text_color(cx.theme().danger).child("*"))
+                        })
                         .child(label),
                 )
                 .child(div().flex_1().min_w_0().child(control))
@@ -318,19 +397,66 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
             })
             .detach();
         };
+        let pick_directories = |paths: std::rc::Rc<
+                                   std::cell::RefCell<Vec<String>>,
+                               >,
+                               window: &mut Window,
+                               cx: &mut App| {
+            let receiver = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: true,
+                prompt: None,
+            });
+            let window_handle = window.window_handle();
+            cx.spawn(async move |cx| {
+                let Ok(Ok(Some(selected))) = receiver.await else {
+                    return;
+                };
+                let _ = cx.update(|cx| {
+                    let _ = window_handle.update(cx, |_, window, _| {
+                        let mut paths = paths.borrow_mut();
+                        for path in selected {
+                            let path = path.display().to_string();
+                            if !paths.contains(&path) {
+                                paths.push(path);
+                            }
+                        }
+                        window.refresh();
+                    });
+                });
+            })
+            .detach();
+        };
         let body = if tab_state.get() == 0 {
             v_flex()
                 .gap(px(12.))
                 .child(field(
-                    t!("automation_task_title").to_string(),
+                    format!("*{}", t!("automation_task_title")),
                     Input::new(&title).bg(crate::ui::field_bg(cx)).into_any_element(),
                 ))
                 .child(field(
-                    t!("automation_prompt").to_string(),
+                    format!(
+                        "{}{}",
+                        if prompt_file_state.read(cx).value().trim().is_empty() {
+                            "*"
+                        } else {
+                            ""
+                        },
+                        t!("automation_prompt")
+                    ),
                     Textarea::new(&prompt).bg(crate::ui::field_bg(cx)).h(px(120.)).into_any_element(),
                 ))
                 .child(field(
-                    t!("automation_prompt_file").to_string(),
+                    format!(
+                        "{}{}",
+                        if prompt_state.read(cx).value().trim().is_empty() {
+                            "*"
+                        } else {
+                            ""
+                        },
+                        t!("automation_prompt_file")
+                    ),
                     h_flex()
                         .w_full()
                         .min_w_0()
@@ -352,11 +478,29 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                     }
                                 }),
                         )
+                        .child(
+                            Button::new("automation-prompt-file-clear")
+                                .label("×".to_string())
+                                .on_click({
+                                    let state = prompt_file.clone();
+                                    move |_, window, cx| {
+                                        state.update(cx, |state, cx| {
+                                            state.set_value("", window, cx);
+                                        });
+                                        window.refresh();
+                                    }
+                                }),
+                        )
                         .into_any_element(),
                 ))
                 .child(field(
-                    t!("automation_agent_label", agent = selected_agent_label.borrow().as_str())
-                        .to_string(),
+                    format!(
+                        "*{}",
+                        t!(
+                            "automation_agent_label",
+                            agent = selected_agent_label.borrow().as_str()
+                        )
+                    ),
                     MenuPopover::new(
                         "automation-agent-menu",
                         Button::new("automation-agent-trigger")
@@ -417,19 +561,74 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 ))
                 .child(field(
                     t!("automation_model").to_string(),
-                    div()
-                        .w_full()
-                        .px_2()
-                        .py(px(6.))
-                        .rounded(px(4.))
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .text_size(px(12.))
-                        .child(model_label.clone())
-                        .into_any_element(),
+                    MenuPopover::new(
+                        "automation-model-menu",
+                        Button::new("automation-model-trigger")
+                            .label(selected_model_label.borrow().clone())
+                            .into_any_element(),
+                        {
+                            let choices = model_choices.clone();
+                            let selected_model = selected_model.clone();
+                            let selected_model_label = selected_model_label.clone();
+                            move |_: &mut PopoverState,
+                                  _: &mut Window,
+                                  cx: &mut Context<PopoverState>| {
+                                let popover = cx.entity();
+                                let mut list = v_flex()
+                                    .id("automation-model-list")
+                                    .w(px(260.))
+                                    .gap(px(2.));
+                                for choice in choices.clone() {
+                                    let popover = popover.clone();
+                                    let selected_model = selected_model.clone();
+                                    let selected_model_label = selected_model_label.clone();
+                                    let is_selected = {
+                                        let current = selected_model.borrow();
+                                        current["id"].as_i64() == Some(choice.provider_id)
+                                            && current["model"].as_str()
+                                                == Some(choice.model.as_str())
+                                    };
+                                    let choice_for_click = choice.clone();
+                                    list = list.child(
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "automation-model-{}",
+                                                choice.model
+                                            )))
+                                            .w_full()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(4.))
+                                            .cursor_pointer()
+                                            .text_size(px(12.))
+                                            .when(is_selected, |row| {
+                                                row.bg(cx.theme().primary.opacity(0.12))
+                                            })
+                                            .hover(|style| style.bg(cx.theme().muted))
+                                            .child(choice.name.clone())
+                                            .on_click(move |_, window, cx| {
+                                                popover.update(cx, |state, cx| {
+                                                    state.dismiss(window, cx)
+                                                });
+                                                let next = crate::ui::composer::footer::apply_model_choice(
+                                                    &selected_model.borrow(),
+                                                    &choice_for_click,
+                                                );
+                                                *selected_model.borrow_mut() = next;
+                                                *selected_model_label.borrow_mut() =
+                                                    choice_for_click.name.clone();
+                                                window.refresh();
+                                            }),
+                                    );
+                                }
+                                list
+                            }
+                        },
+                    )
+                    .into_any_element(),
                 ))
                 .child(field(
-                    t!("automation_frequency").to_string(),
+                    format!("*{}", t!("automation_frequency")),
                     h_flex()
                         .gap(px(4.))
                         .children([0usize, 1, 2].into_iter().map(|index| {
@@ -451,25 +650,175 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         }))
                         .into_any_element(),
                 ))
-                .child(field(
-                    match frequency_state.get() {
-                        0 => t!("automation_schedule_daily_hint").to_string(),
-                        1 => t!("automation_schedule_interval_hint").to_string(),
-                        _ => t!("automation_schedule_once_hint").to_string(),
-                    },
-                    Input::new(&time).bg(crate::ui::field_bg(cx)).into_any_element(),
-                ))
+                .child(match frequency_state.get() {
+                    0 => {
+                        let times = daily_times_state.clone();
+                        let mut rows = v_flex().w_full().gap(px(6.));
+                        let count = times.borrow().len();
+                        for index in 0..count {
+                            let state = times.borrow()[index].clone();
+                            let add_times = times.clone();
+                            let remove_times = times.clone();
+                            rows = rows.child(
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .child(
+                                        gpui_kit::component::time_field::TimeField::new(&state)
+                                            .w(px(110.)),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "automation-time-add-{index}"
+                                        )))
+                                        .label("+".to_string())
+                                        .on_click(move |_, window, cx| {
+                                            let mut times = add_times.borrow_mut();
+                                            if times.len() < 24 {
+                                                times.push(
+                                                    cx.new(|cx| {
+                                                        gpui_kit::component::time_field::TimeFieldState::new(window, cx)
+                                                    }),
+                                                );
+                                            }
+                                            window.refresh();
+                                        }),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "automation-time-remove-{index}"
+                                        )))
+                                        .label("−".to_string())
+                                        .on_click(move |_, window, _| {
+                                            let mut times = remove_times.borrow_mut();
+                                            if times.len() > 1 {
+                                                times.remove(index);
+                                            }
+                                            window.refresh();
+                                        }),
+                                    ),
+                            );
+                        }
+                        field(t!("automation_execution_time").to_string(), rows.into_any_element())
+                    }
+                    1 => {
+                        field(
+                            t!("automation_interval_minutes").to_string(),
+                            h_flex()
+                                .w(px(168.))
+                                .items_center()
+                                .rounded(px(6.))
+                                .border_1()
+                                .border_color(border)
+                                .bg(crate::ui::field_bg(cx))
+                                .child(
+                                    div()
+                                        .id("automation-interval-minus")
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .w(px(28.))
+                                        .h(px(28.))
+                                        .cursor_pointer()
+                                        .text_color(muted)
+                                        .hover(|style| style.bg(cx.theme().muted))
+                                        .child("−")
+                                        .on_click({
+                                            let interval = interval_state.clone();
+                                            move |_, window, cx| {
+                                                let value = interval
+                                                    .read(cx)
+                                                    .value()
+                                                    .trim()
+                                                    .parse::<u32>()
+                                                    .unwrap_or(30)
+                                                    .saturating_sub(5)
+                                                    .max(5);
+                                                interval.update(cx, |state, cx| {
+                                                    state.set_value(value.to_string(), window, cx)
+                                                });
+                                                window.refresh();
+                                            }
+                                        }),
+                                )
+                                .child(
+                                    div().flex_1().min_w_0().child(
+                                        Input::new(&interval)
+                                            .appearance(false)
+                                            .bordered(false)
+                                            .text_align(TextAlign::Center),
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .id("automation-interval-plus")
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .w(px(28.))
+                                        .h(px(28.))
+                                        .cursor_pointer()
+                                        .text_color(muted)
+                                        .hover(|style| style.bg(cx.theme().muted))
+                                        .child("+")
+                                        .on_click({
+                                            let interval = interval_state.clone();
+                                            move |_, window, cx| {
+                                                let value = interval
+                                                    .read(cx)
+                                                    .value()
+                                                    .trim()
+                                                    .parse::<u32>()
+                                                    .unwrap_or(30)
+                                                    .saturating_add(5)
+                                                    .clamp(5, 259_200);
+                                                interval.update(cx, |state, cx| {
+                                                    state.set_value(value.to_string(), window, cx)
+                                                });
+                                                window.refresh();
+                                            }
+                                        }),
+                                )
+                                .into_any_element(),
+                        )
+                    }
+                    _ => field(
+                        t!("automation_execution_date").to_string(),
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    gpui_kit::component::date_picker::DatePicker::new(
+                                        &once_date_state,
+                                    )
+                                    .placeholder("YYYY-MM-DD"),
+                                ),
+                            )
+                            .child(
+                                gpui_kit::component::time_field::TimeField::new(
+                                    &once_time_state,
+                                )
+                                .w(px(110.)),
+                            )
+                            .into_any_element(),
+                    ),
+                })
                 .when(frequency_state.get() != 2, |form| {
                     let weekdays = weekdays_state.clone();
                     let mut picker = h_flex().w_full().flex_wrap().gap(px(4.));
                     for (day, key) in [
-                        (1u32, "automation_weekday_mon"),
-                        (2, "automation_weekday_tue"),
-                        (3, "automation_weekday_wed"),
-                        (4, "automation_weekday_thu"),
-                        (5, "automation_weekday_fri"),
-                        (6, "automation_weekday_sat"),
-                        (7, "automation_weekday_sun"),
+                        (1u32, "automation_weekday_short_mon"),
+                        (2, "automation_weekday_short_tue"),
+                        (3, "automation_weekday_short_wed"),
+                        (4, "automation_weekday_short_thu"),
+                        (5, "automation_weekday_short_fri"),
+                        (6, "automation_weekday_short_sat"),
+                        (7, "automation_weekday_short_sun"),
                     ] {
                         let weekdays = weekdays.clone();
                         let selected = weekdays.get() & (1 << day) != 0;
@@ -519,27 +868,59 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 .gap(px(12.))
                 .child(field(
                     t!("automation_allowed_paths").to_string(),
-                    h_flex()
+                    v_flex()
                         .w_full()
                         .min_w_0()
-                        .gap(px(8.))
+                        .gap(px(6.))
                         .child(
-                            div().flex_1().min_w_0().child(
-                                Input::new(&paths)
-                                    .readonly(true)
-                                    .bg(crate::ui::field_bg(cx)),
+                            h_flex().w_full().child(
+                                Button::new("automation-directory-pick")
+                                    .label(t!("automation_add_directory").to_string())
+                                    .on_click({
+                                        let paths = allowed_paths_state.clone();
+                                        move |_, window, cx| {
+                                            pick_directories(paths.clone(), window, cx);
+                                        }
+                                    }),
                             ),
                         )
-                        .child(
-                            Button::new("automation-directory-pick")
-                                .label(t!("automation_add_directory").to_string())
-                                .on_click({
-                                    let state = paths.clone();
-                                    move |_, window, cx| {
-                                        pick_paths(state.clone(), true, true, true, window, cx);
-                                    }
-                                }),
-                        )
+                        .when(!allowed_paths_state.borrow().is_empty(), |column| {
+                            let mut tags = h_flex().w_full().flex_wrap().gap(px(4.));
+                            for path in allowed_paths_state.borrow().clone() {
+                                let remove_paths = allowed_paths_state.clone();
+                                let path_for_remove = path.clone();
+                                tags = tags.child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap(px(2.))
+                                        .px_2()
+                                        .py(px(1.))
+                                        .rounded(px(4.))
+                                        .bg(cx.theme().muted)
+                                        .text_size(px(11.))
+                                        .child(path.clone())
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "automation-path-remove-{path}"
+                                                )))
+                                                .px(px(2.))
+                                                .cursor_pointer()
+                                                .hover(|style| {
+                                                    style.text_color(cx.theme().danger)
+                                                })
+                                                .child("×")
+                                                .on_click(move |_, window, _| {
+                                                    remove_paths
+                                                        .borrow_mut()
+                                                        .retain(|item| item != &path_for_remove);
+                                                    window.refresh();
+                                                }),
+                                        ),
+                                );
+                            }
+                            column.child(tags)
+                        })
                         .into_any_element(),
                 ))
                 .child(field(
@@ -595,7 +976,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
             .max_w(max_width)
             .overlay_closable(false)
             .keyboard(false)
-            .child(v_flex().gap(px(20.)).child(tabs).child(body))
+            .child(v_flex().gap(px(16.)).child(tabs).child(body))
             .footer(
                 h_flex()
                     .justify_end()
