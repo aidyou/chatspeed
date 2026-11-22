@@ -401,6 +401,31 @@ struct TimelineScroll {
     deferred_update: Option<Update>,
 }
 
+/// Which transcript a row belongs to. The delegated pane reuses the window
+/// renderers, so every element id and expansion key is scoped to keep the two
+/// lists independent while the child pane covers the main one.
+#[derive(Clone, Copy)]
+pub(crate) enum MsgScope {
+    Main,
+    Child,
+}
+
+fn scoped_key(scope: MsgScope, key: &str) -> String {
+    match scope {
+        MsgScope::Main => key.to_owned(),
+        MsgScope::Child => format!("child:{key}"),
+    }
+}
+
+/// States that mean the runtime is working, shared by the window and the
+/// delegated transcript.
+fn running_state(state: &str) -> bool {
+    matches!(
+        state,
+        "thinking" | "executing" | "auditing" | "running" | "stopping"
+    )
+}
+
 struct Observer {
     worker: Worker,
     options: Options,
@@ -450,7 +475,15 @@ struct Observer {
     copy_flash: Arc<Mutex<Option<CopyFlash>>>,
     /// Sidebar collapse state, matching the Vue compact sidebar.
     #[cfg(feature = "chat-hub")]
-    chat_hub: Option<chat_hub::ChatHub>,
+    chat_hub: Option<chat_hub::Dock>,
+    #[cfg(feature = "chat-hub")]
+    chat_hub_sites: Vec<chat_hub::Site>,
+    #[cfg(feature = "chat-hub")]
+    chat_hub_sites_loading: bool,
+    /// A site selected from the sidebar; the page is created with the window in
+    /// the next render, where `&mut Window` is available.
+    #[cfg(feature = "chat-hub")]
+    pending_chat_hub: Option<chat_hub::Site>,
     sidebar_collapsed: bool,
     sidebar_changed: bool,
     pending_settings: BTreeMap<(String, &'static str), (bool, Option<Instant>)>,
@@ -736,10 +769,14 @@ impl Observer {
             let width = width - this.chat_hub.as_ref().map_or(0., |hub| f32::from(hub.added_width(bounds.size.width)));
             this.worker.save_geometry(ui::window_pin::geometry_values(window, width, height));
         }).detach();
+        let mut terminal = ui::terminal::Panel::new(cx);
+        // The IME needs an entity it can commit composed text into.
+        let terminal_owner = cx.entity().downgrade();
+        terminal.set_input(cx.new(|_| ui::terminal::TerminalInput::new(terminal_owner)));
         let mut observer = Self {
             worker,
             options,
-            terminal: ui::terminal::Panel::new(cx),
+            terminal,
             model: Model::default(),
             sessions: Vec::new(),
             automations: None,
@@ -789,6 +826,12 @@ impl Observer {
             copy_flash: Arc::new(Mutex::new(None)),
             #[cfg(feature = "chat-hub")]
             chat_hub: None,
+            #[cfg(feature = "chat-hub")]
+            chat_hub_sites: Vec::new(),
+            #[cfg(feature = "chat-hub")]
+            chat_hub_sites_loading: false,
+            #[cfg(feature = "chat-hub")]
+            pending_chat_hub: None,
             sidebar_collapsed: false,
             sidebar_changed: false,
             pending_settings: BTreeMap::new(),
@@ -868,6 +911,8 @@ impl Observer {
             observer.drafts.extend(read_text_drafts(&path).into_iter().map(|(id, draft)| (Some(id), draft)));
         }
         observer.request_catalogue();
+        #[cfg(feature = "chat-hub")]
+        observer.ensure_chat_hub_sites(cx);
         observer
     }
 
@@ -1656,10 +1701,7 @@ impl Observer {
 
     /// Runtime states that accept a stop and show the running affordance.
     fn workflow_running(&self) -> bool {
-        matches!(
-            self.model.state.as_str(),
-            "thinking" | "executing" | "auditing" | "running" | "stopping"
-        )
+        running_state(&self.model.state)
     }
 
     /// Clears the window back to an unsent session; the first message creates it.
@@ -2928,6 +2970,123 @@ impl Observer {
         (max.y + offset.y) <= px(60.)
     }
 
+    /// The centre column the status panel may cover: everything right of the
+    /// sidebar and left of the docked ChatHub page, below the titlebar.
+    fn status_panel_area(&self, window: &Window) -> Option<Bounds<Pixels>> {
+        let viewport = window.viewport_size();
+        let sidebar = if self.sidebar_collapsed {
+            px(ui::SIDEBAR_COLLAPSED_WIDTH)
+        } else {
+            px(ui::RAIL_WIDTH + self.sidebar_width + 4.)
+        };
+        #[cfg(feature = "chat-hub")]
+        let dock = if self
+            .chat_hub
+            .as_ref()
+            .is_some_and(|dock| dock.visible())
+        {
+            (viewport.width * 0.45).min(px(chat_hub::DOCK_WIDTH))
+        } else {
+            px(0.)
+        };
+        #[cfg(not(feature = "chat-hub"))]
+        let dock = px(0.);
+        let width = (viewport.width - sidebar - dock).max(px(0.));
+        let height = (viewport.height - px(ui::TITLEBAR_HEIGHT)).max(px(0.));
+        (width > px(0.) && height > px(0.))
+            .then(|| Bounds::new(point(sidebar, px(ui::TITLEBAR_HEIGHT)), size(width, height)))
+    }
+
+    /// Loads the configured chat sites once, for the sidebar entry list.
+    #[cfg(feature = "chat-hub")]
+    fn ensure_chat_hub_sites(&mut self, cx: &mut Context<Self>) {
+        if self.chat_hub_sites_loading || !self.chat_hub_sites.is_empty() {
+            return;
+        }
+        let (reply, response) = tokio::sync::oneshot::channel();
+        self.chat_hub_sites_loading = true;
+        if self
+            .worker
+            .commands
+            .try_send(chatspeed_gpui::types::Command::ListChatHubs(reply))
+            .is_err()
+        {
+            self.chat_hub_sites_loading = false;
+            return;
+        }
+        cx.spawn(async move |owner, cx| {
+            let result = response.await;
+            let _ = owner.update(cx, |this, cx| {
+                this.chat_hub_sites_loading = false;
+                match result {
+                    Ok(Ok(sites)) => this.chat_hub_sites = chat_hub::sites_from_json(&sites),
+                    Ok(Err(error)) => this.show_toast(ToastKind::Error, error, cx),
+                    Err(_) => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Queues a chat site; the next render owns the window the page needs.
+    #[cfg(feature = "chat-hub")]
+    fn request_chat_hub(&mut self, site: chat_hub::Site, cx: &mut Context<Self>) {
+        self.pending_chat_hub = Some(site);
+        cx.notify();
+    }
+
+    /// Creates the dock and the pending page. Runs inside `render`, where the
+    /// window is available for the native child view.
+    #[cfg(feature = "chat-hub")]
+    fn apply_pending_chat_hub(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(site) = self.pending_chat_hub.take() else {
+            return;
+        };
+        if self.chat_hub.is_none() {
+            match chat_hub::Dock::new(cx) {
+                Ok(dock) => self.chat_hub = Some(dock),
+                Err(error) => {
+                    self.show_toast(ToastKind::Error, error, cx);
+                    return;
+                }
+            }
+        }
+        let result = self
+            .chat_hub
+            .as_mut()
+            .map(|dock| dock.open(window, cx, site));
+        if let Some(Err(error)) = result {
+            self.show_toast(ToastKind::Error, error, cx);
+        }
+        self.ensure_chat_hub_sites(cx);
+    }
+
+    #[cfg(feature = "chat-hub")]
+    fn activate_chat_hub(&mut self, id: i64, cx: &mut Context<Self>) {
+        if let Some(dock) = self.chat_hub.as_mut() {
+            dock.activate(id);
+        }
+        cx.notify();
+    }
+
+    #[cfg(feature = "chat-hub")]
+    fn close_chat_hub_tab(&mut self, id: i64, cx: &mut Context<Self>) {
+        if let Some(dock) = self.chat_hub.as_mut() {
+            dock.close_tab(id);
+        }
+        cx.notify();
+    }
+
+    /// The docked site logo hides or shows the page without releasing it.
+    #[cfg(feature = "chat-hub")]
+    fn toggle_chat_hub_dock(&mut self, cx: &mut Context<Self>) {
+        if let Some(dock) = self.chat_hub.as_mut() {
+            dock.toggle_visible();
+        }
+        cx.notify();
+    }
+
     fn copy_flash_expired(&self) -> bool {
         let Ok(mut flash) = self.copy_flash.lock() else {
             return false;
@@ -3070,13 +3229,31 @@ impl Observer {
             self.timeline_scroll.scroll_pending = true;
         }
         self.refresh_markdown(cx);
+        // The delegated pane shares the expansion set, so its bodies need the
+        // same refresh when one of its cards is opened.
+        if self.active_child.is_some() {
+            self.refresh_child_markdown(cx);
+        }
         cx.notify();
     }
 
     fn markdown_view(&self, key: &str) -> AnyElement {
-        let flash = self.copy_flash.clone();
         match self.markdown.get(key) {
-            Some((_, state)) => div()
+            Some((_, state)) => self.markdown_entity(state),
+            None => div().into_any_element(),
+        }
+    }
+
+    fn child_markdown_view(&self, key: &str) -> AnyElement {
+        match self.child_markdown.get(key) {
+            Some((_, state)) => self.markdown_entity(state),
+            None => div().into_any_element(),
+        }
+    }
+
+    fn markdown_entity(&self, state: &Entity<TextViewState>) -> AnyElement {
+        let flash = self.copy_flash.clone();
+        div()
                 .w_full()
                 .min_w_0()
                 .child(TextView::new(state).selectable(true).code_block_actions(
@@ -3140,19 +3317,18 @@ impl Observer {
                             .into_any_element()
                     },
                 ))
-                .into_any_element(),
-            None => div().into_any_element(),
-        }
+                .into_any_element()
     }
 
-    fn user_row(&self, view: &UserView, cx: &mut Context<Self>) -> AnyElement {
-        let key = format!("{}:user", view.key);
+    fn user_row(&self, view: &UserView, scope: MsgScope, cx: &mut Context<Self>) -> AnyElement {
+        let key = scoped_key(scope, &format!("{}:user", view.key));
         let target = key.clone();
         let expanded = self.expanded.contains(&key);
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
+        let copy_key = scoped_key(scope, &view.key);
         self.message_with_copy(
             ui::transcript::messages::user_bubble(view, key, expanded, on_toggle, cx),
-            &view.key,
+            &copy_key,
             &view.text,
             cx,
         )
@@ -3177,14 +3353,22 @@ impl Observer {
         key: String,
         title: String,
         text: &str,
+        scope: MsgScope,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let live = key == "msg--1:thought"
+            && match scope {
+                MsgScope::Main => {
+                    self.workflow_running() && self.model.live.message.is_empty()
+                }
+                MsgScope::Child => {
+                    running_state(&self.child_model.state) && self.child_model.live.message.is_empty()
+                }
+            };
+        let key = scoped_key(scope, &key);
         let open = self.expanded.contains(&key);
         let target = key.clone();
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
-        let live = key == "msg--1:thought"
-            && self.workflow_running()
-            && self.model.live.message.is_empty();
         let title = if live {
             t!("live_thinking").to_string()
         } else {
@@ -3193,19 +3377,29 @@ impl Observer {
         ui::transcript::messages::thought(key, title, text, open, live, on_toggle, cx)
     }
 
-    fn assistant_row(&self, view: &AssistantView, cx: &mut Context<Self>) -> AnyElement {
+    fn assistant_row(
+        &self,
+        view: &AssistantView,
+        scope: MsgScope,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let thought = view.reasoning.as_ref().map(|reasoning| {
             self.thought_row(
                 view.thought_key.clone(),
                 view.thought_title.clone(),
                 reasoning,
+                scope,
                 cx,
             )
         });
-        let markdown = (!view.markdown.is_empty()).then(|| self.markdown_view(&view.key));
+        let markdown = (!view.markdown.is_empty()).then(|| match scope {
+            MsgScope::Main => self.markdown_view(&view.key),
+            MsgScope::Child => self.child_markdown_view(&view.key),
+        });
+        let copy_key = scoped_key(scope, &view.key);
         self.message_with_copy(
             ui::transcript::messages::assistant_message(thought, markdown),
-            &view.key,
+            &copy_key,
             &view.markdown,
             cx,
         )
@@ -3222,22 +3416,38 @@ impl Observer {
         }
     }
 
-    fn tool_row(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
+    fn tool_row(&self, tool: &ToolView, scope: MsgScope, cx: &mut Context<Self>) -> AnyElement {
         // A pending approval or an unanswered `ask_user` keeps its body open,
         // exactly like Vue's `isApprovalPending || isMessageExpanded`.
+        let pending_ids = match scope {
+            MsgScope::Main => &self.model.pending_tool_ids,
+            MsgScope::Child => &self.child_model.pending_tool_ids,
+        };
         let pending = !tool.tool_call_id.is_empty()
             && (tool.status == presentation::ToolStatus::Pending
-                || self.model.pending_tool_ids.contains(&tool.tool_call_id));
-        let answered =
-            self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool);
-        let answering = self.ask_user_active(tool) && !answered;
+                || pending_ids.contains(&tool.tool_call_id));
+        let answered = match scope {
+            MsgScope::Main => {
+                self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool)
+            }
+            MsgScope::Child => Self::ask_user_projected_answer(tool),
+        };
+        // Only the runtime's own waiting call opens the interactive card; once an
+        // answer is projected the card becomes read-only.
+        let answering = match scope {
+            MsgScope::Main => self.ask_user_active(tool),
+            MsgScope::Child => {
+                self.child_question_id.as_deref() == Some(tool.tool_call_id.as_str())
+            }
+        } && !answered;
         // Vue keeps `ask_user` cards open: their options are the body.
+        let detail_key = scoped_key(scope, &tool.detail_key);
         let open = pending
             || answering
             || answered
             || !tool.choices.is_empty()
-            || self.expanded.contains(&tool.detail_key);
-        let target_key = tool.detail_key.clone();
+            || self.expanded.contains(&detail_key);
+        let target_key = detail_key.clone();
         let muted = cx.theme().muted_foreground;
         let foreground = cx.theme().foreground;
         let border = cx.theme().border;
@@ -3252,7 +3462,7 @@ impl Observer {
             || tool.command.is_some()
             || tool.arguments.is_some();
         let mut title = h_flex()
-            .id(SharedString::from(tool.detail_key.clone()))
+            .id(SharedString::from(detail_key.clone()))
             .w_full()
             .min_w_0()
             .items_center()
@@ -3318,7 +3528,7 @@ impl Observer {
         let mut body = v_flex().w_full().min_w_0().cursor_pointer().child(title);
         if !open {
             let mut summary = h_flex()
-                .id(SharedString::from(format!("{}:summary", tool.detail_key)))
+                .id(SharedString::from(format!("{detail_key}:summary")))
                 .w_full()
                 .min_w_0()
                 .items_start()
@@ -3364,51 +3574,92 @@ impl Observer {
         } else if pending && tool.choices.is_empty() && tool.name != "ask_user" {
             // The approval card owns the diff/command/plan while pending, so the
             // regular detail would only repeat it. `ask_user` keeps its options.
-            let id = tool.tool_call_id.clone();
-            let owner = cx.entity().downgrade();
-            let generation = self.model.generation;
-            let dispatch = move |decision, _: &mut Window, cx: &mut App| {
-                let _ = owner.update(cx, |this, cx| {
-                    if !this.model.accepts(generation) || !this.approval_drafts.contains_key(&id) {
-                        return;
-                    }
-                    use ui::approval::Decision;
-                    match decision {
-                        Decision::Reject => this.submit_approval(id.clone(), false, false, cx),
-                        Decision::Approve => this.submit_approval(id.clone(), true, false, cx),
-                        Decision::Whitelist => this.submit_approval(id.clone(), true, true, cx),
-                        Decision::Batch => {
-                            let tool_ids = this.approval_drafts.keys().cloned().collect();
-                            if let Some(session) = this.selected.clone() {
-                                let _ = this
-                                    .worker
-                                    .commands
-                                    .try_send(Command::ApprovalBatch { session, tool_ids });
+            let card = match scope {
+                MsgScope::Main => {
+                    let id = tool.tool_call_id.clone();
+                    let owner = cx.entity().downgrade();
+                    let generation = self.model.generation;
+                    let dispatch = move |decision, _: &mut Window, cx: &mut App| {
+                        let _ = owner.update(cx, |this, cx| {
+                            if !this.model.accepts(generation)
+                                || !this.approval_drafts.contains_key(&id)
+                            {
+                                return;
                             }
-                        }
-                    }
-                });
+                            use ui::approval::Decision;
+                            match decision {
+                                Decision::Reject => {
+                                    this.submit_approval(id.clone(), false, false, cx)
+                                }
+                                Decision::Approve => {
+                                    this.submit_approval(id.clone(), true, false, cx)
+                                }
+                                Decision::Whitelist => {
+                                    this.submit_approval(id.clone(), true, true, cx)
+                                }
+                                Decision::Batch => {
+                                    let tool_ids = this.approval_drafts.keys().cloned().collect();
+                                    if let Some(session) = this.selected.clone() {
+                                        let _ = this.worker.commands.try_send(
+                                            Command::ApprovalBatch { session, tool_ids },
+                                        );
+                                    }
+                                }
+                            }
+                        });
+                    };
+                    Some(ui::approval::approval_card(
+                        tool,
+                        self.approval_drafts.get(&tool.tool_call_id),
+                        self.approval_drafts.len(),
+                        dispatch,
+                        cx,
+                    ))
+                }
+                MsgScope::Child => self
+                    .active_child
+                    .as_ref()
+                    .and_then(|(id, _)| self.child_approval_card(id, tool, cx)),
             };
-            body = body.child(div().w_full().min_w_0().pl_6().pb_2().child(
-                ui::approval::approval_card(
-                    tool,
-                    self.approval_drafts.get(&tool.tool_call_id),
-                    self.approval_drafts.len(),
-                    dispatch,
-                    cx,
-                ),
-            ));
+            if let Some(card) = card {
+                body = body.child(div().w_full().min_w_0().pl_6().pb_2().child(card));
+            }
         } else {
-            body = body.child(self.tool_detail(tool, cx));
+            let question = match scope {
+                MsgScope::Main => None,
+                MsgScope::Child => self
+                    .active_child
+                    .as_ref()
+                    .and_then(|(id, _)| self.child_question(id, tool, cx)),
+            };
+            body = body.child(match question {
+                Some(question) => question,
+                None => self.tool_detail(tool, scope, cx),
+            });
         }
         body.into_any_element()
     }
 
-    fn tool_detail(&self, tool: &ToolView, cx: &mut Context<Self>) -> AnyElement {
+    fn tool_detail(
+        &self,
+        tool: &ToolView,
+        scope: MsgScope,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut detail = v_flex().w_full().min_w_0().gap_2().pl_6().pt_2().pb_2();
-        let answered =
-            self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool);
-        let answering = self.ask_user_active(tool) && !answered;
+        // The delegated pane reads its own answer state and Markdown cache.
+        let answered = match scope {
+            MsgScope::Main => {
+                self.ask_user_answered(tool).is_some() || Self::ask_user_projected_answer(tool)
+            }
+            MsgScope::Child => Self::ask_user_projected_answer(tool),
+        };
+        let answering = match scope {
+            MsgScope::Main => self.ask_user_active(tool),
+            MsgScope::Child => {
+                self.child_question_id.as_deref() == Some(tool.tool_call_id.as_str())
+            }
+        } && !answered;
         if !tool.choices.is_empty() {
             let mut choices = v_flex().w_full().min_w_0().gap_3();
             for (index, group) in tool.choices.iter().enumerate() {
@@ -3516,7 +3767,10 @@ impl Observer {
             );
         }
         if !tool.detail.is_empty() {
-            detail = detail.child(self.markdown_view(&tool.detail_key));
+            detail = detail.child(match scope {
+                MsgScope::Main => self.markdown_view(&tool.detail_key),
+                MsgScope::Child => self.child_markdown_view(&tool.detail_key),
+            });
         }
         if tool.status == presentation::ToolStatus::Running {
             let primary = cx.theme().primary;
@@ -3537,29 +3791,36 @@ impl Observer {
         &self,
         group: &ActivityView,
         shimmer: bool,
+        scope: MsgScope,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let target = group.key.clone();
+        let target = scoped_key(scope, &group.key);
         let details = self.expanded.contains(&target).then(|| {
             group
                 .items
                 .iter()
-                .map(|item| self.activity_item(item, cx))
+                .map(|item| self.activity_item(item, scope, cx))
                 .collect()
         });
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
         ui::transcript::activity_group(group, shimmer, details, on_toggle, cx)
     }
 
-    fn activity_item(&self, item: &ActivityItem, cx: &mut Context<Self>) -> AnyElement {
+    fn activity_item(
+        &self,
+        item: &ActivityItem,
+        scope: MsgScope,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         match (&item.thought, &item.tool) {
             (Some(thought), _) => self.thought_row(
                 item.thought_key.clone(),
                 t!("thought_completed").to_string(),
                 thought,
+                scope,
                 cx,
             ),
-            (None, Some(tool)) => self.tool_row(tool, cx),
+            (None, Some(tool)) => self.tool_row(tool, scope, cx),
             (None, None) => div().into_any_element(),
         }
     }
@@ -3630,12 +3891,37 @@ impl Observer {
     }
 
     fn refresh_child_markdown(&mut self, cx: &mut Context<Self>) {
-        let rows = self.child_rows.values().flatten().filter_map(|row| match row {
-            Row::Assistant(view) if !view.markdown.is_empty() => Some((&view.key, &view.markdown)),
-            _ => None,
-        });
+        let mut rows: Vec<(String, String)> = Vec::new();
+        for row in self.child_rows.values().flatten() {
+            match row {
+                Row::Assistant(view) if !view.markdown.is_empty() => {
+                    rows.push((view.key.clone(), view.markdown.clone()));
+                }
+                Row::Tool(tool) => {
+                    if self
+                        .expanded
+                        .contains(&scoped_key(MsgScope::Child, &tool.detail_key))
+                        && !tool.detail.is_empty()
+                    {
+                        rows.push((tool.detail_key.clone(), tool.detail.clone()));
+                    }
+                }
+                Row::Activity(group) => {
+                    for tool in group.items.iter().filter_map(|item| item.tool.as_ref()) {
+                        if self
+                            .expanded
+                            .contains(&scoped_key(MsgScope::Child, &tool.detail_key))
+                            && !tool.detail.is_empty()
+                        {
+                            rows.push((tool.detail_key.clone(), tool.detail.clone()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         let mut next = BTreeMap::new();
-        for (key, text) in rows {
+        for (key, text) in &rows {
             let entity = match self.child_markdown.remove(key) {
                 Some((previous, entity)) => {
                     if previous != *text {
@@ -3770,69 +4056,142 @@ impl Observer {
         let (id, title) = self.active_child.as_ref()?;
         let foreground = cx.theme().foreground;
         let hover = cx.theme().muted;
+        let background = cx.theme().background;
+        let border = cx.theme().border;
         let content = if let Some(rows) = self.child_rows.get(id) {
-            // Child decisions use only the child-scoped callbacks below.
-            let entries = rows.iter().filter_map(|row| {
-                let text = match row {
-                    Row::Assistant(view) => {
-                        return Some(v_flex().gap_1()
-                            .when_some(view.reasoning.as_deref().filter(|text| !text.is_empty()), |row, text| {
-                                row.child(plain_text(text, cx.theme().muted_foreground))
-                            })
-                            .when_some(self.child_markdown.get(&view.key), |row, (_, state)| {
-                                row.child(TextView::new(state).selectable(true))
-                            })
-                            .into_any_element());
-                    }
-                    Row::User(view) => &view.text,
-                    Row::Tool(view) => {
-                        if let Some(question) = self.child_question(id, view, cx) {
-                            return Some(v_flex().gap_2().child(plain_text(&view.summary, foreground)).child(question).into_any_element());
-                        }
-                        if let Some(card) = self.child_approval_card(id, view, cx) {
-                            return Some(card);
-                        }
-                        &view.summary
-                    }
-                    Row::Activity(view) => {
-                        let mut group = v_flex().gap_1().child(plain_text(&view.summary, foreground));
-                        for tool in view.items.iter().filter_map(|item| item.tool.as_ref()) {
-                            if let Some(card) = self.child_approval_card(id, tool, cx) {
-                                group = group.child(div().id(tool.tool_call_id.clone()).child(card));
-                            }
-                        }
-                        return Some(group.into_any_element());
-                    }
-                    _ => return None,
-                };
-                (!text.is_empty()).then(|| plain_text(text, foreground).into_any_element())
-            }).collect::<Vec<_>>();
-            ui::transcript::child_transcript(entries, cx)
+            // The delegated pane reuses the window row renderers, so a child
+            // transcript reads exactly like the main one.
+            let active = ui::transcript::latest_active_group(rows, running_state(&self.child_model.state));
+            let mut list = v_flex().id("child-history").w_full().min_w_0().p_4().gap_3();
+            for row in rows {
+                list = list.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .mb(px(20.))
+                        .child(self.row(row, active, MsgScope::Child, cx)),
+                );
+            }
+            div()
+                .id("child-pane-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(list)
+                .into_any_element()
         } else if self.child_pending.contains(id) {
-            ui::transcript::child_loading(cx)
+            div()
+                .p_4()
+                .child(ui::transcript::child_loading(cx))
+                .into_any_element()
         } else {
             div().into_any_element()
         };
-        Some(v_flex().id(SharedString::from(format!("child-pane-{id}")))
-            .absolute().inset_0().occlude().bg(cx.theme().background)
-            .child(h_flex().h(px(40.)).flex_none().items_center().gap_2().px_3()
-                .border_b_1().border_color(cx.theme().border)
-                .child(Icon::new("task").size(15.).color(foreground))
-                .child(div().min_w_0().text_ellipsis().overflow_hidden().font_weight(FontWeight::SEMIBOLD).child(title.clone()))
-                .child(div().flex_1())
-                .child(div().id("close-child-pane").p_1().rounded(px(4.)).cursor_pointer()
-                    .hover(move |style| style.bg(hover))
-                    .child(Icon::new("fullscreen").size(14.).color(foreground))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.close_child();
-                        cx.notify();
-                    }))))
-            .when(self.child_connected == Some(false), |pane| {
-                pane.child(div().px_3().py_1().text_xs().text_color(cx.theme().muted_foreground)
-                    .child(t!("child_reconnecting").to_string()))
-            })
-            .child(div().id("child-pane-scroll").flex_1().min_h_0().overflow_y_scroll().child(content))
-            .into_any_element())
+        // Vue tints the status pill with its own tone and keeps the label short.
+        let state = self.child_model.state.to_lowercase();
+        let (label, tint) = if running_state(&state) {
+            (t!("status_running").to_string(), cx.theme().primary)
+        } else {
+            match state.as_str() {
+                "completed" | "success" => {
+                    (t!("status_completed").to_string(), Hsla::from(success()))
+                }
+                "failed" | "error" => (t!("status_failed").to_string(), Hsla::from(danger())),
+                "cancelled" | "interrupted" | "stopped" => {
+                    (t!("status_cancelled").to_string(), Hsla::from(danger()))
+                }
+                _ => (t!("status_pending").to_string(), cx.theme().muted_foreground),
+            }
+        };
+        let mut pill = h_flex()
+            .flex_none()
+            .items_center()
+            .gap(px(4.))
+            .px(px(8.))
+            .py(px(2.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(tint.opacity(0.2))
+            .bg(tint.opacity(0.1))
+            .text_size(px(10.))
+            .line_height(px(16.))
+            .text_color(tint);
+        if running_state(&state) {
+            pill = pill.child(
+                Icon::new("loading")
+                    .size(10.)
+                    .color(tint)
+                    .spin("child-status-spin", ui::Spin::Linear),
+            );
+        }
+        pill = pill.child(label);
+        Some(
+            v_flex()
+                .id(SharedString::from(format!("child-pane-{id}")))
+                .absolute()
+                .left_0()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .occlude()
+                .bg(background)
+                .child(
+                    h_flex()
+                        .id("child-pane-header")
+                        .h(px(40.))
+                        .flex_none()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(16.))
+                        .border_b_1()
+                        .border_color(border)
+                        .bg(background)
+                        .child(Icon::new("task").size(15.).color(foreground))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_shrink_1()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .text_size(px(14.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(foreground)
+                                .child(title.clone()),
+                        )
+                        .child(pill)
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .id("close-child-pane")
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .p(px(4.))
+                                .rounded(px(4.))
+                                .cursor_pointer()
+                                .hover(move |style| style.bg(hover))
+                                .child(Icon::new("fullscreen").size(16.).color(foreground))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.close_child();
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .when(self.child_connected == Some(false), |pane| {
+                    pane.child(
+                        div()
+                            .px(px(12.))
+                            .py(px(4.))
+                            .text_size(px(10.))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("child_reconnecting").to_string()),
+                    )
+                })
+                .child(content)
+                .into_any_element(),
+        )
     }
 
     fn choice_group(
@@ -3955,34 +4314,51 @@ impl Observer {
         let open = self.expanded.contains(&key);
         let target = key.clone();
         let muted = cx.theme().muted_foreground;
+        let hover = cx.theme().muted;
         v_flex()
             .w_full()
             .min_w_0()
-            .gap_2()
+            .gap(px(2.))
+            .rounded(px(8.))
+            .bg(cx.theme().background)
+            .p(px(8.))
             .child(
                 h_flex()
                     .id(SharedString::from(key.clone()))
                     .w_full()
                     .min_w_0()
-                    .items_center()
-                    .gap_2()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(8.))
                     .cursor_pointer()
                     .child(
                         div()
                             .flex_none()
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(px(12.))
                             .text_color(muted)
                             .child(t!("cost_label").to_string().to_uppercase()),
                     )
                     .child(
-                        Icon::new(if open {
-                            "double-arrow-up"
-                        } else {
-                            "double-arrow-down"
-                        })
-                        .size(12.)
-                        .color(muted),
+                        h_flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("{key}:cost-toggle")))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .p(px(2.))
+                                    .rounded(px(4.))
+                                    .hover(move |style| style.bg(hover))
+                                    .child(
+                                        Icon::new("double-arrow-down")
+                                            .size(14.)
+                                            .rotate(if open { 180. } else { 0. })
+                                            .color(muted),
+                                    ),
+                            ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
             )
@@ -4001,50 +4377,97 @@ impl Observer {
         let open = self.expanded.contains(&key);
         let target = key.clone();
         let muted = cx.theme().muted_foreground;
+        let hover = cx.theme().muted;
+        let group = SharedString::from(format!("{key}:section"));
+        // Vue reveals the copy control only while the pointer is over the
+        // section, immediately left of its expand chevron.
+        let copy_text = body.to_owned();
+        let copy_button = div()
+            .id(SharedString::from(format!("{key}:copy")))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(26.))
+            .rounded(px(4.))
+            .cursor_pointer()
+            .invisible()
+            .group_hover(group.clone(), |style| style.visible())
+            .hover(move |style| style.bg(hover))
+            .child(Icon::new("copy").size(14.).color(muted))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                if copy_text.is_empty() {
+                    return;
+                }
+                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                this.show_toast(ToastKind::Success, t!("copied").to_string(), cx);
+            }));
         v_flex()
             .w_full()
             .min_w_0()
-            .gap_2()
-            .rounded(px(6.))
+            .gap(px(2.))
+            .rounded(px(8.))
             .bg(cx.theme().background)
-            .p_2()
+            .p(px(8.))
             .child(
                 h_flex()
                     .id(SharedString::from(key.clone()))
+                    .group(group)
                     .w_full()
                     .min_w_0()
-                    .items_center()
-                    .gap_2()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(8.))
                     .cursor_pointer()
                     .child(
-                        div()
-                            .flex_none()
-                            .text_size(px(10.))
-                            .text_color(muted)
-                            .child(label.to_uppercase()),
+                        v_flex()
+                            .min_w_0()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(10.))
+                                    .text_color(muted)
+                                    .child(label.to_uppercase()),
+                            )
+                            .when(!open && !preview.is_empty(), |view| {
+                                view.child(
+                                    div()
+                                        .w_full()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .text_size(px(12.))
+                                        .line_height(px(19.))
+                                        .text_color(muted)
+                                        .child(preview.to_string()),
+                                )
+                            }),
                     )
-                    .when(!open && !preview.is_empty(), |view| {
-                        view.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_size(px(12.))
-                                .text_color(muted)
-                                .child(preview.to_string()),
-                        )
-                    })
-                    .when(open || preview.is_empty(), |view| {
-                        view.child(div().flex_1())
-                    })
                     .child(
-                        Icon::new(if open {
-                            "double-arrow-up"
-                        } else {
-                            "double-arrow-down"
-                        })
-                        .size(12.)
-                        .color(muted),
+                        h_flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(copy_button)
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("{key}:toggle")))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .p(px(2.))
+                                    .rounded(px(4.))
+                                    .hover(move |style| style.bg(hover))
+                                    .child(
+                                        Icon::new("double-arrow-down")
+                                            .size(14.)
+                                            .rotate(if open { 180. } else { 0. })
+                                            .color(muted),
+                                    ),
+                            ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
             )
@@ -4053,12 +4476,12 @@ impl Observer {
                     div()
                         .w_full()
                         .min_w_0()
-                        .pt_1()
+                        .mt(px(8.))
+                        .p(px(8.))
+                        .rounded(px(8.))
+                        .bg(cx.theme().muted)
                         .child(self.markdown_view(&key)),
                 )
-            })
-            .when(!open && !body.is_empty() && preview.is_empty(), |view| {
-                view.child(div().text_size(px(12.)).text_color(muted).child(" "))
             })
             .into_any_element()
     }
@@ -4080,8 +4503,14 @@ impl Observer {
         ui::transcript::finish_task_card(view, open, on_toggle, cx)
     }
 
-    fn row(&self, row: &Row, active_group: Option<&str>, cx: &mut Context<Self>) -> AnyElement {
-        ui::transcript::row(self, row, active_group, cx)
+    fn row(
+        &self,
+        row: &Row,
+        active_group: Option<&str>,
+        scope: MsgScope,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        ui::transcript::row(self, row, active_group, scope, cx)
     }
 }
 
@@ -4161,11 +4590,32 @@ impl Render for Observer {
             self.refresh_palette(cx);
         }
 
+        // A site picked in the sidebar needs the window to create its page; the
+        // task runs after this frame, so the native view never appears mid-render.
+        // Releasing the last page also gives the window its width back.
+        #[cfg(feature = "chat-hub")]
+        if self.chat_hub.as_ref().is_some_and(|dock| dock.is_empty()) {
+            if let Some(dock) = self.chat_hub.take() {
+                // Resizing mid-frame would restart the layout being built.
+                window.on_next_frame(move |window, _| dock.close(window));
+            }
+        }
+        #[cfg(feature = "chat-hub")]
+        if self.pending_chat_hub.is_some() {
+            cx.spawn_in(window, async move |owner, cx| {
+                let _ = owner.update_in(cx, |this, window, cx| {
+                    this.apply_pending_chat_hub(window, cx)
+                });
+            })
+            .detach();
+        }
+
         let border = cx.theme().border;
         let surface = cx.theme().muted;
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
 
         // The answer fields are entities, so they are created outside the row
         // builder; Vue keeps them mounted under every waiting question.
@@ -4330,6 +4780,7 @@ impl Render for Observer {
             content = content.child(div().w_full().min_w_0().mb(px(20.)).child(self.row(
                 row,
                 active_group,
+                MsgScope::Main,
                 cx,
             )));
         }
@@ -4394,24 +4845,81 @@ impl Render for Observer {
         // strip drawn after the body instead of a shadow on the bar itself.
         let shadow = ui::surfaces(self.appearance_dark).titlebar_border;
         #[cfg(feature = "chat-hub")]
-        let hub_dock = self.chat_hub.as_ref().map(|hub| {
-            let control = |id, label, action: fn(&chat_hub::ChatHub) -> wry::Result<()>| {
-                div().id(id).px_2().cursor_pointer().child(label).on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(hub) = &this.chat_hub {
-                        if let Err(error) = action(hub) {
-                            this.show_toast(ToastKind::Error, error.to_string(), cx);
-                        }
-                    }
-                }))
-            };
-            v_flex().flex_none().w(px(chat_hub::DOCK_WIDTH)).max_w(relative(0.45)).min_w_0().h_full().min_h_0()
-                .child(h_flex().gap_2()
-                    .child(control("hub-reload", "↻", chat_hub::ChatHub::reload))
-                    .child(control("hub-zoom-out", "−", |hub| hub.zoom(0.8)))
-                    .child(control("hub-zoom-reset", "100%", |hub| hub.zoom(1.0)))
-                    .child(control("hub-zoom-in", "+", |hub| hub.zoom(1.25))))
-                .child(hub.dock()).into_any_element()
-        });
+        let hub_dock = self
+            .chat_hub
+            .as_ref()
+            .filter(|dock| dock.visible())
+            .map(|dock| {
+                let active = dock.active().map(|site| site.id);
+                let mut strip = h_flex()
+                    .id("chat-hub-tabs")
+                    .w_full()
+                    .h(px(34.))
+                    .flex_none()
+                    .items_center()
+                    .gap(px(4.))
+                    .px(px(4.))
+                    .border_b_1()
+                    .border_color(border)
+                    .bg(background);
+                for site in dock.sites() {
+                    let id = site.id;
+                    let selected = active == Some(id);
+                    strip = strip.child(
+                        h_flex()
+                            .id(("chat-hub-tab", id as usize))
+                            .flex_none()
+                            .max_w(px(192.))
+                            .items_center()
+                            .gap(px(4.))
+                            .rounded(px(8.))
+                            .when(selected, |tab| tab.bg(surface))
+                            .child(
+                                div()
+                                    .id(("chat-hub-tab-label", id as usize))
+                                    .min_w_0()
+                                    .px(px(8.))
+                                    .py(px(4.))
+                                    .text_size(px(12.))
+                                    .text_ellipsis()
+                                    .text_color(if selected { primary } else { muted })
+                                    .child(site.name.clone())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.activate_chat_hub(id, cx)
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id(("chat-hub-tab-close", id as usize))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(22.))
+                                    .rounded(px(8.))
+                                    .cursor_pointer()
+                                    .hover(move |style| style.bg(surface))
+                                    .child(Icon::new("close").size(12.).color(muted))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_chat_hub_tab(id, cx)
+                                    })),
+                            ),
+                    );
+                }
+                v_flex()
+                    .flex_none()
+                    .w(px(chat_hub::DOCK_WIDTH))
+                    .max_w(relative(0.45))
+                    .min_w_0()
+                    .h_full()
+                    .min_h_0()
+                    .border_l_1()
+                    .border_color(border)
+                    .bg(background)
+                    .child(strip)
+                    .child(dock.dock())
+                    .into_any_element()
+            });
         #[cfg(not(feature = "chat-hub"))]
         let hub_dock: Option<AnyElement> = None;
         let frame = ui::frame::window_frame(
@@ -4479,6 +4987,9 @@ impl Render for Observer {
         );
         // Configuration dialogs float above the whole frame instead of growing
         // the composer, like Vue's appended-to-body popovers.
+        let status_overlay = self
+            .status_panel_area(window)
+            .and_then(|area| ui::status::overlay(self, area, cx));
         let mut shell = div().id("workflow-shell").size_full().relative().child(frame)
             .capture_key_down(cx.listener(|this, event, window, cx| {
                 ui::terminal::shortcut(this, event, window, cx);
@@ -4494,7 +5005,7 @@ impl Render for Observer {
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.status_panel_drag = None))
-            .children(ui::status::overlay(self, window, cx));
+            .children(status_overlay);
         if self.quick_panel.is_some() {
             shell = shell.child(ui::composer::panels::overlay(self, cx));
         }

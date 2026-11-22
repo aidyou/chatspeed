@@ -48,6 +48,9 @@ automation_schedule_input: "Daily: 09:00, 18:00 · Interval: 30m (minimum 5m) ·
 automation_run: Run now
 awaiting_approval: Awaiting approval
 chat_hub: ChatHub
+chat_hub_close: Close
+chat_hub_empty: No chat sites yet
+chat_hub_pick_site: Choose a ChatHub site from the sidebar
 child_reconnecting: Reconnecting to the child session…
 clear_context_divider: Start new session
 clear_context_failed: "Failed to clear the context frame"
@@ -61,6 +64,7 @@ composer_placeholder: Ask for the next step, Enter to send
 connected: Connected
 connecting: Disconnected — retrying discovery
 continue_workflow: Continue
+copy: Copy
 copied: Copied
 cost_cache: Cache
 cost_cache_hit_rate: Cache hit rate
@@ -269,6 +273,49 @@ status_parallel_rounds: Parallel rounds
 status_execution: Execution score
 status_main_agent: Main
 status_models: Models
+status_panel_active: Active
+status_panel_child_agents: Child Agents
+status_panel_context_usage: Context Usage
+status_panel_convergence: Convergence
+status_panel_ctx: Ctx
+status_panel_direct: Direct
+status_panel_edit_calls: Edit
+status_panel_efficiency: Efficiency
+status_panel_empty: No tasks yet
+status_panel_execution: Execution
+status_panel_fallback: Fallback
+status_panel_global: Global
+status_panel_latest: Latest
+status_panel_lite_model: Lite
+status_panel_load_failed: Failed to load efficiency report
+status_panel_loading: Loading...
+status_panel_main_agent: Main Agent
+status_panel_models: Models
+status_panel_no_efficiency_data: No efficiency data yet
+status_panel_no_models: No model configuration
+status_panel_no_sub_agents: No sub agents yet
+status_panel_parallel: Parallel
+status_panel_plan_model: Plan
+status_panel_pre_edit_coverage: Pre-edit read coverage
+status_panel_progress: Progress
+status_panel_read_calls: Read
+status_panel_recent_ops: Recent Operations
+status_panel_refresh: Refresh
+status_panel_repeat_reads: Repeat Read
+status_panel_score_hint: The two scores are a rough health summary; the chips below are raw counts.
+status_panel_search_calls: Search
+status_panel_sub_agents: Sub Agents
+status_panel_title: Status
+status_panel_title_model: Title
+status_panel_todos: Tasks
+status_panel_tools: Tools
+status_panel_total_calls: Total calls
+status_panel_utility_fallback: Utility Fallback
+status_panel_utility_model: Utility
+status_panel_verification_calls: Verify
+status_panel_vision_model: Vision
+status_panel_work_fallback: Work Fallback
+status_panel_work_model: Work
 status_read_calls: Read calls
 status_read_coverage: Pre-edit read coverage
 status_repeated_reads: Repeated reads

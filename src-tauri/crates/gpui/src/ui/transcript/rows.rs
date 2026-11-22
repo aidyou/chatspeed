@@ -5,7 +5,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 
-use crate::{accent, danger, pill, plain_text, ui::Icon, warning, Observer};
+use crate::{accent, danger, pill, plain_text, ui::Icon, warning, MsgScope, Observer};
 use chatspeed_gpui::presentation::{ActivityView, AlertKind, AlertView, Row};
 
 pub(crate) fn latest_active_group(rows: &[Row], running: bool) -> Option<&str> {
@@ -52,15 +52,19 @@ pub(crate) fn row(
     window: &Observer,
     row: &Row,
     active_group: Option<&str>,
+    scope: MsgScope,
     cx: &mut Context<Observer>,
 ) -> AnyElement {
     match row {
-        Row::User(view) => window.user_row(view, cx),
-        Row::Assistant(view) => window.assistant_row(view, cx),
-        Row::Activity(group) => {
-            window.activity_row(group, active_group == Some(group.key.as_str()), cx)
-        }
-        Row::Tool(tool) => window.tool_row(tool, cx),
+        Row::User(view) => window.user_row(view, scope, cx),
+        Row::Assistant(view) => window.assistant_row(view, scope, cx),
+        Row::Activity(group) => window.activity_row(
+            group,
+            active_group == Some(group.key.as_str()),
+            scope,
+            cx,
+        ),
+        Row::Tool(tool) => window.tool_row(tool, scope, cx),
         Row::SubAgent(card) => window.sub_agent_row(card, cx),
         Row::FinishTask(view) => window.finish_task_row(view, cx),
         Row::Snapshot(snapshot) => window.snapshot_row(snapshot, cx),

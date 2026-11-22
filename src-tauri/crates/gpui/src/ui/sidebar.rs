@@ -209,13 +209,7 @@ fn rail(
                     cx,
                     |this, _, cx| this.not_implemented(t!("plugin_panel"), cx),
                 ))
-                .child(rail_action(
-                    "rail-chathub",
-                    "connected",
-                    skin,
-                    cx,
-                    super::titlebar::toggle_chat_hub,
-                ))
+                .child(chat_hub_rail_entry(observer, skin, cx))
                 // Vue keeps the terminal entry separately so the docked ChatHub
                 // page is only opened by its own entry.
                 .child(rail_action(
@@ -622,8 +616,12 @@ fn session_row(
     let secondary = cx.theme().muted_foreground;
     let root = root_label(session);
 
+    let row_group = SharedString::from(format!("session-{}", session.id));
+    let actions_group = row_group.clone();
     v_flex()
-        .id(format!("session-{}", session.id))
+        .id(row_group.clone())
+        .group(row_group)
+        .relative()
         .w_full()
         .min_w_0()
         .gap(px(4.))
@@ -649,6 +647,8 @@ fn session_row(
                 .min_w_0()
                 .items_center()
                 .gap_2()
+                // Vue reserves the trailing space the hover actions occupy.
+                .pr(px(44.))
                 .child(
                     h_flex()
                         .flex_none()
@@ -675,53 +675,121 @@ fn session_row(
                     )
                 }),
         )
-        .child(session_actions(session, cx))
+        // Vue keeps the actions hidden until the row is hovered and floats them
+        // over the title, so the row keeps its two-line height.
+        .child(
+            div()
+                .id(SharedString::from(format!("session-actions-{}", session.id)))
+                .absolute()
+                .right(px(10.))
+                .top_0()
+                .bottom_0()
+                .flex()
+                .items_center()
+                .invisible()
+                .group_hover(actions_group, |style| style.visible())
+                .child(
+                    h_flex()
+                        .gap(px(4.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().muted)
+                        .px(px(2.))
+                        .py(px(2.))
+                        .child(session_actions(session, cx)),
+                ),
+        )
         .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
         .into_any_element()
 }
 
 fn session_actions(session: &Session, cx: &mut Context<Observer>) -> impl IntoElement {
     use gpui_kit::component::{button::Button, input::InputState, WindowExt};
+    let hover = cx.theme().background;
     let rename = session.clone();
     let delete = session.id.clone();
-    h_flex().justify_end().gap_1()
-        .child(div().id("rename-session").cursor_pointer().child(Icon::new("edit"))
-            .on_click(cx.listener(move |_, _, window, cx| {
-                cx.stop_propagation();
-                if window.has_active_dialog(cx) { return; }
-                let input = cx.new(|cx| {
-                    let mut input = InputState::new(window, cx);
-                    input.set_value(rename.title.clone(), window, cx);
-                    input
-                });
-                let owner = cx.entity().downgrade();
-                let id = rename.id.clone();
-                window.open_dialog(cx, move |dialog, _, _| {
-                    let (field, owner, id) = (input.clone(), owner.clone(), id.clone());
-                    dialog.title(t!("session_rename").to_string()).child(Input::new(&input)).footer(
-                        Button::new("save-session-title").label(t!("session_save").to_string()).on_click(move |_, window, cx| {
-                            let title = field.read(cx).value().trim().to_owned();
-                            if owner.update(cx, |this, cx| this.edit_session(id.clone(), Some(title), cx)).unwrap_or(false) {
-                                window.close_dialog(cx);
-                            }
-                        })
-                    )
-                });
-            })))
-        .child(div().id("delete-session").cursor_pointer().child(Icon::new("delete"))
-            .on_click(cx.listener(move |_, _, window, cx| {
-                cx.stop_propagation();
-                let id = delete.clone();
-                let answer = window.prompt(PromptLevel::Warning, &t!("session_delete"), Some(&t!("session_delete_confirm")), &[
-                    PromptButton::cancel(t!("action_cancel").to_string()),
-                    PromptButton::new(t!("session_delete").to_string()),
-                ], cx);
-                cx.spawn(async move |owner, cx| {
-                    if answer.await.ok() == Some(1) {
-                        let _ = owner.update(cx, |this, cx| this.edit_session(id, None, cx));
+    h_flex()
+        .justify_end()
+        .gap(px(2.))
+        .child(
+            div()
+                .id("rename-session")
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(24.))
+                .rounded_full()
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(Icon::new("edit").size(14.))
+                .on_click(cx.listener(move |_, _, window, cx| {
+                    cx.stop_propagation();
+                    if window.has_active_dialog(cx) {
+                        return;
                     }
-                }).detach();
-            })))
+                    let input = cx.new(|cx| {
+                        let mut input = InputState::new(window, cx);
+                        input.set_value(rename.title.clone(), window, cx);
+                        input
+                    });
+                    let owner = cx.entity().downgrade();
+                    let id = rename.id.clone();
+                    window.open_dialog(cx, move |dialog, _, _| {
+                        let (field, owner, id) = (input.clone(), owner.clone(), id.clone());
+                        dialog
+                            .title(t!("session_rename").to_string())
+                            .child(Input::new(&input))
+                            .footer(
+                                Button::new("save-session-title")
+                                    .label(t!("session_save").to_string())
+                                    .on_click(move |_, window, cx| {
+                                        let title = field.read(cx).value().trim().to_owned();
+                                        if owner
+                                            .update(cx, |this, cx| {
+                                                this.edit_session(id.clone(), Some(title), cx)
+                                            })
+                                            .unwrap_or(false)
+                                        {
+                                            window.close_dialog(cx);
+                                        }
+                                    }),
+                            )
+                    });
+                })),
+        )
+        .child(
+            div()
+                .id("delete-session")
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(24.))
+                .rounded_full()
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(Icon::new("delete").size(14.))
+                .on_click(cx.listener(move |_, _, window, cx| {
+                    cx.stop_propagation();
+                    let id = delete.clone();
+                    let answer = window.prompt(
+                        PromptLevel::Warning,
+                        &t!("session_delete"),
+                        Some(&t!("session_delete_confirm")),
+                        &[
+                            PromptButton::cancel(t!("action_cancel").to_string()),
+                            PromptButton::new(t!("session_delete").to_string()),
+                        ],
+                        cx,
+                    );
+                    cx.spawn(async move |owner, cx| {
+                        if answer.await.ok() == Some(1) {
+                            let _ = owner.update(cx, |this, cx| this.edit_session(id, None, cx));
+                        }
+                    })
+                    .detach();
+                })),
+        )
 }
 
 fn automation_list(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
@@ -842,8 +910,6 @@ fn compact(
                 .items_center()
                 .gap(px(4.))
                 .py_2()
-                .border_b_1()
-                .border_color(border)
                 .child(rail_tab_button(
                     "compact-tasks",
                     "skill-plan3",
@@ -861,7 +927,9 @@ fn compact(
                     skin,
                     cx,
                     |this, cx| this.select_rail_tab(RailTab::Automation, cx),
-                )),
+                ))
+                // A short rule separates the icon group without spanning the rail.
+                .child(div().w(px(20.)).h(px(1.)).mt_2().bg(border)),
         )
         .child(compact_list(observer, skin, cx))
         .child(
@@ -877,14 +945,7 @@ fn compact(
                     cx,
                     |this, _, cx| this.not_implemented(t!("plugin_panel"), cx),
                 ))
-                .child(compact_entry(
-                    "compact-chathub",
-                    "connected",
-                    40.,
-                    skin,
-                    cx,
-                    super::titlebar::toggle_chat_hub,
-                ))
+                .child(chat_hub_rail_entry(observer, skin, cx))
                 // Vue keeps the terminal entry separately so the docked ChatHub
                 // page is only opened by its own entry.
                 .child(compact_entry(
@@ -917,8 +978,6 @@ fn compact_entry(
         .flex()
         .items_center()
         .justify_center()
-        .border_t_1()
-        .border_color(cx.theme().border)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(18.).color(cx.theme().muted_foreground))
@@ -1017,6 +1076,222 @@ fn compact_badge(
             )
         })
         .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
+        .into_any_element()
+}
+
+/// The rail's ChatHub slot: the site dropdown with the docked logo, or the
+/// legacy toggle when the feature is off.
+fn chat_hub_rail_entry(
+    observer: &Observer,
+    skin: &Surfaces,
+    cx: &mut Context<Observer>,
+) -> AnyElement {
+    #[cfg(feature = "chat-hub")]
+    {
+        chat_hub_entry(observer, skin, cx)
+    }
+    #[cfg(not(feature = "chat-hub"))]
+    {
+        rail_action(
+            "rail-chathub",
+            "connected",
+            skin,
+            cx,
+            super::titlebar::toggle_chat_hub,
+        )
+    }
+}
+
+/// The ChatHub rail entry: a site list behind the `connected` glyph and, below
+/// it, the docked site's logo that hides or shows the page.
+#[cfg(feature = "chat-hub")]
+fn chat_hub_entry(
+    observer: &Observer,
+    skin: &Surfaces,
+    cx: &mut Context<Observer>,
+) -> AnyElement {
+    use gpui_kit::component::popover::Popover;
+
+    let hover = skin.hover;
+    let primary = cx.theme().primary;
+    let muted = cx.theme().muted_foreground;
+    let active = observer
+        .chat_hub
+        .as_ref()
+        .and_then(|dock| dock.active())
+        .cloned();
+    let active_id = active.as_ref().map(|site| site.id);
+    let sites = observer.chat_hub_sites.clone();
+    let menu_active = active.clone();
+    let observer_entity = cx.entity();
+
+    let menu = Popover::new("chat-hub-menu")
+        .trigger(trigger(
+            div()
+                .id("chat-hub-entry")
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(36.))
+                .rounded(px(8.))
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(Icon::new("connected").size(18.).color(if active_id.is_some() {
+                    primary
+                } else {
+                    muted
+                })),
+        ))
+        .content(move |_, window, cx| {
+            let popover = cx.entity();
+            let mut list = v_flex()
+                .id("chat-hub-site-list")
+                .w(px(220.))
+                .max_h((window.viewport_size().height * 0.6).max(px(160.)))
+                .overflow_y_scroll()
+                .gap(px(2.));
+            if sites.is_empty() {
+                list = list.child(
+                    div()
+                        .px(px(8.))
+                        .py(px(4.))
+                        .text_size(px(12.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("chat_hub_empty").to_string()),
+                );
+            }
+            for site in sites.clone() {
+                let popover = popover.clone();
+                let observer_entity = observer_entity.clone();
+                let selected = active_id == Some(site.id);
+                let name = site.name.clone();
+                let site_for_click = site.clone();
+                list = list.child(
+                    h_flex()
+                        .id(SharedString::from(format!("chat-hub-site-{}", site.id)))
+                        .w_full()
+                        .min_w_0()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(8.))
+                        .py(px(4.))
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(cx.theme().muted))
+                        .child(hub_logo(&site, 16.))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .text_size(px(12.))
+                                .text_color(if selected {
+                                    cx.theme().primary
+                                } else {
+                                    cx.theme().foreground
+                                })
+                                .child(name),
+                        )
+                        .on_click(move |_, window, cx: &mut App| {
+                            popover.update(cx, |state, cx| state.dismiss(window, cx));
+                            let site = site_for_click.clone();
+                            let _ = observer_entity.update(cx, |this, cx| {
+                                this.request_chat_hub(site, cx)
+                            });
+                        }),
+                );
+            }
+            if let Some(site) = menu_active.clone() {
+                let popover = popover.clone();
+                let observer_entity = observer_entity.clone();
+                list = list
+                    .child(div().w_full().h(px(1.)).my_1().bg(cx.theme().border))
+                    .child(
+                        h_flex()
+                            .id("chat-hub-close")
+                            .w_full()
+                            .items_center()
+                            .gap(px(8.))
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .hover(|style| style.bg(cx.theme().muted))
+                            .child(
+                                Icon::new("close")
+                                    .size(16.)
+                                    .color(cx.theme().muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .child(t!("chat_hub_close").to_string()),
+                            )
+                            .on_click(move |_, window, cx: &mut App| {
+                                popover.update(cx, |state, cx| state.dismiss(window, cx));
+                                let site = site.clone();
+                                let _ = observer_entity.update(cx, |this, cx| {
+                                    this.close_chat_hub_tab(site.id, cx)
+                                });
+                            }),
+                    );
+            }
+            list.into_any_element()
+        });
+
+    let mut entry = v_flex().flex_none().items_center().child(menu);
+    if let Some(site) = active {
+        entry = entry.child(
+            div()
+                .id("chat-hub-toggle-site")
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(36.))
+                .rounded(px(8.))
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(hub_logo(&site, 20.))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.toggle_chat_hub_dock(cx);
+                })),
+        );
+    }
+    entry.into_any_element()
+}
+
+/// A site logo with Vue's letter-avatar fallback.
+#[cfg(feature = "chat-hub")]
+fn hub_logo(site: &crate::chat_hub::Site, size: f32) -> AnyElement {
+    let letter: String = site.name.trim().chars().take(1).collect::<String>().to_uppercase();
+    let letter = if letter.is_empty() { "—".to_string() } else { letter };
+    if site.logo.is_empty() {
+        return hub_avatar(letter, size);
+    }
+    let fallback = letter.clone();
+    gpui_kit::img(site.logo.as_str())
+        .flex_none()
+        .size(px(size))
+        .rounded_full()
+        .object_fit(ObjectFit::Contain)
+        .with_fallback(move || hub_avatar(fallback.clone(), size))
+        .into_any_element()
+}
+
+#[cfg(feature = "chat-hub")]
+fn hub_avatar(letter: String, size: f32) -> AnyElement {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(size))
+        .rounded_full()
+        .bg(gpui_kit::rgb(0x8a8f98))
+        .text_size(px(size * 0.55))
+        .text_color(gpui_kit::white())
+        .child(letter)
         .into_any_element()
 }
 

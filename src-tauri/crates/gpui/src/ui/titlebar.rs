@@ -360,30 +360,23 @@ fn valid_daily_time(time: &str) -> bool {
 }
 
 pub(super) fn toggle_chat_hub(this: &mut Observer, window: &mut Window, cx: &mut Context<Observer>) {
+    let _ = window;
     #[cfg(not(feature = "chat-hub"))]
     {
-        let _ = window;
         this.not_implemented(t!("chat_hub"), cx);
     }
     #[cfg(feature = "chat-hub")]
     {
-        if let Some(hub) = this.chat_hub.take() {
-            hub.close(window);
-            cx.notify();
-            return;
+        if this.chat_hub.is_some() {
+            this.toggle_chat_hub_dock(cx);
+        } else {
+            this.ensure_chat_hub_sites(cx);
+            this.show_toast(
+                crate::ToastKind::Info,
+                t!("chat_hub_pick_site").to_string(),
+                cx,
+            );
         }
-        let (reply, response) = tokio::sync::oneshot::channel();
-        if this.worker.commands.try_send(chatspeed_gpui::types::Command::ListChatHubs(reply)).is_err() {
-            return;
-        }
-        cx.spawn_in(window, async move |owner, cx| {
-            let result = response.await;
-            let _ = owner.update_in(cx, |this, window, cx| match result {
-                Ok(Ok(sites)) => crate::chat_hub::select_site(sites, window, cx),
-                Ok(Err(error)) => this.show_toast(crate::ToastKind::Error, error, cx),
-                Err(_) => {}
-            });
-        }).detach();
     }
 }
 
@@ -414,11 +407,6 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
         left = left.child(approval_queue(pending, secondary, accent, skin.hover, cx));
     }
     left = left.child(sound_menu(observer, secondary, skin.hover, cx));
-    #[cfg(feature = "chat-hub")]
-    {
-        left = left.child(div().id("chat-hub-toggle").cursor_pointer().px_2().child("ChatHub")
-            .on_click(cx.listener(|this, _, window, cx| toggle_chat_hub(this, window, cx))));
-    }
 
     let center = h_flex()
         .flex_1()

@@ -50,7 +50,7 @@ path = "src/main.rs"
 # never enable it, which is how the runtime closure stays desktop-free.
 default          = ["desktop"]
 desktop          = []
-legacy-cli-binary = []
+legacy-cli-binary = ["dep:clap"]
 # Retained for existing build commands; proxy support is detected at runtime now.
 macos-webview-proxy = []
 
@@ -83,7 +83,7 @@ axum             = "0.8.9"
 base64           = "0.22.1"
 bytes            = "1.11.1"
 chrono           = { version = "0.4.44", features = ["serde"] }
-clap             = { version = "4.5", features = ["derive"] }
+clap             = { version = "4.5", features = ["derive"], optional = true }
 dashmap          = "6.1.0"
 dirs             = "6.0"
 fern             = "0.7.1"
@@ -136,6 +136,8 @@ tauri-plugin-global-shortcut = "2.4.0"
 tauri-plugin-opener          = "2.6.0"
 tauri-plugin-process         = "2.4.0"
 tauri-plugin-shell           = "2.4.0"
+# Release-only: `src/lib.rs` registers it behind `cfg(not(debug_assertions))`,
+# so a dev build sees no reference and cargo's `unused_dependencies` flags it.
 tauri-plugin-single-instance = "2.5.0"
 tauri-plugin-updater         = "2.14.1"
 thiserror                    = "2.0.18"
@@ -181,6 +183,8 @@ windows-sys = { version = "0.61", features = ["Win32_System_Power", "Win32_UI_Wi
 gtk = "0.18"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Release-only: `src/lib.rs` registers it behind `cfg(not(debug_assertions))`,
+# so a dev build sees no reference and cargo's `unused_dependencies` flags it.
 tauri-plugin-autostart = "2.6.0"
 
 [target.'cfg(windows)'.build-dependencies]

@@ -1,4 +1,4 @@
-//! Delegated-task card and its separate transcript surface.
+//! The delegated-task card shown inline in the transcript.
 
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::*;
@@ -137,24 +137,6 @@ pub(crate) fn sub_agent_card(
         );
     }
     body.into_any_element()
-}
-
-pub(crate) fn child_transcript(rows: impl IntoIterator<Item = AnyElement>, cx: &App) -> AnyElement {
-    v_flex()
-        .w_full()
-        .min_w_0()
-        .gap_3()
-        .mt_2()
-        .p_3()
-        .rounded(px(8.))
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().background)
-        .children(
-            rows.into_iter()
-                .map(|row| div().w_full().min_w_0().child(row)),
-        )
-        .into_any_element()
 }
 
 pub(crate) fn child_loading(cx: &App) -> AnyElement {
