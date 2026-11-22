@@ -80,9 +80,13 @@ pub struct Icon {
 }
 
 /// Rotation curves shared by active indicators.
+///
+/// `Accelerate` starts slow and speeds up, which reads as work in progress;
+/// `Linear` is the steady spin used by the thinking bulb.
 #[derive(Clone, Copy)]
 pub(crate) enum Spin {
     Linear,
+    Accelerate,
     Eased,
 }
 
@@ -90,24 +94,29 @@ impl Spin {
     fn phase(self, phase: f32) -> f32 {
         match self {
             Self::Linear => phase,
-            // CSS `ease` (Vue's `.cs-spin`): solve the x coordinate first.
-            Self::Eased => {
-                let sample = |t: f32, a: f32, b: f32| {
-                    3. * (1. - t).powi(2) * t * a + 3. * (1. - t) * t * t * b + t.powi(3)
-                };
-                let (mut low, mut high) = (0., 1.);
-                for _ in 0..12 {
-                    let mid = (low + high) / 2.;
-                    if sample(mid, 0.25, 0.25) < phase {
-                        low = mid;
-                    } else {
-                        high = mid;
-                    }
-                }
-                sample((low + high) / 2., 0.1, 1.)
-            }
+            // CSS `ease-in`: accelerating, for the running indicator.
+            Self::Accelerate => bezier_phase(phase, 0.42, 0., 1., 1.),
+            // CSS `ease` (Vue's `.cs-spin`).
+            Self::Eased => bezier_phase(phase, 0.25, 0.1, 0.25, 1.),
         }
     }
+}
+
+/// Solves a cubic-bezier timing function for one normalized `phase`.
+fn bezier_phase(phase: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    let sample = |t: f32, a: f32, b: f32| {
+        3. * (1. - t).powi(2) * t * a + 3. * (1. - t) * t * t * b + t.powi(3)
+    };
+    let (mut low, mut high) = (0., 1.);
+    for _ in 0..12 {
+        let mid = (low + high) / 2.;
+        if sample(mid, x1, x2) < phase {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    sample((low + high) / 2., y1, y2)
 }
 
 impl Icon {
@@ -170,7 +179,7 @@ impl RenderOnce for Icon {
             if let Some((id, curve)) = self.spin {
                 let seconds = match curve {
                     Spin::Linear => 2,
-                    Spin::Eased => 1,
+                    Spin::Accelerate | Spin::Eased => 1,
                 };
                 return icon
                     .with_animation(

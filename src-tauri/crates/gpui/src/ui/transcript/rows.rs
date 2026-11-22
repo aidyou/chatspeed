@@ -81,18 +81,19 @@ pub(crate) fn activity_group(
     cx: &App,
 ) -> AnyElement {
     let muted = cx.theme().muted_foreground;
+    // The press hugs the icon and the summary; the rest of the line stays inert.
     let mut header = h_flex()
         .id(SharedString::from(group.key.clone()))
         .group("activity-header")
-        .w_full()
+        .flex_none()
+        .max_w_full()
         .min_w_0()
         .items_center()
         .gap(px(8.))
         .h(px(26.))
-        .pl_2()
+        .px(px(6.))
         .rounded(px(6.))
-        .cursor_pointer()
-        .hover(|style| style.bg(cx.theme().muted));
+        .cursor_pointer();
     let primary = cx.theme().primary;
     let mut title = h_flex()
         .relative()
@@ -199,11 +200,19 @@ pub(crate) fn activity_group(
                     .color(muted),
                 ),
         )
+        .tooltip(crate::ui::tip(group.summary.clone()))
         .on_click(on_toggle);
     v_flex()
         .w_full()
         .min_w_0()
-        .child(header)
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .pl(px(2.))
+                .child(header),
+        )
         .when_some(items, |body, items| {
             body.child(
                 v_flex()

@@ -765,7 +765,10 @@ fn child_card(
             Icon::new("loading")
                 .size(10.)
                 .color(color)
-                .spin(SharedString::from(format!("status-child-spin-{}", card.key)), crate::ui::icon::Spin::Eased),
+                .spin(
+                    SharedString::from(format!("status-child-spin-{}", card.key)),
+                    crate::ui::icon::Spin::Accelerate,
+                ),
         );
     }
     pill_row = pill_row.child(card.status_label.clone());
@@ -1595,7 +1598,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                     let mut icon_element = Icon::new(icon).size(14.).color(color);
                     if status == "in_progress" {
                         icon_element = icon_element
-                            .spin(("status-todo-spin", index), crate::ui::icon::Spin::Linear);
+                            .spin(("status-todo-spin", index), crate::ui::icon::Spin::Accelerate);
                     }
                     let row = h_flex()
                         .w_full()
@@ -1706,7 +1709,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                                         .color(status_color)
                                         .spin(
                                             ("status-op-spin", index),
-                                            crate::ui::icon::Spin::Linear,
+                                            crate::ui::icon::Spin::Accelerate,
                                         )
                                         .into_any_element()
                                 } else {
@@ -1766,8 +1769,10 @@ fn render_status(live: Option<Live>, cx: &App) -> AnyElement {
         muted
     };
     let mut icon = Icon::new(live.icon).size(14.).color(color);
-    if live.icon == "reasoning" {
-        icon = icon.spin("live-reasoning-spin", super::icon::Spin::Linear);
+    match live.icon {
+        "reasoning" => icon = icon.spin("live-reasoning-spin", super::icon::Spin::Linear),
+        "loading" => icon = icon.spin("live-running-spin", super::icon::Spin::Accelerate),
+        _ => {}
     }
     h_flex()
         .w_full()

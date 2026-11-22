@@ -18,6 +18,14 @@ pub(crate) fn chrome_label(text: impl Into<SharedString>) -> ChromeLabel {
     ChromeLabel(text.into())
 }
 
+/// A plain-text hover hint, the native counterpart of Vue's `title`/`el-tooltip`.
+pub(crate) fn tip(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    move |window, cx| gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+}
+
 impl RenderOnce for ChromeLabel {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let style = window.text_style();
@@ -52,7 +60,7 @@ pub(crate) fn running_badge(label: String, id: impl Into<ElementId>, cx: &App) -
             Icon::new("loading")
                 .size(12.)
                 .color(color)
-                .spin(id, icon::Spin::Eased),
+                .spin(id, icon::Spin::Accelerate),
         )
         .child(chrome_label(label))
 }

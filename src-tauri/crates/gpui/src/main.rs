@@ -3604,9 +3604,11 @@ impl Observer {
             || tool.diff.is_some()
             || tool.command.is_some()
             || tool.arguments.is_some();
+        // The press target is the icon and its text, not the empty rest of the line.
         let mut title = h_flex()
             .id(SharedString::from(detail_key.clone()))
-            .w_full()
+            .flex_none()
+            .max_w_full()
             .min_w_0()
             .items_center()
             .gap_2()
@@ -3668,15 +3670,16 @@ impl Observer {
             title = title
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle(target_key.clone(), cx)));
         }
-        let mut body = v_flex().w_full().min_w_0().cursor_pointer().child(title);
+        let mut body = v_flex().w_full().min_w_0().child(title);
         if !open {
+            let summary_text = tool.summary.clone();
             let mut summary = h_flex()
                 .id(SharedString::from(format!("{detail_key}:summary")))
-                .w_full()
+                .flex_none()
+                .max_w_full()
                 .min_w_0()
                 .items_start()
-                .gap_1()
-                .pl_6();
+                .gap_1();
             summary = summary
                 .child(
                     div()
@@ -3705,14 +3708,15 @@ impl Observer {
                         .child(t!("click_to_expand").to_string()),
                 );
             }
-            if !tool.summary.is_empty() {
+            if !summary_text.is_empty() {
+                summary = summary.tooltip(crate::ui::tip(summary_text));
                 if expandable {
                     let target = tool.detail_key.clone();
-                    summary = summary.on_click(
+                    summary = summary.cursor_pointer().on_click(
                         cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)),
                     );
                 }
-                body = body.child(summary);
+                body = body.child(h_flex().w_full().min_w_0().pl_6().child(summary));
             }
         } else if pending && tool.choices.is_empty() && tool.name != "ask_user" {
             // The approval card owns the diff/command/plan while pending, so the
@@ -4010,7 +4014,7 @@ impl Observer {
                     .text_color(cx.theme().muted_foreground)
                     .child(Icon::new("loading").size(14.).color(primary).spin(
                         SharedString::from(format!("{}:running", tool.detail_key)),
-                        ui::Spin::Eased,
+                        ui::Spin::Accelerate,
                     ))
                     .child(t!("executing").into_owned()),
             );
@@ -4352,7 +4356,7 @@ impl Observer {
                 Icon::new("loading")
                     .size(10.)
                     .color(tint)
-                    .spin("child-status-spin", ui::Spin::Linear),
+                    .spin("child-status-spin", ui::Spin::Accelerate),
             );
         }
         pill = pill.child(label);

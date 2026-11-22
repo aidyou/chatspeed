@@ -77,6 +77,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                         .size(16.)
                         .color(if can_send { accent } else { muted }),
                 )
+                .tooltip(crate::ui::tip(t!("send").to_string()))
                 .on_click(cx.listener(|this, _, window, cx| this.send_message(window, cx))),
         )
         .into_any_element()
@@ -162,8 +163,9 @@ fn pill(
                 .max_w(px(160.))
                 .overflow_hidden()
                 .text_ellipsis()
-                .child(crate::ui::chrome_label(label)),
+                .child(crate::ui::chrome_label(label.clone())),
         )
+        .tooltip(crate::ui::tip(label))
         .when(caret, |row| {
             row.child(Icon::new("caret-down").size(10.).color(color))
         })
@@ -564,6 +566,7 @@ fn quick_actions(
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new("add").size(14.).color(muted))
+        .tooltip(crate::ui::tip(t!("quick_actions").to_string()))
         .when(active_count > 0, |button| {
             button.child(
                 div()

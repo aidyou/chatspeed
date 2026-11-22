@@ -102,11 +102,12 @@ pub(crate) fn finish_task_card(
     let mut label = h_flex()
         .id(SharedString::from(view.key.clone()))
         .group("completion-header")
-        .w_full()
+        .flex_none()
+        .max_w_full()
         .min_w_0()
         .items_center()
         .gap_2()
-        .pl_2()
+        .px(px(2.))
         .child(Icon::new(icon).size(15.).color(color))
         .child(
             div()
@@ -123,6 +124,7 @@ pub(crate) fn finish_task_card(
                 cx.theme().muted_foreground,
             ))
             .cursor_pointer()
+            .tooltip(crate::ui::tip(view.label.clone()))
             .on_click(on_toggle);
     }
     let mut body = v_flex().w_full().min_w_0().gap_2().child(label);

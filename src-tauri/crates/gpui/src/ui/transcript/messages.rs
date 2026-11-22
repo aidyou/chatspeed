@@ -106,44 +106,48 @@ pub(crate) fn thought(
     cx: &App,
 ) -> AnyElement {
     let muted = cx.theme().muted_foreground;
+    // The press only covers the icon and the label: Vue leaves the rest of the
+    // line inert instead of turning the whole row into a button.
+    let header = h_flex()
+        .id(SharedString::from(key))
+        .group("thought-header")
+        .flex_none()
+        .max_w_full()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .h(px(24.))
+        .px(px(2.))
+        .rounded(px(4.))
+        .cursor_pointer()
+        .child({
+            let bulb = Icon::new("reasoning").size(14.).color(muted);
+            if live && !open {
+                bulb.spin("thought-spin", crate::ui::icon::Spin::Linear)
+            } else {
+                bulb
+            }
+        })
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(13.))
+                .line_height(px(18.))
+                .text_color(muted)
+                .italic()
+                .child(crate::ui::chrome_label(title.clone())),
+        )
+        .child(crate::ui::disclosure_caret("thought-header", open, muted))
+        .tooltip(crate::ui::tip(title))
+        .on_click(on_toggle);
     v_flex()
         .w_full()
         .min_w_0()
         .gap_2()
-        .child(
-            h_flex()
-                .id(SharedString::from(key))
-                .group("thought-header")
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .h(px(24.))
-                .cursor_pointer()
-                .hover(|style| style.bg(cx.theme().muted))
-                .child({
-                    let bulb = Icon::new("reasoning").size(14.).color(muted);
-                    if live && !open {
-                        bulb.spin("thought-spin", crate::ui::icon::Spin::Linear)
-                    } else {
-                        bulb
-                    }
-                })
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .text_size(px(13.))
-                        .line_height(px(18.))
-                        .text_color(muted)
-                        .italic()
-                        .child(crate::ui::chrome_label(title)),
-                )
-                .child(crate::ui::disclosure_caret("thought-header", open, muted))
-                .on_click(on_toggle),
-        )
+        .child(h_flex().w_full().min_w_0().items_center().child(header))
         .when(open, |view| {
             view.child(
                 div()
