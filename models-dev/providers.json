@@ -732,7 +732,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 80,
+      "modelCount": 81,
       "name": "Deep Infra",
       "responses": false
     },
@@ -822,7 +822,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 389,
+      "modelCount": 388,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -1521,7 +1521,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 506,
+      "modelCount": 507,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1875,7 +1875,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 614,
+      "modelCount": 613,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -3032,7 +3032,7 @@
       "documentationUrl": "https://docs.vivgrid.com/models",
       "id": "vivgrid",
       "logo": "https://models.dev/logos/vivgrid.svg",
-      "modelCount": 42,
+      "modelCount": 45,
       "name": "Vivgrid",
       "protocol": "openai",
       "responses": false
@@ -3291,9 +3291,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "b7f48c971f688d49e374f12066a3ddeea5e3cc695d088b8b389a017e7ddf80e6",
-    "generatedAt": "2026-11-21T11:05:49Z",
+    "catalogSha256": "a47f47d0bf51393d1faef452f43bccd1a7cc71bc1fa89ab4cf82023cdac58174",
+    "generatedAt": "2026-11-22T11:28:13Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "80aacae4596cdd508ca1640cc9b5b9632c880274"
+    "revision": "482544f6541fd88f0506b713fb85712ea6b8e99a"
   }
 }
