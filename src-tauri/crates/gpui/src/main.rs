@@ -593,6 +593,8 @@ struct Observer {
     model_config_proxy: bool,
     /// Active tab of the tool configuration dialog.
     tool_panel_tab: usize,
+    /// Open new-task dialog; `true` inherits the current workflow configuration.
+    new_task_inherit: Option<bool>,
     skills_draft: Option<SkillsDraft>,
     tool_draft: Option<ToolDraft>,
     /// Image files attached to the next message, shown above the box.
@@ -932,6 +934,7 @@ impl Observer {
             model_config_slot: "act".into(),
             model_config_proxy: false,
             tool_panel_tab: 0,
+            new_task_inherit: None,
             skills_draft: None,
             tool_draft: None,
             attachments: Vec::new(),
@@ -1738,6 +1741,245 @@ impl Observer {
     }
 
     /// Clears the window back to an unsent session; the first message creates it.
+    /// Opens Vue's new-task dialog, which chooses between inheriting the current
+    /// configuration and creating from the agent defaults.
+    fn open_new_task_dialog(&mut self, cx: &mut Context<Self>) {
+        self.new_task_inherit = Some(self.selected.is_some());
+        cx.notify();
+    }
+
+    fn close_new_task_dialog(&mut self, cx: &mut Context<Self>) {
+        self.new_task_inherit = None;
+        cx.notify();
+    }
+
+    /// The configuration keys a new task inherits from the current one.
+    fn inherited_workflow_config(&self) -> Option<String> {
+        const KEYS: [&str; 19] = [
+            "allowedPaths",
+            "approvalLevel",
+            "autoApprove",
+            "autoApprovePlan",
+            "autoCompress",
+            "availableTools",
+            "finalAudit",
+            "finalReviewMode",
+            "models",
+            "mcpTools",
+            "personality",
+            "phase",
+            "sandboxConfig",
+            "sandboxExecutionMode",
+            "sandboxOverride",
+            "sandboxSchemeId",
+            "selectedSkills",
+            "shellPolicy",
+            "skillEnabled",
+        ];
+        let config = self.agent_config();
+        let mut inherited = serde_json::Map::new();
+        for key in KEYS {
+            if let Some(value) = config.get(key).filter(|value| !value.is_null()) {
+                inherited.insert(key.to_owned(), value.clone());
+            }
+        }
+        (!inherited.is_empty())
+            .then(|| serde_json::to_string(&Value::Object(inherited)).unwrap_or_default())
+    }
+
+    fn create_new_task(&mut self, inherit: bool, cx: &mut Context<Self>) {
+        if self.options.demo {
+            return;
+        }
+        let has_current = self.selected.is_some();
+        let inheriting = inherit && has_current;
+        let agent_id = self.current_agent_id().or_else(|| {
+            self.agents
+                .iter()
+                .find(|agent| agent["role"] == "primary")
+                .or_else(|| self.agents.first())
+                .and_then(|agent| agent["id"].as_str())
+                .map(str::to_owned)
+        });
+        let allowed_paths = inheriting.then(|| self.agent_config()["allowedPaths"].clone());
+        let inherited_agent_config = inheriting
+            .then(|| self.inherited_workflow_config())
+            .flatten();
+        self.new_task_inherit = None;
+        if self
+            .worker
+            .commands
+            .try_send(Command::CreateWorkflow {
+                agent_id,
+                allowed_paths,
+                inherited_agent_config,
+            })
+            .is_err()
+        {
+            self.show_toast(
+                ToastKind::Error,
+                t!("new_task_create_failed").to_string(),
+                cx,
+            );
+            return;
+        }
+        self.reset_new_session(cx);
+    }
+
+    fn new_task_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(inherit) = self.new_task_inherit else {
+            return div().into_any_element();
+        };
+        let border = cx.theme().border;
+        let foreground = cx.theme().foreground;
+        let muted = cx.theme().muted_foreground;
+        let primary = cx.theme().primary;
+        let has_current = self.selected.is_some();
+        let mut options = v_flex().w_full().min_w_0().gap_2();
+        for (value, title, description, enabled) in [
+            (
+                true,
+                t!("new_task_inherit_title").to_string(),
+                t!("new_task_inherit_description").to_string(),
+                has_current,
+            ),
+            (
+                false,
+                t!("new_task_default_title").to_string(),
+                t!("new_task_default_description").to_string(),
+                true,
+            ),
+        ] {
+            let selected = inherit == value;
+            options = options.child(
+                v_flex()
+                    .id(if value { "new-task-inherit" } else { "new-task-default" })
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(2.))
+                    .p_3()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if selected { primary } else { border })
+                    .bg(cx.theme().background)
+                    .when(enabled, |card| card.cursor_pointer())
+                    .when(selected, |card| card.bg(primary.opacity(0.06)))
+                    .when(!enabled, |card| card.opacity(0.5))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(foreground)
+                                    .child(title),
+                            )
+                            .child(div().flex_1())
+                            .when(selected, |row| {
+                                row.child(Icon::new("check").size(14.).color(primary))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(muted)
+                            .child(description),
+                    )
+                    .when(enabled, |card| {
+                        card.on_click(cx.listener(move |this, _, _, cx| {
+                            this.new_task_inherit = Some(value);
+                            cx.notify();
+                        }))
+                    }),
+            );
+        }
+        div()
+            .absolute()
+            .top(px(0.))
+            .left(px(0.))
+            .right(px(0.))
+            .bottom(px(0.))
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui_kit::black().opacity(0.32))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.close_new_task_dialog(cx)),
+            )
+            .child(
+                v_flex()
+                    .id("new-task-dialog")
+                    .w(px(420.))
+                    .min_w_0()
+                    .gap_3()
+                    .p_4()
+                    .rounded(px(12.))
+                    .border_1()
+                    .border_color(border)
+                    .bg(cx.theme().background)
+                    .shadow_md()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(foreground)
+                            .child(t!("new_task_dialog_title").to_string()),
+                    )
+                    .child(options)
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(muted)
+                            .child(t!("new_task_dialog_description").to_string()),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("new-task-cancel")
+                                    .px(px(14.))
+                                    .py(px(5.))
+                                    .rounded(px(6.))
+                                    .border_1()
+                                    .border_color(border)
+                                    .cursor_pointer()
+                                    .text_size(px(14.))
+                                    .text_color(foreground)
+                                    .hover(|style| style.bg(cx.theme().muted))
+                                    .child(t!("action_cancel").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_new_task_dialog(cx)
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("new-task-create")
+                                    .px(px(14.))
+                                    .py(px(5.))
+                                    .rounded(px(6.))
+                                    .bg(primary)
+                                    .cursor_pointer()
+                                    .text_size(px(14.))
+                                    .text_color(cx.theme().primary_foreground)
+                                    .hover(|style| style.opacity(0.9))
+                                    .child(t!("confirm").to_string())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.create_new_task(inherit, cx)
+                                    })),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn start_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_new_session(cx);
         self.restore_draft(window, cx);
@@ -2604,6 +2846,13 @@ impl Observer {
                         }
                     }
                 }
+                UpdateKind::WorkflowCreated(result) => match result {
+                    Ok(id) => {
+                        self.new_task_inherit = None;
+                        self.select(id, cx);
+                    }
+                    Err(message) => self.show_toast(ToastKind::Error, message, cx),
+                },
                 UpdateKind::Opened(id) => {
                     self.start_pending = false;
                     self.start_draft = None;
@@ -5249,6 +5498,9 @@ impl Render for Observer {
             .children(status_overlay);
         if self.quick_panel.is_some() {
             shell = shell.child(ui::composer::panels::overlay(self, cx));
+        }
+        if self.new_task_inherit.is_some() {
+            shell = shell.child(self.new_task_dialog(cx));
         }
         if let Some(toast) = &self.toast {
             shell = shell.child(toast.render(cx));

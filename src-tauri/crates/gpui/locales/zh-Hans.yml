@@ -62,6 +62,7 @@ collapse: 收起
 collapse_sidebar: 折叠侧栏
 completed: 已完成
 composer_placeholder: 输入下一步指令，Enter 发送
+confirm: "确认"
 connected: 已连接
 connecting: 未连接 — 正在重试发现
 continue_workflow: 继续
@@ -162,6 +163,13 @@ model_slot_vision: "视觉模型"
 model_source_provider: "供应商"
 model_source_proxy: "代理"
 more: 更多
+new_task_create_failed: "无法创建新任务"
+new_task_default_description: "使用当前选择的智能体默认配置创建。"
+new_task_default_title: "使用智能体默认配置"
+new_task_dialog_description: "选择新任务要使用的配置。"
+new_task_dialog_title: "创建新任务"
+new_task_inherit_description: "复用当前任务的智能体、授权目录和任务偏好。"
+new_task_inherit_title: "继承当前任务配置"
 new_task: 新建任务
 no_sessions: 暂无工作流会话
 not_supported_native: 原生窗口暂未支持

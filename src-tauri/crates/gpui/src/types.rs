@@ -260,6 +260,12 @@ pub enum Command {
         attached_context: Option<String>,
         metadata: Option<Value>,
     },
+    /// Creates an empty workflow, Vue's new-task dialog target.
+    CreateWorkflow {
+        agent_id: Option<String>,
+        allowed_paths: Option<Value>,
+        inherited_agent_config: Option<String>,
+    },
     /// Lists one directory for the authorized-path tree.
     ListDir {
         path: String,
@@ -365,6 +371,7 @@ pub enum UpdateKind {
     AutomationRuns(String, Result<Vec<AutomationRun>, String>),
     AutomationCreated(Result<(), String>),
     Sessions(Vec<Session>),
+    WorkflowCreated(Result<String, String>),
     Snapshot(Page),
     Older(Page),
     TurnUnconfirmed { client_id: String, message: String },

@@ -62,6 +62,7 @@ collapse: Collapse
 collapse_sidebar: Collapse sidebar
 completed: Completed
 composer_placeholder: Ask for the next step, Enter to send
+confirm: "Confirm"
 connected: Connected
 connecting: Disconnected — retrying discovery
 continue_workflow: Continue
@@ -162,6 +163,13 @@ model_slot_vision: "Vision model"
 model_source_provider: "Provider"
 model_source_proxy: "Proxy"
 more: More
+new_task_create_failed: "Could not create the new task"
+new_task_default_description: "Create a task with the selected agent's default configuration."
+new_task_default_title: "Use agent defaults"
+new_task_dialog_description: "Choose the configuration for the new task."
+new_task_dialog_title: "Create New Task"
+new_task_inherit_description: "Reuse the current task's agent, authorized directories, and task preferences."
+new_task_inherit_title: "Inherit current task configuration"
 new_task: New task
 no_sessions: No workflow sessions yet
 not_supported_native: Not available in the native window yet

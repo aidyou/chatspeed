@@ -62,6 +62,7 @@ collapse: 收合
 collapse_sidebar: 摺疊側欄
 completed: 已完成
 composer_placeholder: 輸入下一步指令，Enter 傳送
+confirm: "確認"
 connected: 已連接
 connecting: 未連接 — 正在重試發現
 continue_workflow: 繼續
@@ -162,6 +163,13 @@ model_slot_vision: "視覺模型"
 model_source_provider: "供應商"
 model_source_proxy: "代理"
 more: 更多
+new_task_create_failed: "無法建立新任務"
+new_task_default_description: "使用目前選取智能體的預設設定建立。"
+new_task_default_title: "使用智能體預設設定"
+new_task_dialog_description: "選擇新任務要使用的設定。"
+new_task_dialog_title: "建立新任務"
+new_task_inherit_description: "重用目前任務的智能體、授權目錄與任務偏好。"
+new_task_inherit_title: "繼承目前任務設定"
 new_task: 新建任務
 no_sessions: 暫無工作流會話
 not_supported_native: 原生視窗暫未支援

@@ -597,6 +597,27 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
+            Command::CreateWorkflow {
+                agent_id,
+                allowed_paths,
+                inherited_agent_config,
+            } => {
+                if options.demo {
+                    continue;
+                }
+                let options = options.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let result = create_workflow(
+                        &options,
+                        agent_id,
+                        allowed_paths,
+                        inherited_agent_config,
+                    )
+                    .await;
+                    let _ = send(&tx, 0, UpdateKind::WorkflowCreated(result)).await;
+                });
+            }
             Command::StartNew {
                 agent_id,
                 prompt,
@@ -1056,6 +1077,54 @@ fn idempotency_key(command: &str) -> String {
 ///
 /// Matches the Vue new-workflow flow: create carries the query the list shows,
 /// start carries the first prompt the engine runs.
+/// Creates an empty workflow and returns its session id. The prompt is sent by
+/// the composer afterwards, so nothing is started here.
+async fn create_workflow(
+    options: &Options,
+    agent_id: Option<String>,
+    allowed_paths: Option<Value>,
+    inherited_agent_config: Option<String>,
+) -> Result<String, String> {
+    let client = native::connect(options)
+        .await
+        .ok_or_else(|| "runtime unavailable".to_string())?;
+    let agent_id = match agent_id {
+        Some(id) => id,
+        None => client
+            .get("/control/v1/agents")
+            .await
+            .map_err(|error| error.to_string())?
+            .as_array()
+            .and_then(|agents| {
+                agents
+                    .iter()
+                    .find(|agent| agent["role"] == "primary")
+                    .or_else(|| agents.first())
+            })
+            .and_then(|agent| agent["id"].as_str())
+            .ok_or_else(|| "no agent configured".to_string())?
+            .to_owned(),
+    };
+    let created = client
+        .post(
+            "/control/v1/workflows",
+            &json!({
+                "user_query": "",
+                "agent_id": agent_id,
+                "allowed_paths": allowed_paths,
+                "auto_approve_plan": null,
+                "final_audit": null,
+                "inherited_agent_config": inherited_agent_config,
+            }),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    created["session_id"]
+        .as_str()
+        .ok_or_else(|| "runtime returned no session id".to_string())
+        .map(str::to_owned)
+}
+
 async fn start_session(
     options: &Options,
     agent_id: Option<String>,

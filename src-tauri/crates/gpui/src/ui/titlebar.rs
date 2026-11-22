@@ -475,7 +475,7 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
             "new-chat",
             secondary,
             skin.hover,
-            cx.listener(|this, _, window, cx| this.start_new_session(window, cx)),
+            cx.listener(|this, _, _, cx| this.open_new_task_dialog(cx)),
         ))
         .child(icon_button(
             "rewind",
