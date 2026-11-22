@@ -7,6 +7,18 @@ use serde_json::Value;
 /// Runtime configuration key the desktop stores the workflow window size under.
 pub const WORKFLOW_WINDOW_SIZE_KEY: &str = "workflow_window_size";
 
+/// Global status-panel positions shared by every conversation.
+pub const STATUS_PANEL_POSITION_KEY: &str = "workflow_status_panel_position";
+
+/// Reads one saved status-panel position in logical pixels.
+pub fn saved_status_panel_position(config: &Value, expanded: bool) -> Option<(f32, f32)> {
+    let slot = if expanded { "expanded" } else { "collapsed" };
+    let saved = config.get(STATUS_PANEL_POSITION_KEY)?.get(slot)?;
+    let x = saved.get("x")?.as_f64()? as f32;
+    let y = saved.get("y")?.as_f64()? as f32;
+    (x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
 /// Tauri saves the physical outer origin and the monitor name together.
 pub fn saved_window_position(config: &Value) -> Option<(i32, i32, &str)> {
     let saved = config.get("workflow_window_position")?;
@@ -59,6 +71,25 @@ pub fn system_locale() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_panel_positions_are_mode_specific() {
+        let config = serde_json::json!({
+            "workflow_status_panel_position": {
+                "collapsed": {"x": 800.0, "y": 120.0},
+                "expanded": {"x": 40.0, "y": 60.0}
+            }
+        });
+        assert_eq!(
+            saved_status_panel_position(&config, false),
+            Some((800.0, 120.0))
+        );
+        assert_eq!(
+            saved_status_panel_position(&config, true),
+            Some((40.0, 60.0))
+        );
+        assert_eq!(saved_status_panel_position(&serde_json::json!({}), false), None);
+    }
 
     #[test]
     fn remembered_window_size_requires_a_usable_pair() {

@@ -48,6 +48,9 @@ pub struct Model {
     pub sub_agent_progress: BTreeMap<String, Value>,
     pub current_context_tokens: Option<u64>,
     pub max_context_tokens: Option<u64>,
+    /// A live `context_usage` event owns the token figures. Periodic snapshot
+    /// reconciliation must not replace them with the persisted, lagging copy.
+    context_usage_from_event: bool,
     pub queued_messages: Vec<QueuedMessage>,
     finished_queue_ids: BTreeSet<String>,
     snapshot_queue_ids: BTreeSet<String>,
@@ -144,8 +147,23 @@ impl Model {
             self.roots = crate::types::workflow_roots(&page.workflow);
         }
         let context = &page.execution_context;
-        self.current_context_tokens = context["current_context_tokens"].as_u64().or_else(|| context["currentContextTokens"].as_u64());
-        self.max_context_tokens = context["max_context_tokens"].as_u64().or_else(|| context["maxContextTokens"].as_u64());
+        let snapshot_current = context["current_context_tokens"]
+            .as_u64()
+            .or_else(|| context["currentContextTokens"].as_u64());
+        let snapshot_max = context["max_context_tokens"]
+            .as_u64()
+            .or_else(|| context["maxContextTokens"].as_u64());
+        // Snapshots are fetched every few seconds to reconcile messages. Their
+        // execution context is persisted at checkpoints, so it can be much
+        // older than the live `context_usage` stream; letting it win made the
+        // panel alternate between two percentages.
+        if self.context_usage_from_event {
+            self.current_context_tokens = self.current_context_tokens.or(snapshot_current);
+            self.max_context_tokens = self.max_context_tokens.or(snapshot_max);
+        } else {
+            self.current_context_tokens = snapshot_current;
+            self.max_context_tokens = snapshot_max;
+        }
         self.execution_state = context["state"].as_str().unwrap_or("pending").to_ascii_lowercase();
         self.tail_rewind_kind = page.tail_rewind_kind.unwrap_or_default();
         self.can_rewind_tail = page.can_rewind_tail;
@@ -331,6 +349,9 @@ impl Model {
         self.tool_started.clear();
         self.tool_finished.clear();
         self.live_overflow = false;
+        // The stream restart is followed by a fresh snapshot; let it seed the
+        // token figures again until the next live usage event arrives.
+        self.context_usage_from_event = false;
     }
 
     fn delta(&mut self, text: &str, reasoning: bool) {
@@ -382,11 +403,16 @@ impl Model {
                 }
             }
             "context_usage" => {
-                if let Some(tokens) = event["current_context_tokens"].as_u64().or_else(|| event["total_tokens"].as_u64()) {
+                if let Some(tokens) = event["current_context_tokens"]
+                    .as_u64()
+                    .or_else(|| event["total_tokens"].as_u64())
+                {
                     self.current_context_tokens = Some(tokens);
+                    self.context_usage_from_event = true;
                 }
                 if let Some(tokens) = event["max_context_tokens"].as_u64() {
                     self.max_context_tokens = Some(tokens);
+                    self.context_usage_from_event = true;
                 }
             }
             "chunk" | "reasoning_chunk" => self.delta(
@@ -552,6 +578,14 @@ impl Model {
             "compression_applied" => {
                 self.compressing = false;
                 self.compression_message.clear();
+                if let Some(tokens) = event["current_context_tokens"].as_u64() {
+                    self.current_context_tokens = Some(tokens);
+                    self.context_usage_from_event = true;
+                }
+                if let Some(tokens) = event["max_context_tokens"].as_u64() {
+                    self.max_context_tokens = Some(tokens);
+                    self.context_usage_from_event = true;
+                }
             }
             _ => {}
         }
@@ -621,6 +655,52 @@ mod tests {
         assert!(model.todo_list.is_empty());
         assert_eq!(model.current_context_tokens, Some(25));
         assert_eq!(model.max_context_tokens, Some(100));
+    }
+
+    #[test]
+    fn live_context_usage_survives_periodic_snapshot_reconciliation() {
+        let mut model = Model::default();
+        let page = |current: u64| Page {
+            execution_context: json!({
+                "current_context_tokens": current,
+                "max_context_tokens": 128000,
+            }),
+            ..Page::default()
+        };
+        model.page(page(1000), false);
+        assert_eq!(model.current_context_tokens, Some(1000));
+        model.event(json!({
+            "type": "context_usage",
+            "current_context_tokens": 48000,
+            "max_context_tokens": 128000,
+        }));
+        // The five-second reconciliation snapshot is persisted at a checkpoint
+        // and must not drag the live value back down.
+        model.page(page(9000), false);
+        assert_eq!(model.current_context_tokens, Some(48000));
+        assert_eq!(model.max_context_tokens, Some(128000));
+        // A reconnect drops the live claim so the next snapshot seeds it again.
+        model.reset_live();
+        model.page(page(7000), false);
+        assert_eq!(model.current_context_tokens, Some(7000));
+    }
+
+    #[test]
+    fn compression_applied_replaces_the_context_figures() {
+        let mut model = Model::default();
+        model.event(json!({
+            "type": "context_usage",
+            "current_context_tokens": 90000,
+            "max_context_tokens": 128000,
+        }));
+        model.event(json!({
+            "type": "compression_applied",
+            "compressed_until_message_id": 12,
+            "current_context_tokens": 12000,
+            "max_context_tokens": 128000,
+        }));
+        assert_eq!(model.current_context_tokens, Some(12000));
+        assert_eq!(model.max_context_tokens, Some(128000));
     }
 
     #[test]

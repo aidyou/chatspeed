@@ -62,15 +62,14 @@ pub(crate) fn snapshot_card(
                 .when(snapshot.preview.is_empty(), |view| {
                     view.child(div().flex_1())
                 })
-                .child(
-                    Icon::new(if open {
-                        "double-arrow-up"
-                    } else {
-                        "double-arrow-down"
-                    })
-                    .size(14.)
-                    .color(muted),
-                )
+                .child(crate::ui::rotating_icon(
+                    snapshot.key.clone(),
+                    "double-arrow-down",
+                    14.,
+                    muted,
+                    if open { 0. } else { 180. },
+                    if open { 180. } else { 0. },
+                ))
                 .on_click(on_toggle),
         );
     if let Some(markdown) = markdown {
@@ -127,7 +126,13 @@ pub(crate) fn finish_task_card(
             .tooltip(crate::ui::tip(view.label.clone()))
             .on_click(on_toggle);
     }
-    let mut body = v_flex().w_full().min_w_0().gap_2().child(label);
+    // A column's default cross-axis stretch would make the press target span the
+    // full row. Keep the header in a row so only its icon and label are hit.
+    let mut body = v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_2()
+        .child(h_flex().w_full().min_w_0().child(label));
     if open {
         if let Some(cost) = &view.cost {
             body = body.child(cost_card(cost, cx));

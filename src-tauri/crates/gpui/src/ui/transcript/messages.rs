@@ -35,7 +35,7 @@ pub(crate) fn user_bubble(
         })
         .child(view.text.clone());
     let toggle = h_flex()
-        .id(SharedString::from(toggle_key))
+        .id(SharedString::from(toggle_key.clone()))
         .absolute()
         .right_1()
         .bottom_1()
@@ -46,15 +46,14 @@ pub(crate) fn user_bubble(
         .rounded(px(4.))
         .bg(cx.theme().muted)
         .cursor_pointer()
-        .child(
-            Icon::new(if expanded {
-                "double-arrow-up"
-            } else {
-                "double-arrow-down"
-            })
-            .size(12.)
-            .color(cx.theme().muted_foreground),
-        )
+        .child(crate::ui::rotating_icon(
+            toggle_key.clone(),
+            "double-arrow-down",
+            12.,
+            cx.theme().muted_foreground,
+            if expanded { 0. } else { 180. },
+            if expanded { 180. } else { 0. },
+        ))
         .on_click(on_toggle);
     h_flex()
         .w_full()

@@ -109,6 +109,7 @@ pub fn approval_card(
                 .items_start()
                 .gap_2()
                 .max_h(px(240.))
+                .id("approval-shell-command")
                 .overflow_y_scroll()
                 .rounded(px(6.))
                 .border_1()
@@ -168,7 +169,9 @@ pub fn approval_card(
         button::{Button, ButtonVariants},
         input::Textarea,
     };
-    let mut actions = h_flex().w_full().flex_wrap().gap_2().justify_end();
+    // Element Plus default buttons: 32px tall, 15px side padding, 14px text,
+    // with a 12px sibling gap; `round` turns them into pills.
+    let mut actions = h_flex().w_full().flex_wrap().gap(px(12.)).justify_end();
     let mut buttons = vec![
         (
             "approval-reject",
@@ -197,7 +200,12 @@ pub fn approval_card(
     }
     for (id, decision, label) in buttons {
         let dispatch = dispatch.clone();
-        let button = Button::new(id).label(label).rounded(px(100.));
+        let button = Button::new(id)
+            .label(label)
+            .h(px(32.))
+            .px(px(15.))
+            .text_size(px(14.))
+            .rounded(px(9999.));
         let button = match decision {
             Decision::Reject => button.outline(),
             Decision::Batch => button.warning(),
@@ -207,11 +215,7 @@ pub fn approval_card(
             actions.child(button.on_click(move |_, window, cx| dispatch(decision, window, cx)));
     }
     let card = if let Some(reason) = reason {
-        card.child(
-            Textarea::new(reason)
-                .w_full()
-                .placeholder(rust_i18n::t!("approval_rejection_reason").into_owned()),
-        )
+        card.child(Textarea::new(reason).bg(super::field_bg(cx)).w_full())
     } else {
         card
     };

@@ -14,12 +14,20 @@ impl ScrollbarInput {
     }
 
     pub(crate) fn overlay(&self, handle: &ScrollHandle) -> impl IntoElement {
+        self.overlay_named(handle, "history-scrollbar")
+    }
+
+    pub(crate) fn overlay_named(
+        &self,
+        handle: &ScrollHandle,
+        id: impl Into<gpui_kit::ElementId>,
+    ) -> impl IntoElement {
         div().absolute().inset_0().child(
             Scrollbar::vertical(&UserScrollHandle {
                 handle: handle.clone(),
                 input: self.clone(),
             })
-            .id("history-scrollbar")
+            .id(id)
             .mode(ScrollbarMode::Scrolling)
             .viewport_from_layout(),
         )

@@ -168,10 +168,10 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     // drop shadow, turning into the accent edge plus a 3px halo on focus. The
     // web stylesheet also stacks a faint gradient, which reads as a heavy wash
     // on a native surface, so the flat `--cs-input-bg-color` is used instead.
-    let input_bg = if observer.appearance_dark {
-        rgb(0x282b2d)
+    let input_bg: Hsla = if observer.appearance_dark {
+        rgb(0x282b2d).into()
     } else {
-        rgb(0xe5e6e5)
+        gpui_kit::white()
     };
     let (edge, shadows) = if focused {
         (
@@ -224,24 +224,26 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                     div()
                         .id("composer-expand")
                         .absolute()
-                        .top(px(4.))
-                        .right(px(6.))
+                        // Vue pins the toggle 2px from the input's top-right;
+                        // the 8px radius keeps its hover surface inside the
+                        // composer's own rounded corner.
+                        .top(px(2.))
+                        .right(px(2.))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .size(px(20.))
-                        .rounded(px(4.))
+                        .size(px(24.))
+                        .rounded(px(8.))
                         .cursor_pointer()
                         .hover(|style| style.bg(hover))
-                        .child(
-                            Icon::new(if expanded {
-                                "double-arrow-down"
-                            } else {
-                                "double-arrow-up"
-                            })
-                            .size(12.)
-                            .color(muted),
-                        )
+                        .child(crate::ui::rotating_icon(
+                            "composer-expand-icon",
+                            "double-arrow-up",
+                            14.,
+                            muted,
+                            if expanded { 0. } else { 180. },
+                            if expanded { 180. } else { 0. },
+                        ))
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_composer_expanded(cx))),
                 ),
         )

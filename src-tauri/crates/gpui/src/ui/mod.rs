@@ -1,6 +1,8 @@
 //! Native workflow window rendering and reusable controls.
 
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
+use gpui_kit::prelude::FluentBuilder;
 
 pub(crate) mod history_scrollbar;
 mod icon;
@@ -9,6 +11,41 @@ pub(crate) mod terminal;
 
 pub use icon::Icon;
 pub(crate) use icon::{IconAssets, Spin};
+
+/// Surfaces an input field uses in the native window. Element Plus paints text
+/// fields white in the light theme; the dark token comes from
+/// `--cs-input-bg-color` (`#282b2d`).
+pub(crate) fn field_bg(cx: &App) -> Hsla {
+    if cx.theme().is_dark() {
+        rgb(0x282b2d).into()
+    } else {
+        gpui_kit::white()
+    }
+}
+
+/// Rotates an icon between two angles when a disclosure state flips.
+///
+/// The animation id includes the target angle, so each toggle starts a fresh
+/// one-shot animation from the previous angle instead of jumping.
+pub(crate) fn rotating_icon(
+    id: impl Into<SharedString>,
+    icon: &'static str,
+    size: f32,
+    color: Hsla,
+    from: f32,
+    to: f32,
+) -> AnyElement {
+    let id = SharedString::from(format!("{}-{to}", id.into()));
+    Icon::new(icon)
+        .size(size)
+        .color(color)
+        .with_animation(
+            id,
+            Animation::new(std::time::Duration::from_millis(160)).with_easing(ease_in_out),
+            move |icon, phase| icon.rotate(from + (to - from) * phase),
+        )
+        .into_any_element()
+}
 
 /// A compact label next to an icon. Keep its optical adjustment out of the row layout.
 #[derive(IntoElement)]
@@ -19,11 +56,26 @@ pub(crate) fn chrome_label(text: impl Into<SharedString>) -> ChromeLabel {
 }
 
 /// A plain-text hover hint, the native counterpart of Vue's `title`/`el-tooltip`.
+///
+/// Element Plus renders tooltips at 12px on a dark surface with a tight 4px
+/// radius. The component library's default is one step larger than the rest of
+/// the titlebar, so the shared helper pins the compact size for every hint.
 pub(crate) fn tip(
     text: impl Into<SharedString>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let text = text.into();
-    move |window, cx| gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+    move |window, cx| {
+        gpui_kit::component::tooltip::Tooltip::new(text.clone())
+            .text_size(px(12.))
+            .line_height(px(18.))
+            .px(px(8.))
+            .py(px(4.))
+            .rounded(px(4.))
+            .border_color(rgb(0x303133))
+            .bg(rgb(0x303133))
+            .text_color(gpui_kit::white())
+            .build(window, cx)
+    }
 }
 
 impl RenderOnce for ChromeLabel {
@@ -72,11 +124,14 @@ pub(super) fn disclosure_caret(group: &'static str, open: bool, color: Hsla) -> 
         .flex_none()
         .invisible()
         .group_hover(group, |style| style.visible())
-        .child(
-            Icon::new(if open { "caret-down" } else { "caret-right" })
-                .size(14.)
-                .color(color),
-        )
+        .child(rotating_icon(
+            format!("disclosure-{group}"),
+            "caret-right",
+            14.,
+            color,
+            if open { 0. } else { 90. },
+            if open { 90. } else { 0. },
+        ))
 }
 
 /// Height of the custom titlebar, matching `--cs-titlebar-height`.
@@ -136,15 +191,17 @@ pub fn icon_button(
     icon: &'static str,
     color: Hsla,
     hover: Hsla,
+    hint: Option<String>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    icon_button_element(id, Icon::new(icon).size(18.).color(color), hover, on_click)
+    icon_button_element(id, Icon::new(icon).size(18.).color(color), hover, hint, on_click)
 }
 
 pub(super) fn icon_button_element(
     id: &'static str,
     icon: Icon,
     hover: Hsla,
+    hint: Option<String>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     div()
@@ -164,6 +221,7 @@ pub(super) fn icon_button_element(
             window.prevent_default();
             cx.stop_propagation();
         })
+        .when_some(hint, |button, text| button.tooltip(tip(text)))
         .on_click(on_click)
         .into_any_element()
 }
@@ -213,6 +271,7 @@ pub fn trigger(element: impl IntoElement) -> Trigger {
 
 pub mod approval;
 pub mod composer;
+pub(crate) mod confirm;
 pub(crate) mod file_editor;
 pub mod file_tree;
 pub mod frame;

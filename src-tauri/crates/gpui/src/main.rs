@@ -9,6 +9,7 @@ use crate::ui::{
     toast::{Toast, ToastKind},
     Icon,
 };
+mod http_client;
 use chatspeed_gpui::{
     chimes::{self, Chime, DecisionKind, PendingDecision, Reminder},
     icons,
@@ -30,6 +31,7 @@ use gpui_kit::{
         input::{InputEvent, InputState, Textarea, TextareaState},
         text::{TextView, TextViewState},
         theme::{Theme, ThemeMode},
+        slider::{SliderEvent, SliderState, SliderValue},
         v_flex, ActiveTheme,
     },
     *,
@@ -440,8 +442,12 @@ struct Observer {
     status_panel_tab: usize,
     status_panel_todos_expanded: bool,
     status_panel_mode: ui::status::PanelMode,
-    status_panel_position: Option<Point<Pixels>>,
+    /// Collapsed (circle/compact) and expanded positions are independent.
+    status_panel_collapsed_position: Option<Point<Pixels>>,
+    status_panel_expanded_position: Option<Point<Pixels>>,
+    status_panel_positions_read: bool,
     status_panel_drag: Option<Point<Pixels>>,
+    confirm: Option<ui::confirm::ConfirmRequest>,
     efficiency_updated_at: Option<Instant>,
     efficiency_report: Option<Result<Value, String>>,
     efficiency_loading: bool,
@@ -451,6 +457,8 @@ struct Observer {
     timeline_scroll: TimelineScroll,
     rows: Vec<Row>,
     markdown: BTreeMap<String, (String, Entity<TextViewState>)>,
+    /// One independent scroll position per rendered diff.
+    diff_scroll: BTreeMap<String, ScrollHandle>,
     expanded: BTreeSet<String>,
     compression_started: Option<Instant>,
     metrics: Metrics,
@@ -591,6 +599,11 @@ struct Observer {
     model_config_slot: String,
     /// Whether the model dialog lists proxy aliases instead of providers.
     model_config_proxy: bool,
+    /// Pending edits for the model dialog; Save writes them as one slot map.
+    model_config_draft: Option<Value>,
+    /// Temperature slider shared by the model dialog's active slot.
+    model_temperature_slider: Entity<SliderState>,
+    _model_slider_subscription: Subscription,
     /// Active tab of the tool configuration dialog.
     tool_panel_tab: usize,
     /// Open new-task dialog; `true` inherits the current workflow configuration.
@@ -799,6 +812,37 @@ impl Observer {
         // The IME needs an entity it can commit composed text into.
         let terminal_owner = cx.entity().downgrade();
         terminal.set_input(cx.new(|_| ui::terminal::TerminalInput::new(terminal_owner)));
+        let model_temperature_slider = cx.new(|_| {
+            SliderState::new()
+                .min(-0.1)
+                .max(2.0)
+                .step(0.1)
+                .default_value(-0.1)
+        });
+        let model_slider_subscription = cx.subscribe_in(
+            &model_temperature_slider,
+            window,
+            |this, _, event: &SliderEvent, _, cx| {
+                let (
+                    SliderEvent::Change(SliderValue::Single(value))
+                    | SliderEvent::Release(SliderValue::Single(value))
+                ) = event
+                else {
+                    return;
+                };
+                if this.quick_panel != Some(QuickPanel::Models) {
+                    return;
+                }
+                let slot = this.model_config_slot.clone();
+                if let Some(draft) = this.model_config_draft.as_mut() {
+                    if !draft[slot.as_str()].is_object() {
+                        draft[slot.as_str()] = serde_json::json!({"id": 0, "model": ""});
+                    }
+                    draft[slot.as_str()]["temperature"] = serde_json::json!(*value);
+                }
+                cx.notify();
+            },
+        );
         let mut observer = Self {
             worker,
             options,
@@ -811,8 +855,11 @@ impl Observer {
             status_panel_tab: 0,
             status_panel_todos_expanded: false,
             status_panel_mode: ui::status::PanelMode::Circle,
-            status_panel_position: None,
+            status_panel_collapsed_position: None,
+            status_panel_expanded_position: None,
+            status_panel_positions_read: false,
             status_panel_drag: None,
+            confirm: None,
             efficiency_updated_at: None,
             efficiency_report: None,
             efficiency_loading: false,
@@ -829,6 +876,7 @@ impl Observer {
             },
             rows: Vec::new(),
             markdown: BTreeMap::new(),
+            diff_scroll: BTreeMap::new(),
             expanded: BTreeSet::new(),
             compression_started: None,
             metrics: Metrics {
@@ -933,6 +981,9 @@ impl Observer {
             quick_panel: None,
             model_config_slot: "act".into(),
             model_config_proxy: false,
+            model_config_draft: None,
+            model_temperature_slider,
+            _model_slider_subscription: model_slider_subscription,
             tool_panel_tab: 0,
             new_task_inherit: None,
             skills_draft: None,
@@ -1338,33 +1389,36 @@ impl Observer {
         false
     }
 
-    fn confirm_rewind(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_rewind(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_rewind() {
             return;
         }
-        let generation = self.model.generation;
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t!("delete_last_message"),
-            Some(&t!("rewind_confirm")),
-            &[
-                PromptButton::cancel(t!("action_cancel").to_string()),
-                PromptButton::new(t!("delete_last_message").to_string()),
-            ],
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            if answer.await.ok() != Some(1) {
-                return;
-            }
-            let _ = this.update(cx, |this, cx| {
-                if !this.model.accepts(generation) || !this.can_rewind() {
+        self.confirm = Some(ui::confirm::ConfirmRequest {
+            kind: ui::confirm::ConfirmKind::Rewind,
+            title: t!("delete_last_message").to_string(),
+            message: t!("rewind_confirm").to_string(),
+            confirm_label: t!("delete_last_message").to_string(),
+            danger: true,
+        });
+        cx.notify();
+    }
+
+    fn accept_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(request) = self.confirm.take() else {
+            return;
+        };
+        match request.kind {
+            ui::confirm::ConfirmKind::Rewind => {
+                if !self.can_rewind() {
+                    cx.notify();
                     return;
                 }
-                let Some(session) = this.selected.clone() else {
+                let generation = self.model.generation;
+                let Some(session) = self.selected.clone() else {
+                    cx.notify();
                     return;
                 };
-                if this
+                if self
                     .worker
                     .commands
                     .try_send(Command::Rewind {
@@ -1373,14 +1427,51 @@ impl Observer {
                     })
                     .is_ok()
                 {
-                    this.rewind_pending = true;
-                    cx.notify();
+                    self.rewind_pending = true;
                 } else {
-                    this.show_toast(ToastKind::Error, t!("rewind_unavailable").to_string(), cx);
+                    self.show_toast(ToastKind::Error, t!("rewind_unavailable").to_string(), cx);
                 }
-            });
-        })
-        .detach();
+            }
+            ui::confirm::ConfirmKind::StopWorkflow => {
+                let Some(id) = self.selected.clone().filter(|_| self.model.can_stop()) else {
+                    cx.notify();
+                    return;
+                };
+                if self.worker.commands.try_send(Command::Stop { id }).is_err() {
+                    self.show_toast(ToastKind::Error, t!("stop_submit_failed").to_string(), cx);
+                }
+            }
+            ui::confirm::ConfirmKind::CloseTerminal(index) => {
+                self.terminal.close_tab(index, window, cx);
+            }
+            ui::confirm::ConfirmKind::DeleteSession(id) => {
+                self.edit_session(id, None, cx);
+            }
+            ui::confirm::ConfirmKind::DeleteAutomation(id) => {
+                use chatspeed_gpui::types::AutomationAction;
+                if self
+                    .worker
+                    .commands
+                    .try_send(Command::ActOnAutomation {
+                        id,
+                        action: AutomationAction::Delete,
+                    })
+                    .is_err()
+                {
+                    self.show_toast(
+                        ToastKind::Error,
+                        t!("automation_action_failed").to_string(),
+                        cx,
+                    );
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn cancel_confirm(&mut self, cx: &mut Context<Self>) {
+        self.confirm = None;
+        cx.notify();
     }
 
     fn toggle_pin(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -2290,38 +2381,18 @@ impl Observer {
         }
     }
 
-    fn stop_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.selected.clone().filter(|_| self.model.can_stop()) else {
+    fn stop_workflow(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(_id) = self.selected.clone().filter(|_| self.model.can_stop()) else {
             return;
         };
-        let generation = self.model.generation;
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &t!("stop_confirm"),
-            None,
-            &[
-                PromptButton::cancel(t!("action_cancel").into_owned()),
-                PromptButton::new(t!("stop_workflow").into_owned()),
-            ],
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            if answer.await.ok() != Some(1) {
-                return;
-            }
-            let _ = this.update(cx, |this, cx| {
-                if this.selected.as_deref() == Some(id.as_str())
-                    && this.model.accepts(generation)
-                    && this.model.can_stop()
-                {
-                    if this.worker.commands.try_send(Command::Stop { id }).is_err() {
-                        this.show_toast(ToastKind::Error, t!("stop_submit_failed").to_string(), cx);
-                    }
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+        self.confirm = Some(ui::confirm::ConfirmRequest {
+            kind: ui::confirm::ConfirmKind::StopWorkflow,
+            title: t!("stop_workflow").to_string(),
+            message: t!("stop_confirm").to_string(),
+            confirm_label: t!("stop_workflow").to_string(),
+            danger: true,
+        });
+        cx.notify();
     }
 
     fn toggle_composer_expanded(&mut self, cx: &mut Context<Self>) {
@@ -2330,23 +2401,33 @@ impl Observer {
     }
 
     /// Opens one of the configuration dialogs from the `+` menu.
-    fn open_quick_panel(&mut self, panel: QuickPanel, cx: &mut Context<Self>) {
+    fn open_quick_panel(
+        &mut self,
+        panel: QuickPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let config = self.agent_config();
         match panel {
             QuickPanel::Skills => self.skills_draft = Some(SkillsDraft::from_config(&config)),
             QuickPanel::Mcp | QuickPanel::Tools => {
                 self.tool_panel_tab = 0;
                 self.tool_draft = Some(ToolDraft::from_config(&config));
-                if self.tools.is_empty() {
-                    let _ = self.worker.commands.try_send(Command::Tools);
-                }
+                // Vue refreshes the catalogue whenever the panel opens, so a
+                // tool removed by the server (for example through
+                // `disabled_tools`) disappears instead of staying cached.
+                let _ = self.worker.commands.try_send(Command::Tools);
             }
             QuickPanel::Models => {
                 self.model_config_slot = if self.planning_mode { "plan" } else { "act" }.into();
                 let configs = self.model_configs();
+                self.model_config_draft = Some(configs.clone());
                 let slot = configs[self.model_config_slot.as_str()].clone();
                 self.model_config_proxy = slot["id"].as_i64().unwrap_or_default() == 0
                     && slot["model"].as_str().is_some_and(|model| model.contains('@'));
+                let temperature = slot["temperature"].as_f64().unwrap_or(-0.1) as f32;
+                self.model_temperature_slider
+                    .update(cx, |state, cx| state.set_value(temperature, window, cx));
             }
             QuickPanel::Personality => {}
         }
@@ -2354,10 +2435,53 @@ impl Observer {
         cx.notify();
     }
 
-    fn close_quick_panel(&mut self, cx: &mut Context<Self>) {
-        self.quick_panel = None;
+    /// Drops configured MCP tool ids that the refreshed catalogue no longer
+    /// reports for a server that is still present. This mirrors Vue's late
+    /// discovery and removes tools disabled by `disabled_tools` while keeping
+    /// the whole server's configured rows during an outage.
+    fn prune_removed_mcp_tools(&mut self) {
+        let Some(draft) = self.tool_draft.clone() else {
+            return;
+        };
+        let listed: BTreeSet<&str> = self
+            .tools
+            .iter()
+            .filter_map(|tool| tool["id"].as_str())
+            .collect();
+        let present_servers: BTreeSet<&str> = listed
+            .iter()
+            .filter(|id| id.contains("__MCP__"))
+            .map(|id| id.split("__MCP__").next().unwrap_or_default())
+            .collect();
+        let removed: BTreeSet<String> = draft
+            .mcp_available
+            .iter()
+            .chain(draft.mcp_auto_approve.iter())
+            .chain(draft.mcp_auto_expand.iter())
+            .filter(|id| {
+                if !id.contains("__MCP__") {
+                    return false;
+                }
+                let server = id.split("__MCP__").next().unwrap_or_default();
+                present_servers.contains(server) && !listed.contains(id.as_str())
+            })
+            .cloned()
+            .collect();
+        if removed.is_empty() {
+            return;
+        }
+        if let Some(draft) = self.tool_draft.as_mut() {
+            draft.mcp_available.retain(|id| !removed.contains(id));
+            draft.mcp_auto_approve.retain(|id| !removed.contains(id));
+            draft.mcp_auto_expand.retain(|id| !removed.contains(id));
+            draft.available.retain(|id| !removed.contains(id));
+        }
+    }
+
+    fn close_quick_panel(&mut self, cx: &mut Context<Self>) {        self.quick_panel = None;
         self.skills_draft = None;
         self.tool_draft = None;
+        self.model_config_draft = None;
         cx.notify();
     }
 
@@ -2923,6 +3047,7 @@ impl Observer {
                 }
                 UpdateKind::Tools(tools) => {
                     self.tools = tools;
+                    self.prune_removed_mcp_tools();
                     cx.notify();
                 }
                 UpdateKind::ContextCleared(result) => {
@@ -3119,6 +3244,22 @@ impl Observer {
         }
     }
 
+    /// Persists both panel positions as one global preference.
+    fn save_status_panel_positions(&self) {
+        let position = |value: Option<Point<Pixels>>| {
+            value.map(|point| {
+                serde_json::json!({"x": f32::from(point.x), "y": f32::from(point.y)})
+            })
+        };
+        self.worker.save_geometry(vec![(
+            prefs::STATUS_PANEL_POSITION_KEY,
+            serde_json::json!({
+                "collapsed": position(self.status_panel_collapsed_position),
+                "expanded": position(self.status_panel_expanded_position),
+            }),
+        )]);
+    }
+
     /// Mirrors the runtime preferences shared with the Vue titlebar.
     fn apply_config(&mut self, config: &Value, fetched_at: Instant, cx: &mut Context<Self>) {
         if !self.sidebar_changed {
@@ -3132,6 +3273,12 @@ impl Observer {
         self.show_today_cost = config["show_today_cost_stats"].as_bool().unwrap_or(false);
         if !self.show_today_cost {
             self.today_cost = 0.;
+        }
+        if !std::mem::replace(&mut self.status_panel_positions_read, true) {
+            self.status_panel_collapsed_position =
+                prefs::saved_status_panel_position(config, false).map(|(x, y)| point(px(x), px(y)));
+            self.status_panel_expanded_position =
+                prefs::saved_status_panel_position(config, true).map(|(x, y)| point(px(x), px(y)));
         }
         // A poll already in flight when a save completed may contain old values.
         if self
@@ -3230,7 +3377,10 @@ impl Observer {
             theme.colors.primary = accent;
             theme.colors.primary_hover = accent.opacity(0.9);
             theme.colors.primary_active = accent.opacity(0.8);
-            theme.colors.ring = accent.opacity(0.45);
+            // Focus only recolors the existing border with the user's primary
+            // color. The library's outer ring reads as an outline/shadow.
+            theme.colors.ring = accent;
+            theme.focus_ring = false;
             // Element Plus paints primary buttons with the configured primary
             // color; the kit's own token defaults to a dark slate, which read as
             // a black button in the light theme.
@@ -3489,6 +3639,7 @@ impl Observer {
     fn refresh_markdown(&mut self, cx: &mut Context<Self>) {
         let start = Instant::now();
         let mut rows: Vec<(String, String)> = Vec::new();
+        let mut diff_keys: BTreeSet<String> = BTreeSet::new();
         for row in &self.rows {
             match row {
                 Row::Assistant(view) => {
@@ -3512,6 +3663,9 @@ impl Observer {
                             }
                         }
                         if let Some(tool) = &item.tool {
+                            if tool.diff.is_some() {
+                                diff_keys.insert(tool.detail_key.clone());
+                            }
                             if self.expanded.contains(&tool.detail_key) && !tool.detail.is_empty() {
                                 rows.push((tool.detail_key.clone(), tool.detail.clone()));
                             }
@@ -3519,6 +3673,9 @@ impl Observer {
                     }
                 }
                 Row::Tool(tool) => {
+                    if tool.diff.is_some() {
+                        diff_keys.insert(tool.detail_key.clone());
+                    }
                     if self.expanded.contains(&tool.detail_key) && !tool.detail.is_empty() {
                         rows.push((tool.detail_key.clone(), tool.detail.clone()));
                     }
@@ -3541,6 +3698,11 @@ impl Observer {
                 }
                 Row::User(_) | Row::FinishTask(_) | Row::Alert(_) | Row::Divider => {}
             }
+        }
+        self.diff_scroll
+            .retain(|key, _| diff_keys.contains(key));
+        for key in diff_keys {
+            self.diff_scroll.entry(key).or_default();
         }
         self.markdown
             .retain(|key, _| rows.iter().any(|(id, _)| id == key));
@@ -3958,7 +4120,6 @@ impl Observer {
                 );
             }
             if !summary_text.is_empty() {
-                summary = summary.tooltip(crate::ui::tip(summary_text));
                 if expandable {
                     let target = tool.detail_key.clone();
                     summary = summary.cursor_pointer().on_click(
@@ -4109,9 +4270,13 @@ impl Observer {
                 // runtime's surrounding context lines.
                 let (sign, color, tint) = match line.kind {
                     presentation::DiffKind::Added => {
-                        ("+", success(), success().opacity(0.12))
+                        let color = Hsla::from(success());
+                        ("+", color, color.opacity(0.12))
                     }
-                    presentation::DiffKind::Removed => ("−", danger(), danger().opacity(0.12)),
+                    presentation::DiffKind::Removed => {
+                        let color = Hsla::from(danger());
+                        ("−", color, color.opacity(0.12))
+                    }
                     presentation::DiffKind::Context => (
                         " ",
                         cx.theme().foreground,
@@ -4160,7 +4325,37 @@ impl Observer {
                         ),
                 );
             }
-            detail = detail.child(diff);
+            let viewport_id = SharedString::from(format!("diff-scroll-{}", tool.key));
+            let mut viewport = div()
+                .id(viewport_id)
+                .relative()
+                .w_full()
+                .min_w_0()
+                .max_h(px(520.))
+                .overflow_y_scroll();
+            let scrollbar = self.diff_scroll.get(&tool.detail_key).cloned().map(|handle| {
+                (handle, ui::history_scrollbar::ScrollbarInput::default())
+            });
+            if let Some((handle, _)) = &scrollbar {
+                let lock = handle.clone();
+                viewport = viewport
+                    .track_scroll(handle)
+                    .on_scroll(cx.listener(move |_, _: &ScrollEvent, _, cx| {
+                        // A diff with its own scrollbar owns the wheel; the
+                        // transcript must not move underneath it.
+                        if lock.max_offset().y > px(0.) {
+                            cx.stop_propagation();
+                        }
+                    }));
+            }
+            let mut content = viewport.child(diff);
+            if let Some((handle, input)) = scrollbar {
+                content = content.child(input.overlay_named(
+                    &handle,
+                    SharedString::from(format!("diff-bar-{}", tool.key)),
+                ));
+            }
+            detail = detail.child(content);
         }
         if let Some(command) = &tool.command {
             // Vue's command frame is a selectable `pre`; the native renderer has
@@ -4172,7 +4367,6 @@ impl Observer {
                 .ok()
                 .and_then(|slot| *slot)
                 .is_some_and(|copy| copy.key == flash_key && copy.at.elapsed() < COPY_FLASH);
-            let flash = self.copy_flash.clone();
             let command_text = command.clone();
             let group = SharedString::from(format!("bash-command:{}", tool.key));
             let hover_group = group.clone();
@@ -4238,16 +4432,6 @@ impl Observer {
                                 cx.notify();
                             })),
                     ),
-            );
-        }
-        if tool.arguments.is_some() {
-            // The JSON body is the following fence; only the small label lives here.
-            detail = detail.child(
-                div()
-                    .text_size(px(10.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("arguments_label").to_string()),
             );
         }
         if !tool.detail.is_empty() {
@@ -4500,7 +4684,7 @@ impl Observer {
                     })));
             }
             if let Some(input) = self.child_question_text.get(&index) {
-                panel = panel.child(Textarea::new(input));
+                panel = panel.child(Textarea::new(input).bg(ui::field_bg(cx)));
             }
         }
         let session = session.to_owned();
@@ -4726,6 +4910,7 @@ impl Observer {
                         .mt_2()
                         .p_2()
                         .max_h(px(250.))
+                        .id(SharedString::from(format!("ask-user-other-answer:{base}")))
                         .overflow_y_scroll()
                         .rounded(px(4.))
                         .border_1()
@@ -4842,12 +5027,14 @@ impl Observer {
                                     .p(px(2.))
                                     .rounded(px(4.))
                                     .hover(move |style| style.bg(hover))
-                                    .child(
-                                        Icon::new("double-arrow-down")
-                                            .size(14.)
-                                            .rotate(if open { 180. } else { 0. })
-                                            .color(muted),
-                                    ),
+                                    .child(ui::rotating_icon(
+                                        format!("{key}:cost-toggle-icon"),
+                                        "double-arrow-down",
+                                        14.,
+                                        muted,
+                                        if open { 0. } else { 180. },
+                                        if open { 180. } else { 0. },
+                                    )),
                             ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
@@ -4951,12 +5138,14 @@ impl Observer {
                                     .p(px(2.))
                                     .rounded(px(4.))
                                     .hover(move |style| style.bg(hover))
-                                    .child(
-                                        Icon::new("double-arrow-down")
-                                            .size(14.)
-                                            .rotate(if open { 180. } else { 0. })
-                                            .color(muted),
-                                    ),
+                                    .child(ui::rotating_icon(
+                                        format!("{key}:toggle-icon"),
+                                        "double-arrow-down",
+                                        14.,
+                                        muted,
+                                        if open { 0. } else { 180. },
+                                        if open { 180. } else { 0. },
+                                    )),
                             ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx))),
@@ -5487,17 +5676,30 @@ impl Render for Observer {
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some(offset) = this.status_panel_drag {
                     if event.pressed_button == Some(MouseButton::Left) {
-                        this.status_panel_position = Some(event.position - offset);
+                        ui::status::remember_position(this, event.position - offset);
                         cx.notify();
                     } else {
                         this.status_panel_drag = None;
                     }
                 }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.status_panel_drag = None))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if this.status_panel_drag.take().is_some() {
+                    this.save_status_panel_positions();
+                }
+                cx.notify();
+            }))
             .children(status_overlay);
         if self.quick_panel.is_some() {
-            shell = shell.child(ui::composer::panels::overlay(self, cx));
+            shell = shell.child(ui::composer::panels::overlay(self, window, cx));
+        }
+        if let Some(request) = self.confirm.clone() {
+            shell = shell.child(ui::confirm::dialog(
+                &request,
+                cx.listener(|this, _, window, cx| this.accept_confirm(window, cx)),
+                cx.listener(|this, _, _, cx| this.cancel_confirm(cx)),
+                cx,
+            ));
         }
         if self.new_task_inherit.is_some() {
             shell = shell.child(self.new_task_dialog(cx));
@@ -5520,6 +5722,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             gpui_kit::init(cx);
             cx.set_app_identity("ai.aidyou.chatspeed", "ChatSpeed");
             ensure_bold_capable_font(cx);
+            // Remote favicons and other images need a real client; the GPUI
+            // default answers every request with "no HttpClient available".
+            cx.set_http_client(std::sync::Arc::new(http_client::ReqwestHttpClient::new()));
             if let Err(error) = cx
                 .text_system()
                 .add_fonts(vec![std::borrow::Cow::Borrowed(icons::FONT)])

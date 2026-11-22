@@ -127,6 +127,9 @@ pub struct Panel {
     scroll: ScrollHandle,
     /// Whether the view keeps the cursor line visible as output arrives.
     follow: bool,
+    /// Vue's fullscreen toggle; the dock keeps its header but uses most of the
+    /// workflow column.
+    maximized: bool,
 }
 
 pub struct Tab {
@@ -149,11 +152,30 @@ impl Panel {
             input: None,
             scroll: ScrollHandle::new(),
             follow: true,
+            maximized: false,
         }
     }
 
     pub(crate) fn set_input(&mut self, input: Entity<TerminalInput>) {
         self.input = Some(input);
+    }
+
+    /// Removes a tab and keeps the active index inside the remaining list.
+    /// Closing is confirmed by the caller so a stray click cannot kill a
+    /// running command.
+    pub(crate) fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut App) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.tabs.remove(index);
+        if self.tabs.is_empty() {
+            self.visible = false;
+        }
+        self.active = (self.active - usize::from(index < self.active))
+            .min(self.tabs.len().saturating_sub(1));
+        if self.visible {
+            self.focus.focus(window, cx);
+        }
     }
 
     /// Sends composed text (an IME commit) to the active shell.
@@ -177,7 +199,6 @@ impl Panel {
         }
         // Typing always returns the view to the prompt line.
         self.follow = true;
-        self.scroll.scroll_to_bottom();
     }
 
     fn near_bottom(&self) -> bool {
@@ -309,7 +330,6 @@ pub fn shortcut(
                 tab.update(cx, |tab, _| clear_keep_input(tab));
             }
             this.terminal.follow = true;
-            this.terminal.scroll.scroll_to_bottom();
             cx.notify();
         }
         _ => return,
@@ -636,19 +656,16 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
                         .cursor_pointer()
                         .hover(move |style| style.bg(hover))
                         .child(Icon::new("close").size(12.).color(secondary))
-                        .on_click(cx.listener(move |this, _, window, cx| {
+                        .on_click(cx.listener(move |this, _, _window, cx| {
                             cx.stop_propagation();
                             if index < this.terminal.tabs.len() {
-                                this.terminal.tabs.remove(index);
-                                if this.terminal.tabs.is_empty() {
-                                    this.terminal.visible = false;
-                                }
-                                let active = this.terminal.active;
-                                this.terminal.active = (active - usize::from(index < active))
-                                    .min(this.terminal.tabs.len().saturating_sub(1));
-                                if this.terminal.visible {
-                                    this.terminal.focus.focus(window, cx);
-                                }
+                                this.confirm = Some(crate::ui::confirm::ConfirmRequest {
+                                    kind: crate::ui::confirm::ConfirmKind::CloseTerminal(index),
+                                    title: t!("terminal_close").to_string(),
+                                    message: t!("terminal_close_confirm").to_string(),
+                                    confirm_label: t!("terminal_close").to_string(),
+                                    danger: true,
+                                });
                             }
                             cx.notify();
                         })),
@@ -758,6 +775,31 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
         .child(div().flex_none().w(px(1.)).h(px(16.)).bg(border))
         .child(
             div()
+                .id("terminal-fullscreen")
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(4.))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(
+                    Icon::new(if panel.maximized {
+                        "fullscreen"
+                    } else {
+                        "fullscreen-off"
+                    })
+                    .size(14.)
+                    .color(secondary),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.terminal.maximized = !this.terminal.maximized;
+                    cx.notify();
+                })),
+        )
+        .child(
+            div()
                 .id("terminal-hide")
                 .flex_none()
                 .flex()
@@ -789,23 +831,14 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
         .id("terminal-content")
         .relative()
         .track_focus(&focus)
-        .track_scroll(&panel.scroll)
         .flex_1()
         .min_h_0()
         .w_full()
-        .overflow_y_scroll()
         .px(px(8.))
         .py(px(8.))
         .bg(background)
         .font_family(crate::MONO_FONT)
-        .text_size(px(FONT_SIZE))
-        .on_scroll(cx.listener(|this, _: &ScrollEvent, _, cx| {
-            let follow = this.terminal.near_bottom();
-            if follow != this.terminal.follow {
-                this.terminal.follow = follow;
-                cx.notify();
-            }
-        }));
+        .text_size(px(FONT_SIZE));
 
     if let Some(tab) = active {
         let status = tab.read(cx).status;
@@ -862,7 +895,21 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
         let show_cursor = has_input
             && cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden
             && cursor_row < rows;
-        let mut rows_view = v_flex().w_full().min_w_0();
+        let mut rows_view = v_flex()
+            .id("terminal-rows")
+            .w_full()
+            .min_w_0()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&panel.scroll)
+            .on_scroll(cx.listener(|this, _: &ScrollEvent, _, cx| {
+                let follow = this.terminal.near_bottom();
+                if follow != this.terminal.follow {
+                    this.terminal.follow = follow;
+                    cx.notify();
+                }
+            }));
         for (line, cells) in lines.into_iter().enumerate() {
             let mut row = h_flex()
                 .relative()
@@ -897,12 +944,22 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
                 if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
                     tab.update(cx, |tab, cx| key(tab, event, cx));
                 }
-                // Any keystroke brings the prompt line back into view.
+                // The cursor row is what must stay visible. Scrolling straight
+                // to the bottom hid the first prompt line on a fresh shell.
                 this.terminal.follow = true;
-                this.terminal.scroll.scroll_to_bottom();
                 cx.stop_propagation();
                 cx.notify();
             }));
+        // The cursor row is a direct child of the scroll view, so the scroll
+        // handle can keep exactly that line in view instead of jumping to the
+        // bottom of the 24-row grid (which is mostly empty at startup).
+        if panel.follow {
+            if show_cursor && cursor_row < rows {
+                panel.scroll.scroll_to_item(cursor_row);
+            } else {
+                panel.scroll.scroll_to_bottom();
+            }
+        }
     }
 
     // Registering here is what lets the platform IME deliver composed text; the
@@ -925,25 +982,24 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
     .top_0()
     .size_full();
 
-    if panel.follow {
-        panel.scroll.scroll_to_bottom();
-    }
-    Some(
-        v_flex()
-            .h(px(PANEL_HEIGHT))
-            .max_h(relative(0.5))
-            .min_h_0()
-            .w_full()
-            .border_t_1()
-            .border_color(border)
-            .bg(background)
-            .child(header)
-            .child(
-                body.child(canvas_layer)
-                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                        focus.focus(window, cx)
-                    }),
-            )
-            .into_any_element(),
-    )
+    let maximized = panel.maximized;
+    let panel = v_flex()
+        .min_h_0()
+        .w_full()
+        .border_t_1()
+        .border_color(border)
+        .bg(background)
+        .child(header)
+        .child(
+            body.child(canvas_layer)
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    focus.focus(window, cx)
+                }),
+        );
+    let panel = if maximized {
+        panel.h(relative(0.9)).max_h(relative(0.9))
+    } else {
+        panel.h(px(PANEL_HEIGHT)).max_h(relative(0.5))
+    };
+    Some(panel.into_any_element())
 }

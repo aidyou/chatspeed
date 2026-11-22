@@ -371,7 +371,7 @@ pub struct ToolView {
     pub approved: bool,
     pub command: Option<String>,
     pub arguments: Option<String>,
-    pub diff: Option<Vec<(bool, String)>>,
+    pub diff: Option<Vec<DiffLine>>,
     pub detail: String,
     pub choices: Vec<ChoiceGroupView>,
 }
@@ -1056,6 +1056,42 @@ fn duration_label(name: &str, metadata: &Value) -> String {
     }
 }
 
+/// MCP results arrive as `{"content":[{"text": ...}]}`. The structured envelope
+/// is transport, not output: the panel shows the text the tool actually
+/// returned instead of the raw JSON wrapper.
+fn mcp_result_text(message: &Message, display_type: &str) -> String {
+    let cleaned = clean_text(&message.message);
+    if display_type == "markdown" {
+        return cleaned;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(cleaned.trim()) else {
+        return cleaned;
+    };
+    let mut parts = Vec::new();
+    match &value["content"] {
+        Value::Array(items) => {
+            for item in items {
+                if let Some(text) = item["text"].as_str() {
+                    if !text.trim().is_empty() {
+                        parts.push(text.trim().to_owned());
+                    }
+                } else if let Some(text) = item.as_str() {
+                    if !text.trim().is_empty() {
+                        parts.push(text.trim().to_owned());
+                    }
+                }
+            }
+        }
+        Value::String(text) if !text.trim().is_empty() => parts.push(text.trim().to_owned()),
+        _ => {}
+    }
+    if parts.is_empty() {
+        cleaned
+    } else {
+        parts.join("\n\n")
+    }
+}
+
 fn tool_detail(
     message: &Message,
     name: &str,
@@ -1064,28 +1100,44 @@ fn tool_detail(
     has_diff: bool,
 ) -> String {
     let mut sections = Vec::new();
-    if let Some(arguments) = is_mcp_tool(name, message.metadata["tool_category"].as_str())
-        .then(|| tool_arguments(&message.metadata))
-        .filter(|args| args.as_object().is_some_and(|object| !object.is_empty()))
-    {
-        // The native row renders its own small "Arguments" label, so the
-        // detail must not repeat it as a bold markdown heading.
-        sections.push(fence(
-            &serde_json::to_string_pretty(&arguments).unwrap_or_default(),
-            "json",
-        ));
+    let mcp = is_mcp_tool(name, message.metadata["tool_category"].as_str());
+    if mcp {
+        let args = tool_arguments(&message.metadata);
+        if args.as_object().is_some_and(|object| !object.is_empty()) {
+            sections.push(format!(
+                "**{}**\n\n{}",
+                t!("arguments_label"),
+                fence(&serde_json::to_string_pretty(&args).unwrap_or_default(), "json")
+            ));
+        }
     }
-    let cleaned = clean_text(&message.message);
+    let cleaned = if mcp {
+        // Loading a folded MCP definition is an internal step; its "result" is
+        // the declaration itself, which users read as noise. Real calls show
+        // the returned text.
+        if matches!(name, "mcp_tool_expand" | "mcp_tool_load") {
+            String::new()
+        } else {
+            mcp_result_text(message, display_type)
+        }
+    } else {
+        clean_text(&message.message)
+    };
     let duplicate_command = command.is_some_and(|command| {
         cleaned.replace("\r\n", "\n").trim() == command.replace("\r\n", "\n").trim()
     });
     // Structured diffs own the expanded body; the JSON result would repeat it.
     // Choice payloads belong to the `ask_user` card, not the raw text section.
     if !cleaned.is_empty() && !duplicate_command && !has_diff && display_type != "choice" {
-        if display_type == "markdown" {
-            sections.push(cleaned);
+        let body = if display_type == "markdown" {
+            cleaned
         } else {
-            sections.push(fence(&cleaned, "text"));
+            fence(&cleaned, "text")
+        };
+        if mcp {
+            sections.push(format!("**{}**\n\n{body}", t!("result_label")));
+        } else {
+            sections.push(body);
         }
     }
     sections.join("\n\n")
@@ -3303,7 +3355,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_arguments_render_once_as_a_json_fence() {
+    fn mcp_arguments_and_result_render_as_labelled_sections() {
         let message = tool(
             71,
             "mcp__demo__search",
@@ -3313,14 +3365,33 @@ mod tests {
                 "execution_status": "completed",
             }),
         );
+        let mut message = message;
+        message.message = json!({"content": [{"text": "search hit", "type": "text"}]}).to_string();
         let view = ToolView::new(&message, &[]);
         assert!(view.arguments.is_some());
-        assert!(
-            view.detail.starts_with("```json"),
-            "detail: {}",
-            view.detail
+        assert!(view.detail.contains(&t!("arguments_label").to_string()));
+        assert!(view.detail.contains("\"query\": \"gpui\""));
+        assert!(view.detail.contains(&t!("result_label").to_string()));
+        assert!(view.detail.contains("search hit"));
+        assert!(!view.detail.contains("\"content\""), "raw envelope leaked");
+    }
+
+    #[test]
+    fn folded_mcp_definition_is_not_rendered_as_a_result() {
+        let mut message = tool(
+            72,
+            "mcp_tool_expand",
+            json!({
+                "tool_category": "mcp",
+                "tool_call": {"function": {"name": "mcp_tool_expand", "arguments": "{\"tool_name\":\"browser_go_back\"}"}},
+                "execution_status": "completed",
+            }),
         );
-        assert!(!view.detail.contains(&t!("arguments_label").to_string()));
+        message.message =
+            "Loaded the complete definition for folded MCP tool 'browser_go_back'.".to_owned();
+        let view = ToolView::new(&message, &[]);
+        assert!(view.detail.contains(&t!("arguments_label").to_string()));
+        assert!(!view.detail.contains("Loaded the complete definition"));
     }
 
     #[test]

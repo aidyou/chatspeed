@@ -74,7 +74,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 })
                 .child(
                     Icon::new(if observer.vision_task.is_some() { "loading" } else { "send" })
-                        .size(16.)
+                        .size(20.)
                         .color(if can_send { accent } else { muted }),
                 )
                 .tooltip(crate::ui::tip(t!("send").to_string()))
@@ -150,13 +150,15 @@ fn pill(
         .py(px(4.))
         .rounded(px(16.))
         .cursor_pointer()
+        // Vue's agent pill and model trigger both sit on `--cs-bg-color`; the
+        // theme background is the native token closest to that surface.
+        .bg(cx.theme().background)
         .when(bordered, |row| {
-            row.bg(cx.theme().background)
-                .border_1()
+            row.border_1()
                 .border_color(if color == primary { primary } else { cx.theme().border })
         })
         .hover(move |style| style.bg(hover).text_color(primary))
-        .text_size(px(14.))
+        .text_size(px(if bordered { 16. } else { 14. }))
         .text_color(color)
         .child(
             div()
@@ -522,7 +524,7 @@ fn model_selector(
     .into_any_element()
 }
 
-fn model_group_label(label: String, cx: &App) -> AnyElement {
+pub(super) fn model_group_label(label: String, cx: &App) -> AnyElement {
     div()
         .w_full()
         .px_2()
@@ -560,9 +562,10 @@ fn quick_actions(
         .flex()
         .items_center()
         .justify_center()
-        .px(px(4.))
-        .py(px(2.))
-        .rounded(px(8.))
+        .px(px(8.))
+        .py(px(4.))
+        .rounded_full()
+        .bg(cx.theme().background)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new("add").size(14.).color(muted))
@@ -581,7 +584,7 @@ fn quick_actions(
                     .justify_center()
                     .rounded_full()
                     .bg(accent)
-                    .text_size(px(9.))
+                    .text_size(px(10.))
                     .text_color(gpui_kit::white())
                     .child(active_count.to_string()),
             )
@@ -623,7 +626,9 @@ fn quick_actions(
                 let observer_entity = observer_entity.clone();
                 move |window: &mut Window, cx: &mut App| {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
-                    observer_entity.update(cx, |this, cx| this.open_quick_panel(panel, cx));
+                    observer_entity.update(cx, |this, cx| {
+                        this.open_quick_panel(panel, window, cx)
+                    });
                 }
             };
             let toggle_planning = {
@@ -944,30 +949,45 @@ fn sandbox_selector(
     cx: &mut Context<Observer>,
 ) -> AnyElement {
     let mode = observer.sandbox_mode();
-    let label = match mode.as_str() {
-        "auto" => t!("sandbox_mode_auto").to_string(),
-        "sandbox_only" => t!("sandbox_mode_only").to_string(),
-        _ => t!("sandbox_mode_host").to_string(),
+    // Vue's `.sandbox-mode-badge` is an icon plus a corner-letter badge.
+    let badge = match mode.as_str() {
+        "auto" => "A",
+        "sandbox_only" => "S",
+        _ => "H",
     };
-    let color = if mode == "host_only" {
-        muted
-    } else {
-        cx.theme().primary
-    };
-    let trigger_el = h_flex()
+    let trigger_el = div()
         .id("composer-sandbox")
+        .relative()
         .flex_none()
+        .flex()
         .items_center()
-        .gap_1()
-        .px_2()
-        .py(px(2.))
-        .rounded(px(6.))
+        .justify_center()
+        .px(px(8.))
+        .py(px(4.))
+        .rounded_full()
+        .bg(cx.theme().background)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .text_size(px(11.))
-        .text_color(color)
-        .child(Icon::new("sandbox").size(13.).color(color))
-        .child(div().child(crate::ui::chrome_label(label)))
+        .child(Icon::new("sandbox").size(14.).color(muted))
+        .child(
+            div()
+                .absolute()
+                .top(px(-4.))
+                .right(px(-4.))
+                .min_w(px(15.))
+                .h(px(15.))
+                .px(px(2.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(cx.theme().primary)
+                .text_size(px(9.))
+                .font_weight(FontWeight::BOLD)
+                .line_height(px(15.))
+                .text_color(cx.theme().primary_foreground)
+                .child(badge),
+        )
         .into_any_element();
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
@@ -1010,7 +1030,12 @@ fn sandbox_selector(
             let scheme = observer.sandbox_scheme_id();
             let pending = observer.config_pending.contains(&(session.clone(), "sandbox"));
             let mut list = v_flex().id("composer-sandbox-list").w(px(280.)).gap(px(2.))
-                .when(pending, |list| list.opacity(0.55));
+                .when(pending, |list| list.opacity(0.55))
+                .child(menu_section(
+                    t!("sandbox_execution_mode").to_string(),
+                    cx.theme().border,
+                    cx.theme().muted_foreground,
+                ));
             for (value, title, hint) in options.clone() {
                 let observer_entity = observer_entity.clone();
                 let session = session.clone();
@@ -1143,8 +1168,10 @@ fn clear_context(
         .flex()
         .items_center()
         .justify_center()
-        .size(px(22.))
-        .rounded(px(6.))
+        .px(px(8.))
+        .py(px(4.))
+        .rounded_full()
+        .bg(cx.theme().background)
         .when(enabled, |view| {
             view.cursor_pointer().hover(move |style| style.bg(hover))
         })
@@ -1173,7 +1200,7 @@ fn icon_action(
         .rounded(px(6.))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(Icon::new(icon).size(14.).color(color))
+        .child(Icon::new(icon).size(20.).color(color))
         // A press that lands here must not also reach the box behind it.
         .on_mouse_down(MouseButton::Left, |_, window, cx| {
             window.prevent_default();

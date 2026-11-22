@@ -74,24 +74,114 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         input.set_value("09:00", window, cx);
         input
     });
+    let paths = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(t!("automation_allowed_paths_hint").to_string())
+    });
+    let prompt_file = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(t!("automation_prompt_file_hint").to_string())
+    });
+    let start_date =
+        cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD".to_string()));
+    let end_date = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD".to_string()));
+    let shell = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(t!("automation_shell_command_hint").to_string())
+    });
+    // The Vue editor is a two-tab form; the native dialog keeps the same split
+    // and the same basic/advanced field order.
+    let tab = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let frequency = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let continuous = std::rc::Rc::new(std::cell::Cell::new(false));
+    let self_review = std::rc::Rc::new(std::cell::Cell::new(false));
+    let enabled = std::rc::Rc::new(std::cell::Cell::new(true));
+    // Bits 1..=7 are Monday..=Sunday, matching the backend's weekday numbers.
+    let weekdays = std::rc::Rc::new(std::cell::Cell::new(0b1111_1110u32));
     let owner = cx.entity().downgrade();
     window.open_dialog(cx, move |dialog, _, cx| {
-        let (title_state, prompt_state, time_state, agent, owner) = (title.clone(), prompt.clone(), time.clone(), agent.clone(), owner.clone());
-        let submit = Button::new("create-automation-submit").primary().label(t!("create_automation").to_string())
+        use gpui_kit::component::{switch::Switch, Sizable};
+        let (title_state, prompt_state, time_state, paths_state) =
+            (title.clone(), prompt.clone(), time.clone(), paths.clone());
+        let (prompt_file_state, start_state, end_state, shell_state) = (
+            prompt_file.clone(),
+            start_date.clone(),
+            end_date.clone(),
+            shell.clone(),
+        );
+        let (agent, owner) = (agent.clone(), owner.clone());
+        let (tab_state, frequency_state, weekdays_state) =
+            (tab.clone(), frequency.clone(), weekdays.clone());
+        let (continuous_state, self_review_state, enabled_state) =
+            (continuous.clone(), self_review.clone(), enabled.clone());
+        let (submit_continuous, submit_self_review, submit_enabled) = (
+            continuous_state.clone(),
+            self_review_state.clone(),
+            enabled_state.clone(),
+        );
+        let (submit_frequency, submit_weekdays) =
+            (frequency_state.clone(), weekdays_state.clone());
+        let submit = Button::new("create-automation-submit")
+            .primary()
+            .label(t!("create_automation").to_string())
             .on_click(move |_, window, cx| {
                 let name = title_state.read(cx).value().trim().to_owned();
                 let prompt = prompt_state.read(cx).value().trim().to_owned();
-                let schedule = parse_automation_schedule(time_state.read(cx).value().as_ref());
+                let prompt_file = prompt_file_state.read(cx).value().trim().to_owned();
+                let shell_command = shell_state.read(cx).value().trim().to_owned();
+                let mut schedule = parse_automation_schedule(time_state.read(cx).value().as_ref());
+                let allowed_paths: Vec<String> = paths_state
+                    .read(cx)
+                    .value()
+                    .split([',', '，', '\n'])
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_owned)
+                    .collect();
                 let accepted = owner.update(cx, |this, cx| {
                     if this.automation_pending { return false; }
-                    let Some((kind, schedule)) = schedule.filter(|_| !name.is_empty() && !prompt.is_empty()) else {
+                    let Some((kind, mut schedule_config)) = schedule.take().filter(|_| {
+                        !name.is_empty() && (!prompt.is_empty() || !prompt_file.is_empty())
+                    }) else {
                         this.show_toast(crate::ToastKind::Warning, t!("automation_required_fields").to_string(), cx);
                         return false;
                     };
+                    if submit_frequency.get() != 2 {
+                        let days: Vec<u32> = (1..=7)
+                            .filter(|day| submit_weekdays.get() & (1 << day) != 0)
+                            .collect();
+                        schedule_config["weekdays"] = serde_json::json!(days);
+                        let start = start_state.read(cx).value().trim().to_owned();
+                        let end = end_state.read(cx).value().trim().to_owned();
+                        schedule_config["start_date"] = if start.is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::json!(start)
+                        };
+                        schedule_config["end_date"] = if end.is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::json!(end)
+                        };
+                    }
+                    let shell_config = if shell_command.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::json!({ "command": shell_command })
+                    };
                     let spec = serde_json::json!({
-                        "title": name, "prompt": prompt, "agent_id": agent,
-                        "allowed_paths": [], "schedule_kind": kind, "schedule_config": schedule,
-                        "continuous_context": false, "self_review": false, "enabled": true,
+                        "title": name,
+                        "prompt": prompt,
+                        "prompt_file_path": if prompt_file.is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::json!(prompt_file)
+                        },
+                        "agent_id": agent,
+                        "allowed_paths": allowed_paths,
+                        "shell_config": shell_config,
+                        "schedule_kind": kind,
+                        "schedule_config": schedule_config,
+                        "continuous_context": submit_continuous.get(),
+                        "self_review": submit_self_review.get(),
+                        "enabled": submit_enabled.get(),
                     });
                     if this.worker.commands.try_send(chatspeed_gpui::types::Command::CreateAutomation(spec)).is_err() {
                         this.show_toast(crate::ToastKind::Error, t!("automation_create_failed").to_string(), cx);
@@ -102,10 +192,167 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 }).unwrap_or(false);
                 if accepted { window.close_dialog(cx); }
             });
-        dialog.title(t!("create_automation").to_string()).child(v_flex().gap_2()
-            .child(div().text_size(px(12.)).text_color(cx.theme().muted_foreground).child(t!("automation_agent_label", agent = agent_label.as_str()).to_string()))
-            .child(Input::new(&title)).child(Textarea::new(&prompt))
-            .child(t!("automation_schedule_input").to_string()).child(Input::new(&time)))
+        let mut tabs = h_flex().w_full().gap(px(4.)).child(
+            Button::new("automation-tab-basic")
+                .label(t!("automation_tab_basic").to_string())
+                .when(tab_state.get() == 0, |button| button.primary())
+                .on_click({
+                    let tab_state = tab_state.clone();
+                    move |_, window, _| {
+                        tab_state.set(0);
+                        window.refresh();
+                    }
+                }),
+        );
+        tabs = tabs.child(
+            Button::new("automation-tab-advanced")
+                .label(t!("automation_tab_advanced").to_string())
+                .when(tab_state.get() == 1, |button| button.primary())
+                .on_click({
+                    let tab_state = tab_state.clone();
+                    move |_, window, _| {
+                        tab_state.set(1);
+                        window.refresh();
+                    }
+                }),
+        );
+        let label = |text: String| div().text_size(px(12.)).text_color(cx.theme().muted_foreground).child(text);
+        let body = if tab_state.get() == 0 {
+            v_flex()
+                .gap_2()
+                .child(label(t!("automation_task_title").to_string()))
+                .child(Input::new(&title).bg(crate::ui::field_bg(cx)))
+                .child(label(t!("automation_prompt").to_string()))
+                .child(Textarea::new(&prompt).bg(crate::ui::field_bg(cx)).h(px(120.)))
+                .child(label(t!("automation_prompt_file").to_string()))
+                .child(Input::new(&prompt_file).bg(crate::ui::field_bg(cx)))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("automation_prompt_file_hint").to_string()),
+                )
+                .child(label(t!("automation_agent_label", agent = agent_label.as_str()).to_string()))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.))
+                        .bg(cx.theme().muted)
+                        .text_size(px(12.))
+                        .child(agent_label.clone()),
+                )
+                .child(label(t!("automation_frequency").to_string()))
+                .child(
+                    h_flex()
+                        .gap(px(4.))
+                        .children([0usize, 1, 2].into_iter().map(|index| {
+                            let frequency_state = frequency_state.clone();
+                            let text = match index {
+                                0 => t!("automation_frequency_daily").to_string(),
+                                1 => t!("automation_frequency_interval").to_string(),
+                                _ => t!("automation_frequency_once").to_string(),
+                            };
+                            Button::new(SharedString::from(format!(
+                                "automation-frequency-{index}"
+                            )))
+                                .label(text)
+                                .when(frequency_state.get() == index, |button| button.primary())
+                                .on_click(move |_, window, _| {
+                                    frequency_state.set(index);
+                                    window.refresh();
+                                })
+                        })),
+                )
+                .child(label(match frequency_state.get() {
+                    0 => t!("automation_schedule_daily_hint").to_string(),
+                    1 => t!("automation_schedule_interval_hint").to_string(),
+                    _ => t!("automation_schedule_once_hint").to_string(),
+                }))
+                .child(Input::new(&time).bg(crate::ui::field_bg(cx)))
+                .when(frequency_state.get() != 2, |form| {
+                    let weekdays = weekdays_state.clone();
+                    let mut picker = h_flex().w_full().flex_wrap().gap(px(4.));
+                    for (day, key) in [
+                        (1u32, "automation_weekday_mon"),
+                        (2, "automation_weekday_tue"),
+                        (3, "automation_weekday_wed"),
+                        (4, "automation_weekday_thu"),
+                        (5, "automation_weekday_fri"),
+                        (6, "automation_weekday_sat"),
+                        (7, "automation_weekday_sun"),
+                    ] {
+                        let weekdays = weekdays.clone();
+                        let selected = weekdays.get() & (1 << day) != 0;
+                        picker = picker.child(
+                            Button::new(SharedString::from(format!(
+                                "automation-weekday-{day}"
+                            )))
+                            .label(t!(key).to_string())
+                            .when(selected, |button| button.primary())
+                            .on_click(move |_, window, _| {
+                                let bits = weekdays.get();
+                                weekdays.set(bits ^ (1 << day));
+                                window.refresh();
+                            }),
+                        );
+                    }
+                    form.child(label(t!("automation_weekdays").to_string()))
+                        .child(picker)
+                        .child(label(t!("automation_effective_range").to_string()))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap(px(8.))
+                                .child(Input::new(&start_date).bg(crate::ui::field_bg(cx)))
+                                .child(Input::new(&end_date).bg(crate::ui::field_bg(cx))),
+                        )
+                })
+        } else {
+            v_flex()
+                .gap_2()
+                .child(label(t!("automation_allowed_paths").to_string()))
+                .child(Input::new(&paths).bg(crate::ui::field_bg(cx)))
+                .child(label(t!("automation_shell_command").to_string()))
+                .child(Input::new(&shell).bg(crate::ui::field_bg(cx)))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("automation_shell_command_hint").to_string()),
+                )
+                .child(label(t!("automation_continuous_context").to_string()))
+                .child(
+                    Switch::new("automation-continuous")
+                        .checked(continuous_state.get())
+                        .small()
+                        .on_click(move |checked, window, _| {
+                            continuous_state.set(*checked);
+                            window.refresh();
+                        }),
+                )
+                .child(label(t!("automation_self_review").to_string()))
+                .child(
+                    Switch::new("automation-self-review")
+                        .checked(self_review_state.get())
+                        .small()
+                        .on_click(move |checked, window, _| {
+                            self_review_state.set(*checked);
+                            window.refresh();
+                        }),
+                )
+                .child(label(t!("automation_start").to_string()))
+                .child(
+                    Switch::new("automation-enabled")
+                        .checked(enabled_state.get())
+                        .small()
+                        .on_click(move |checked, window, _| {
+                            enabled_state.set(*checked);
+                            window.refresh();
+                        }),
+                )
+        };
+        dialog.title(t!("create_automation").to_string()).child(v_flex().gap_2().child(tabs).child(body))
             .footer(h_flex().justify_end().gap_2()
                 .child(Button::new("create-automation-cancel").label(t!("action_cancel").to_string()).on_click(|_, window, cx| window.close_dialog(cx)))
                 .child(submit))
@@ -145,13 +392,14 @@ pub(super) fn edit_automation(observer: &mut Observer, id: String, window: &mut 
                 input
             });
             let owner = cx.entity().downgrade();
+            let field_bg = crate::ui::field_bg(cx);
             window.open_dialog(cx, move |dialog, _, _| {
                 let (input_state, owner, id, view) = (input.clone(), owner.clone(), id.clone(), view.clone());
                 let (prompt_state, schedule_state) = (prompt.clone(), schedule.clone());
                 dialog.title(t!("automation_edit").to_string()).child(v_flex().gap_2()
-                    .child(Input::new(&input))
-                    .when(view["prompt_file_path"].is_null(), |form| form.child(t!("automation_prompt").to_string()).child(gpui_kit::component::input::Textarea::new(&prompt)))
-                    .child(t!("automation_schedule_input").to_string()).child(Input::new(&schedule)))
+                    .child(Input::new(&input).bg(field_bg))
+                    .when(view["prompt_file_path"].is_null(), |form| form.child(t!("automation_prompt").to_string()).child(gpui_kit::component::input::Textarea::new(&prompt).bg(field_bg)))
+                    .child(t!("automation_schedule_input").to_string()).child(Input::new(&schedule).bg(field_bg)))
                     .footer(h_flex().justify_end().gap_2()
                         .child(Button::new("rename-automation-cancel").label(t!("action_cancel").to_string()).on_click(|_, window, cx| window.close_dialog(cx)))
                         .child(Button::new("rename-automation-save").primary().label(t!("session_save").to_string()).on_click(move |_, window, cx| {
@@ -359,26 +607,9 @@ fn valid_daily_time(time: &str) -> bool {
         && minute.parse::<u8>().is_ok_and(|v| v < 60)
 }
 
-pub(super) fn toggle_chat_hub(this: &mut Observer, window: &mut Window, cx: &mut Context<Observer>) {
-    #[cfg(not(feature = "chat-hub"))]
-    let _ = window;
-    #[cfg(not(feature = "chat-hub"))]
-    {
-        this.not_implemented(t!("chat_hub"), cx);
-    }
-    #[cfg(feature = "chat-hub")]
-    {
-        if this.chat_hub.is_some() {
-            this.toggle_chat_hub_dock(window, cx);
-        } else {
-            this.ensure_chat_hub_sites(cx);
-            this.show_toast(
-                crate::ToastKind::Info,
-                t!("chat_hub_pick_site").to_string(),
-                cx,
-            );
-        }
-    }
+#[cfg(not(feature = "chat-hub"))]
+pub(super) fn toggle_chat_hub(this: &mut Observer, _window: &mut Window, cx: &mut Context<Observer>) {
+    this.not_implemented(t!("chat_hub"), cx);
 }
 
 /// Renders the 40px titlebar above the sidebar and transcript.
@@ -401,6 +632,14 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
         "sidebar",
         if collapsed { secondary } else { accent },
         skin.hover,
+        Some(
+            if collapsed {
+                t!("expand_sidebar")
+            } else {
+                t!("collapse_sidebar")
+            }
+            .to_string(),
+        ),
         cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
     ));
     let pending = observer.pending_approvals();
@@ -465,16 +704,18 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
         .gap(px(8.))
         .child(icon_button(
             "create-automation",
-            "clock",
+            "add-automation",
             secondary,
             skin.hover,
+            Some(t!("create_automation").to_string()),
             cx.listener(|this, _, window, cx| open_automation(this, window, cx)),
         ))
         .child(icon_button(
             "new-session",
-            "new-chat",
+            "edit",
             secondary,
             skin.hover,
+            Some(t!("new_task").to_string()),
             cx.listener(|this, _, _, cx| this.open_new_task_dialog(cx)),
         ))
         .child(icon_button(
@@ -486,6 +727,7 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
                 secondary.opacity(0.45)
             },
             skin.hover,
+            Some(t!("delete_last_message").to_string()),
             cx.listener(|this, _, window, cx| this.confirm_rewind(window, cx)),
         ))
         .when(super::window_pin::supported(window), |row| {
@@ -500,6 +742,14 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
                     })
                     .rotate(if observer.pinned { 0. } else { 45. }),
                 skin.hover,
+                Some(
+                    if observer.pinned {
+                        t!("unpin")
+                    } else {
+                        t!("pin")
+                    }
+                    .to_string(),
+                ),
                 cx.listener(|this, _, window, cx| this.toggle_pin(window, cx)),
             ))
         });
@@ -633,6 +883,7 @@ fn menu(observer: &Observer, secondary: Hsla, cx: &mut Context<Observer>) -> Any
             "menu",
             secondary,
             hover,
+            None,
         )))
         .content(move |_, window, cx| {
             let popover = cx.entity();
@@ -803,7 +1054,13 @@ fn sound_menu(
     Popover::new("titlebar-sound")
         .anchor(Anchor::TopLeft)
         .offset(px(6.))
-        .trigger(trigger(flat_button("sound-button", icon, secondary, hover)))
+        .trigger(trigger(flat_button(
+            "sound-button",
+            icon,
+            secondary,
+            hover,
+            Some(t!("notification_sound").to_string()),
+        )))
         .content(move |_, _, cx| {
             let popover = cx.entity();
             let approval = {
@@ -854,7 +1111,13 @@ fn sound_menu(
 }
 
 /// A flat 26x22 trigger surface: 18px glyph, Vue's `.icon-btn` box.
-fn flat_button(id: &'static str, icon: &'static str, color: Hsla, hover: Hsla) -> impl IntoElement {
+fn flat_button(
+    id: &'static str,
+    icon: &'static str,
+    color: Hsla,
+    hover: Hsla,
+    hint: Option<String>,
+) -> impl IntoElement {
     h_flex()
         .id(id)
         .flex_none()
@@ -866,6 +1129,7 @@ fn flat_button(id: &'static str, icon: &'static str, color: Hsla, hover: Hsla) -
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(18.).color(color))
+        .when_some(hint, |button, text| button.tooltip(crate::ui::tip(text)))
 }
 
 fn menu_row(

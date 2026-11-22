@@ -64,6 +64,8 @@ pub fn glyph(name: &str) -> &'static str {
         "clock" => "\u{e819}",
         "list" => "\u{e661}",
         "add" => "\u{e673}",
+        "add-automation" => "\u{e6a9}",
+        "automation" => "\u{e72f}",
         "sidebar" => "\u{ef19}",
         "send" => "\u{e705}",
         "pin" => "\u{e755}",
@@ -339,6 +341,8 @@ mod tests {
             "caret-right",
             "fullscreen-off",
             "double-arrow-up",
+            "add-automation",
+            "automation",
         ] {
             let ch = glyph(name).chars().next().unwrap();
             assert!(glyph_id_for_char(FONT, ch).is_some(), "missing {name}");
@@ -391,6 +395,8 @@ mod tests {
             "clock",
             "list",
             "add",
+            "add-automation",
+            "automation",
             "sidebar",
             "send",
             "pin",

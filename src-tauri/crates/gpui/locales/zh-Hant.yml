@@ -27,6 +27,21 @@ auto_compress_enabled: "自動壓縮：開啟"
 auto_compress_hint: "自動彙總過長的上下文"
 automation_acknowledge_apply: 確認權限變更並套用
 automation_action_failed: 無法執行排程任務操作
+automation_allowed_paths: 允許的目錄
+automation_allowed_paths_hint: "多個絕對路徑用逗號分隔"
+automation_continuous_context: 持續上下文
+automation_frequency: 執行頻率
+automation_frequency_daily: 每天
+automation_frequency_interval: 間隔
+automation_frequency_once: 一次
+automation_schedule_daily_hint: "本地 HH:MM，多個時間用逗號分隔"
+automation_schedule_interval_hint: "間隔分鐘數，例如 30m（最小 5m）"
+automation_schedule_once_hint: "本地時間，格式 YYYY-MM-DD HH:MM"
+automation_self_review: 自我審查
+automation_start: 建立後啟用
+automation_tab_advanced: 附加資訊
+automation_tab_basic: 基本資訊
+automation_task_title: 任務標題
 automation_review_plan: 審核自動化計畫
 automation_agent_label: "代理：%{agent}"
 automation_agent_required: 暫無可用代理
@@ -43,6 +58,19 @@ automation_history: 歷程
 automation_history_empty: 暫無執行紀錄
 automation_name: 任務名稱
 automation_prompt: 任務指令
+automation_prompt_file: 提示詞檔案
+automation_prompt_file_hint: Markdown/文字提示詞檔案的絕對路徑
+automation_shell_command: Shell 命令
+automation_shell_command_hint: 可選的、任務執行前執行的命令
+automation_weekdays: 執行星期
+automation_effective_range: 生效日期範圍
+automation_weekday_mon: 週一
+automation_weekday_tue: 週二
+automation_weekday_wed: 週三
+automation_weekday_thu: 週四
+automation_weekday_fri: 週五
+automation_weekday_sat: 週六
+automation_weekday_sun: 週日
 automation_required_fields: 請輸入名稱、任務指令和有效排程。
 automation_schedule_input: "每日：09:00，18:00；間隔：30m（最少 5m）；單次：YYYY-MM-DD HH:MM（本機時間）"
 automation_run: 立即執行
@@ -154,6 +182,11 @@ menu_skill: 技能
 menu_workflow: 任務
 metrics_error: 無法寫入性能指標
 model_config: "模型配置"
+model_context_size: "上下文"
+model_max_tokens: "最大輸出"
+model_reasoning: "推理支援"
+model_reasoning_level: "推理強度"
+model_temperature: "溫度"
 model_placeholder: "選擇模型"
 model_slot_act: "執行模型"
 model_slot_lite: "輕量模型"
@@ -171,6 +204,7 @@ new_task_dialog_title: "建立新任務"
 new_task_inherit_description: "重用目前任務的智能體、授權目錄與任務偏好。"
 new_task_inherit_title: "繼承目前任務設定"
 new_task: 新建任務
+notification_sound: "通知聲音"
 no_sessions: 暫無工作流會話
 not_supported_native: 原生視窗暫未支援
 file_editor_close: 關閉
@@ -211,14 +245,21 @@ queued_messages: "排隊中的訊息"
 quick_actions: "快捷操作"
 quick_configuration: "配置"
 quick_runtime: "執行時"
+param_off: 關閉
+reasoning_high: 高
+reasoning_low: 低
+reasoning_max: 最高
+reasoning_medium: 中
 reject: 拒絕
 rejected_label: 已拒絕
+result_label: 結果
 remove_attachment: "移除附件"
 rewind_confirm: 確定移除最近一步並回退會話嗎？
 rewind_done: 已回退會話
 rewind_unavailable: 目前無法回退會話
 root_filter_all: 全部目錄
 sandbox_config: "沙箱設定"
+sandbox_execution_mode: "執行模式"
 sandbox_empty: "暫無沙箱設定"
 sandbox_mode_auto: "自動"
 sandbox_mode_auto_hint: "按優先級使用主機或沙箱規則，再回退到公共沙箱"
@@ -261,6 +302,9 @@ snapshot_previous: 上一次上下文快照
 snapshot_previous_tasks: 之前的任務
 snapshot_recent_actions: 最近操作
 snapshot_required_fixes: 必需修復
+shell_decision_allow: "允許"
+shell_decision_deny: "拒絕"
+shell_decision_review: "須審批"
 snapshot_review_approved: 已批準
 snapshot_review_open: 未解決
 snapshot_review_round: 審查
@@ -376,6 +420,8 @@ tab_automation: 自動化
 tab_paths: 授權目錄
 tab_tasks: 任務
 terminal: 終端
+terminal_close: 關閉終端
+terminal_close_confirm: 確定關閉該終端嗎？其中正在執行的命令會停止。
 terminal_connecting: 正在開啟終端…
 terminal_exited: 終端已結束
 terminal_input_failed: 無法傳送終端輸入

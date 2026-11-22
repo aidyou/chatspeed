@@ -60,7 +60,6 @@ const MIN_TOP_GAP: f32 = 5.;
 const TODO_PREVIEW: usize = 10;
 const RECENT_LIMIT: usize = 3;
 const CHILD_LIMIT: usize = 5;
-const RING_DOTS: usize = 32;
 const TAU: f32 = std::f32::consts::TAU;
 
 fn clamp_px(value: Pixels, low: Pixels, high: Pixels) -> Pixels {
@@ -165,6 +164,16 @@ fn dragged(event: &ClickEvent) -> bool {
     }
 }
 
+/// Remember a drag in the slot for the current presentation, so collapsing an
+/// expanded panel never reuses the expanded top-left corner.
+pub(crate) fn remember_position(observer: &mut crate::Observer, position: Point<Pixels>) {
+    if observer.status_panel_mode == PanelMode::Expanded {
+        observer.status_panel_expanded_position = Some(position);
+    } else {
+        observer.status_panel_collapsed_position = Some(position);
+    }
+}
+
 /// A press on the panel starts the move and, like Vue's `user-select: none`
 /// header, must not seed a text selection in the transcript below it.
 fn begin_drag(
@@ -177,7 +186,8 @@ fn begin_drag(
     window.prevent_default();
     GlobalState::suppress_text_selection(cx);
     TextSelection::clear(window, cx);
-    cx.stop_propagation();
+    // No `stop_propagation` here: the window-level move listener must keep
+    // receiving the drag so the panel follows the pointer outside its bounds.
     this.status_panel_drag = Some(event.position - origin);
 }
 
@@ -230,7 +240,11 @@ pub(crate) fn overlay(
         area.origin.x + area.size.width - width - px(DEFAULT_RIGHT),
         area.origin.y + px(DEFAULT_TOP),
     );
-    let position = observer.status_panel_position.unwrap_or(default);
+    let position = match mode {
+        PanelMode::Expanded => observer.status_panel_expanded_position,
+        _ => observer.status_panel_collapsed_position,
+    }
+    .unwrap_or(default);
     let origin = point(
         clamp_px(
             position.x,
@@ -275,25 +289,46 @@ pub(crate) fn overlay(
             );
         if let Some(used_percent) = context {
             let fraction = used_percent as f32 / 100.;
-            let center = TRIGGER_SIZE / 2.;
-            let radius = TRIGGER_SIZE / 2. - 4.;
-            for segment in 0..RING_DOTS {
-                let angle = segment as f32 * TAU / RING_DOTS as f32;
-                let filled = (segment as f32) < fraction * RING_DOTS as f32;
-                trigger = trigger.child(
-                    div()
-                        .absolute()
-                        .left(px(center - 1. + radius * angle.sin()))
-                        .top(px(center - 1. - radius * angle.cos()))
-                        .size(px(2.))
-                        .rounded_full()
-                        .bg(if filled {
-                            ring
-                        } else {
-                            border.opacity(0.6)
-                        }),
-                );
-            }
+            let track = border.opacity(0.6);
+            trigger = trigger.child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, (), window, _| {
+                        let center = point(
+                            bounds.origin.x + bounds.size.width / 2.,
+                            bounds.origin.y + bounds.size.height / 2.,
+                        );
+                        let radius =
+                            (bounds.size.width.min(bounds.size.height) / 2. - px(1.)).max(px(1.));
+                        let top = point(center.x, center.y - radius);
+                        let bottom = point(center.x, center.y + radius);
+                        // A continuous two-pixel track reads as a solid ring;
+                        // the previous dot loop looked like a dashed border.
+                        let mut base = PathBuilder::stroke(px(2.));
+                        base.move_to(top);
+                        base.arc_to(point(radius, radius), px(0.), true, true, bottom);
+                        base.arc_to(point(radius, radius), px(0.), true, true, top);
+                        if let Ok(path) = base.build() {
+                            window.paint_path(path, track);
+                        }
+                        if fraction > 0.001 {
+                            let angle = TAU * fraction.clamp(0., 1.);
+                            let end = point(
+                                center.x + radius * angle.sin(),
+                                center.y - radius * angle.cos(),
+                            );
+                            let mut filled = PathBuilder::stroke(px(2.));
+                            filled.move_to(top);
+                            filled.arc_to(point(radius, radius), px(0.), fraction > 0.5, true, end);
+                            if let Ok(path) = filled.build() {
+                                window.paint_path(path, ring);
+                            }
+                        }
+                    },
+                )
+                .absolute()
+                .inset(px(3.)),
+            );
         }
         if percent > 0 {
             trigger = trigger.child(
@@ -490,7 +525,6 @@ pub(crate) fn overlay(
         .left(origin.x)
         .top(origin.y)
         .w(width)
-        .h(height)
         .bg(background)
         .border_1()
         .border_color(border)
@@ -498,18 +532,56 @@ pub(crate) fn overlay(
         .overflow_hidden()
         .rounded(px(16.))
         .child(header);
-    if mode == PanelMode::Expanded {
-        panel = panel.child(
-            div()
-                .id("status-panel-body")
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .overflow_y_scroll()
-                .p(px(12.))
-                .child(workflow_details(observer, cx)),
-        );
+    if mode == PanelMode::Compact {
+        panel = panel.h(height);
+    } else {
+        // The expanded panel only takes the height its content needs, capped
+        // at the same maximum the previous fixed layout used.
+        panel = panel.max_h(height);
     }
+    if mode == PanelMode::Expanded {
+        let child_count = child_rows(observer).0.len();
+        panel = panel
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .px(px(12.))
+                    .pt(px(12.))
+                    .flex_none()
+                    .child(workflow_tabs(observer, child_count, cx)),
+            )
+            .child(
+                div()
+                    .id("status-panel-body")
+                    .w_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .max_h(px(BODY_MAX_HEIGHT - HEADER_HEIGHT - 56.))
+                    .overflow_y_scroll()
+                    .px(px(12.))
+                    .pt(px(12.))
+                    .pb(px(12.))
+                    .child(workflow_details(observer, cx)),
+            );
+    }
+    panel = panel
+        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+            if let Some(offset) = this.status_panel_drag {
+                if event.pressed_button == Some(MouseButton::Left) {
+                    remember_position(this, event.position - offset);
+                    cx.notify();
+                } else {
+                    this.status_panel_drag = None;
+                }
+            }
+        }))
+        .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+            if this.status_panel_drag.take().is_some() {
+                this.save_status_panel_positions();
+            }
+            cx.notify();
+        }));
     Some(panel.into_any_element())
 }
 
@@ -597,11 +669,46 @@ struct ModelRow {
     source_class: &'static str,
 }
 
-fn model_name(config: &Value) -> Option<String> {
-    config["model"]
-        .as_str()
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
+/// Provider entries carry a display name; proxy slots keep their
+/// `group@alias` form because that is the only identity the runtime has.
+fn model_name(observer: &crate::Observer, config: &Value) -> Option<String> {
+    let model = config["model"].as_str().filter(|name| !name.is_empty())?;
+    if config["id"].as_i64().unwrap_or_default() == 0 {
+        return Some(model.to_owned());
+    }
+    Some(
+        observer
+            .models
+            .iter()
+            .find(|provider| provider["id"].as_i64() == config["id"].as_i64())
+            .and_then(|provider| {
+                provider["models"]
+                    .as_array()?
+                    .iter()
+                    .find(|entry| entry["id"].as_str() == Some(model))
+                    .and_then(|entry| entry["name"].as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| model.to_owned()),
+    )
+}
+
+/// `Direct` is reserved for provider-owned slots. A `group@alias` slot is a
+/// ChatSpeed proxy and must not be labelled as a direct connection.
+fn model_source(
+    config: &Value,
+    source: String,
+    source_class: &'static str,
+) -> (String, &'static str) {
+    let proxy = config["id"].as_i64().unwrap_or_default() == 0
+        && config["model"]
+            .as_str()
+            .is_some_and(|model| model.contains('@'));
+    if proxy {
+        (t!("model_source_proxy").to_string(), "proxy")
+    } else {
+        (source, source_class)
+    }
 }
 
 fn model_rows(observer: &crate::Observer) -> Vec<ModelRow> {
@@ -609,98 +716,99 @@ fn model_rows(observer: &crate::Observer) -> Vec<ModelRow> {
     let active = observer.active_model_config();
     let planning = observer.planning_mode;
     let mut rows = Vec::new();
-    if let Some(name) = model_name(&configs["plan"]) {
+    let push = |rows: &mut Vec<ModelRow>,
+                label: String,
+                config: &Value,
+                source: String,
+                source_class: &'static str| {
+        let Some(name) = model_name(observer, config) else {
+            return;
+        };
+        let (source, source_class) = model_source(config, source, source_class);
         rows.push(ModelRow {
-            label: t!("status_panel_plan_model").to_string(),
-            name,
-            source: if planning {
-                t!("status_panel_active").to_string()
-            } else {
-                t!("status_panel_direct").to_string()
-            },
-            source_class: if planning { "active" } else { "direct" },
-        });
-    }
-    if let Some(name) = model_name(&active) {
-        rows.push(ModelRow {
-            label: t!("status_panel_work_model").to_string(),
-            name,
-            source: t!("status_panel_active").to_string(),
-            source_class: "active",
-        });
-    }
-    let utility = model_name(&configs["utility"])
-        .map(|name| (name, t!("status_panel_direct").to_string(), "direct"))
-        .or_else(|| {
-            model_name(&active).map(|name| {
-                (
-                    name,
-                    t!("status_panel_fallback").to_string(),
-                    "fallback",
-                )
-            })
-        });
-    if let Some((name, source, source_class)) = &utility {
-        rows.push(ModelRow {
-            label: t!("status_panel_utility_model").to_string(),
-            name: name.clone(),
-            source: source.clone(),
-            source_class: *source_class,
-        });
-    }
-    if let Some(name) = model_name(&configs["lite"]) {
-        rows.push(ModelRow {
-            label: t!("status_panel_lite_model").to_string(),
-            name,
-            source: t!("status_panel_direct").to_string(),
-            source_class: "direct",
-        });
-    }
-    if let Some(name) = model_name(&configs["vision"]) {
-        rows.push(ModelRow {
-            label: t!("status_panel_vision_model").to_string(),
-            name,
-            source: t!("status_panel_direct").to_string(),
-            source_class: "direct",
-        });
-    }
-    let global_title = &observer.status_title_model;
-    let title = model_name(&configs["lite"])
-        .map(|name| (name, t!("status_panel_direct").to_string(), "direct"))
-        .or_else(|| {
-            (global_title["id"].as_i64().unwrap_or_default() > 0)
-                .then(|| model_name(global_title))
-                .flatten()
-                .map(|name| (name, t!("status_panel_global").to_string(), "global"))
-        })
-        .or_else(|| {
-            utility
-                .as_ref()
-                .map(|(name, _, _)| {
-                    (
-                        name.clone(),
-                        t!("status_panel_utility_fallback").to_string(),
-                        "fallback",
-                    )
-                })
-        })
-        .or_else(|| {
-            model_name(&active).map(|name| {
-                (
-                    name,
-                    t!("status_panel_work_fallback").to_string(),
-                    "fallback",
-                )
-            })
-        });
-    if let Some((name, source, source_class)) = title {
-        rows.push(ModelRow {
-            label: t!("status_panel_title_model").to_string(),
+            label,
             name,
             source,
             source_class,
         });
+    };
+    push(
+        &mut rows,
+        t!("status_panel_plan_model").to_string(),
+        &configs["plan"],
+        if planning {
+            t!("status_panel_active").to_string()
+        } else {
+            t!("status_panel_direct").to_string()
+        },
+        if planning { "active" } else { "direct" },
+    );
+    push(
+        &mut rows,
+        t!("status_panel_work_model").to_string(),
+        &active,
+        t!("status_panel_active").to_string(),
+        "active",
+    );
+    let utility = if model_name(observer, &configs["utility"]).is_some() {
+        (
+            &configs["utility"],
+            t!("status_panel_direct").to_string(),
+            "direct",
+        )
+    } else {
+        (&active, t!("status_panel_fallback").to_string(), "fallback")
+    };
+    if model_name(observer, utility.0).is_some() {
+        push(
+            &mut rows,
+            t!("status_panel_utility_model").to_string(),
+            utility.0,
+            utility.1,
+            utility.2,
+        );
     }
+    push(
+        &mut rows,
+        t!("status_panel_lite_model").to_string(),
+        &configs["lite"],
+        t!("status_panel_direct").to_string(),
+        "direct",
+    );
+    push(
+        &mut rows,
+        t!("status_panel_vision_model").to_string(),
+        &configs["vision"],
+        t!("status_panel_direct").to_string(),
+        "direct",
+    );
+    let global_title = &observer.status_title_model;
+    let title = if model_name(observer, &configs["lite"]).is_some() {
+        (&configs["lite"], t!("status_panel_direct").to_string(), "direct")
+    } else if global_title["id"].as_i64().unwrap_or_default() > 0
+        && model_name(observer, global_title).is_some()
+    {
+        (global_title, t!("status_panel_global").to_string(), "global")
+    } else if model_name(observer, utility.0).is_some() {
+        (
+            utility.0,
+            t!("status_panel_utility_fallback").to_string(),
+            "fallback",
+        )
+    } else {
+        (
+            &active,
+            t!("status_panel_work_fallback").to_string(),
+            "fallback",
+        )
+    };
+    push(
+        &mut rows,
+        t!("status_panel_title_model").to_string(),
+        title.0,
+        title.1,
+        title.2,
+    );
     rows
 }
 
@@ -1173,28 +1281,19 @@ fn recent_operations(observer: &crate::Observer) -> (Vec<OpRow>, usize) {
     (rows, total)
 }
 
-fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer>) -> AnyElement {
+/// Tabs stay outside the scrolling body so they remain reachable while a long
+/// task list scrolls underneath.
+fn workflow_tabs(
+    observer: &crate::Observer,
+    child_count: usize,
+    cx: &mut Context<crate::Observer>,
+) -> AnyElement {
     let muted = cx.theme().muted_foreground;
-    let foreground = cx.theme().foreground;
     let border = cx.theme().border;
     let background = cx.theme().background;
     let surface = cx.theme().muted;
     let primary = cx.theme().primary;
     let hover = crate::ui::surfaces(observer.appearance_dark).hover;
-
-    let total = observer.model.todo_list.len();
-    let completed = observer
-        .model
-        .todo_list
-        .iter()
-        .filter(|task| is_done(task))
-        .count();
-    let percent = completed
-        .checked_mul(100)
-        .and_then(|value| value.checked_div(total))
-        .unwrap_or(0) as u32;
-    let (children, child_total) = child_rows(observer);
-    let (operations, tool_total) = recent_operations(observer);
 
     let tabs = [
         "status_panel_main_agent",
@@ -1208,7 +1307,6 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
         .flex_none()
         .gap(px(4.))
         .p(px(4.))
-        .mb(px(12.))
         .rounded(px(8.))
         .bg(surface)
         .border_1()
@@ -1247,7 +1345,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
         if !active {
             tab = tab.hover(move |style| style.bg(hover));
         }
-        if index == 1 && !children.is_empty() {
+        if index == 1 && child_count > 0 {
             tab = tab.child(
                 div()
                     .flex_none()
@@ -1261,13 +1359,38 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                     .bg(primary)
                     .text_size(px(10.))
                     .text_color(cx.theme().primary_foreground)
-                    .child(children.len().to_string()),
+                    .child(child_count.to_string()),
             );
         }
         bar = bar.child(tab);
     }
+    bar.into_any_element()
+}
 
-    let mut body = v_flex().w_full().min_w_0().gap(px(16.)).child(bar);
+fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer>) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let foreground = cx.theme().foreground;
+    let border = cx.theme().border;
+    let background = cx.theme().background;
+    let surface = cx.theme().muted;
+    let primary = cx.theme().primary;
+    let hover = crate::ui::surfaces(observer.appearance_dark).hover;
+
+    let total = observer.model.todo_list.len();
+    let completed = observer
+        .model
+        .todo_list
+        .iter()
+        .filter(|task| is_done(task))
+        .count();
+    let percent = completed
+        .checked_mul(100)
+        .and_then(|value| value.checked_div(total))
+        .unwrap_or(0) as u32;
+    let (children, child_total) = child_rows(observer);
+    let (operations, tool_total) = recent_operations(observer);
+
+    let mut body = v_flex().w_full().min_w_0().gap(px(16.));
 
     match observer.status_panel_tab {
         1 => {

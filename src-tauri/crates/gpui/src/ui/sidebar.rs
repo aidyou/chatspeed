@@ -190,7 +190,7 @@ fn rail(
         ))
         .child(rail_tab_button(
             "rail-automation",
-            "clock",
+            "automation",
             observer.rail_tab == RailTab::Automation,
             true,
             skin,
@@ -735,11 +735,12 @@ fn session_actions(session: &Session, cx: &mut Context<Observer>) -> impl IntoEl
                     });
                     let owner = cx.entity().downgrade();
                     let id = rename.id.clone();
+                    let field_bg = crate::ui::field_bg(cx);
                     window.open_dialog(cx, move |dialog, _, _| {
                         let (field, owner, id) = (input.clone(), owner.clone(), id.clone());
                         dialog
                             .title(t!("session_rename").to_string())
-                            .child(Input::new(&input))
+                            .child(Input::new(&input).bg(field_bg))
                             .footer(
                                 Button::new("save-session-title")
                                     .label(t!("session_save").to_string())
@@ -769,25 +770,17 @@ fn session_actions(session: &Session, cx: &mut Context<Observer>) -> impl IntoEl
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover))
                 .child(Icon::new("delete").size(14.))
-                .on_click(cx.listener(move |_, _, window, cx| {
+                .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     let id = delete.clone();
-                    let answer = window.prompt(
-                        PromptLevel::Warning,
-                        &t!("session_delete"),
-                        Some(&t!("session_delete_confirm")),
-                        &[
-                            PromptButton::cancel(t!("action_cancel").to_string()),
-                            PromptButton::new(t!("session_delete").to_string()),
-                        ],
-                        cx,
-                    );
-                    cx.spawn(async move |owner, cx| {
-                        if answer.await.ok() == Some(1) {
-                            let _ = owner.update(cx, |this, cx| this.edit_session(id, None, cx));
-                        }
-                    })
-                    .detach();
+                    this.confirm = Some(crate::ui::confirm::ConfirmRequest {
+                        kind: crate::ui::confirm::ConfirmKind::DeleteSession(id),
+                        title: t!("session_delete").to_string(),
+                        message: t!("session_delete_confirm").to_string(),
+                        confirm_label: t!("session_delete").to_string(),
+                        danger: true,
+                    });
+                    cx.notify();
                 })),
         )
 }
@@ -840,23 +833,15 @@ fn automation_list(observer: &Observer, cx: &mut Context<Observer>) -> AnyElemen
             .child(div().id("delete-automation").cursor_pointer().child(Icon::new("delete"))
                 .on_click(cx.listener({
                     let id = entry.automation_id.clone();
-                    move |_, _, window, cx| {
-                        let id = id.clone();
-                        let label = t!("automation_delete");
-                        let answer = window.prompt(PromptLevel::Warning, &label, Some(&t!("automation_delete_confirm")), &[
-                            PromptButton::cancel(t!("action_cancel").to_string()),
-                            PromptButton::new(label.to_string()),
-                        ], cx);
-                        cx.spawn(async move |owner, cx| {
-                            if answer.await.ok() == Some(1) {
-                                let _ = owner.update(cx, |this, cx| {
-                                    use chatspeed_gpui::types::{AutomationAction, Command};
-                                    if this.worker.commands.try_send(Command::ActOnAutomation { id, action: AutomationAction::Delete }).is_err() {
-                                        this.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
-                                    }
-                                });
-                            }
-                        }).detach();
+                    move |this, _, _, cx| {
+                        this.confirm = Some(crate::ui::confirm::ConfirmRequest {
+                            kind: crate::ui::confirm::ConfirmKind::DeleteAutomation(id.clone()),
+                            title: t!("automation_delete").to_string(),
+                            message: t!("automation_delete_confirm").to_string(),
+                            confirm_label: t!("automation_delete").to_string(),
+                            danger: true,
+                        });
+                        cx.notify();
                     }
                 }))));
         if let Some((_, runs)) = observer.automation_history.as_ref().filter(|(id, _)| *id == entry.automation_id) {
@@ -921,7 +906,7 @@ fn compact(
                 ))
                 .child(rail_tab_button(
                     "compact-automation",
-                    "clock",
+                    "automation",
                     observer.rail_tab == RailTab::Automation,
                     false,
                     skin,
@@ -988,6 +973,19 @@ fn compact_entry(
 /// Active and recent conversation badges between the tab and entry groups.
 fn compact_list(observer: &Observer, skin: &Surfaces, cx: &mut Context<Observer>) -> AnyElement {
     let border = cx.theme().border;
+    if observer.rail_tab == RailTab::Automation {
+        // The compact rail mirrors the expanded panel: automation mode has no
+        // session rows, so the session badges must not linger beside the rail.
+        return v_flex()
+            .id("compact-list")
+            .w_full()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .gap(px(4.))
+            .py_2()
+            .into_any_element();
+    }
     let active: Vec<&Session> = observer.sessions.iter().filter(|s| is_active(s)).collect();
     let recent: Vec<&Session> = observer
         .sessions

@@ -27,6 +27,21 @@ auto_compress_enabled: "Auto compression on"
 auto_compress_hint: "Roll up long context automatically"
 automation_acknowledge_apply: Acknowledge permission changes and apply
 automation_action_failed: Could not perform the scheduled task action
+automation_allowed_paths: Allowed directories
+automation_allowed_paths_hint: "Comma-separated absolute paths"
+automation_continuous_context: Continuous context
+automation_frequency: Frequency
+automation_frequency_daily: Daily
+automation_frequency_interval: Interval
+automation_frequency_once: Once
+automation_schedule_daily_hint: "Times in local HH:MM, comma-separated"
+automation_schedule_interval_hint: "Interval in minutes, for example 30m (minimum 5m)"
+automation_schedule_once_hint: "Local time as YYYY-MM-DD HH:MM"
+automation_self_review: Self review
+automation_start: Start enabled
+automation_tab_advanced: Additional information
+automation_tab_basic: Basic information
+automation_task_title: Task title
 automation_review_plan: Review automation plan
 automation_agent_label: "Agent: %{agent}"
 automation_agent_required: No agent is available
@@ -43,6 +58,19 @@ automation_history: History
 automation_history_empty: No runs yet
 automation_name: Task name
 automation_prompt: Task instructions
+automation_prompt_file: Prompt file
+automation_prompt_file_hint: Absolute path to a Markdown/text prompt file
+automation_shell_command: Shell command
+automation_shell_command_hint: Optional command to run before the task
+automation_weekdays: Weekdays
+automation_effective_range: Effective range
+automation_weekday_mon: Mon
+automation_weekday_tue: Tue
+automation_weekday_wed: Wed
+automation_weekday_thu: Thu
+automation_weekday_fri: Fri
+automation_weekday_sat: Sat
+automation_weekday_sun: Sun
 automation_required_fields: Enter a name, instructions, and a valid schedule.
 automation_schedule_input: "Daily: 09:00, 18:00 · Interval: 30m (minimum 5m) · Once: YYYY-MM-DD HH:MM (local time)"
 automation_run: Run now
@@ -154,6 +182,11 @@ menu_skill: Skill
 menu_workflow: Task
 metrics_error: Metrics output unavailable
 model_config: "Model configuration"
+model_context_size: "Context size"
+model_max_tokens: "Max output"
+model_reasoning: "Reasoning support"
+model_reasoning_level: "Reasoning effort"
+model_temperature: "Temperature"
 model_placeholder: "Select Model"
 model_slot_act: "Action model"
 model_slot_lite: "Lite model"
@@ -171,6 +204,7 @@ new_task_dialog_title: "Create New Task"
 new_task_inherit_description: "Reuse the current task's agent, authorized directories, and task preferences."
 new_task_inherit_title: "Inherit current task configuration"
 new_task: New task
+notification_sound: "Notification sound"
 no_sessions: No workflow sessions yet
 not_supported_native: Not available in the native window yet
 file_editor_close: Close
@@ -211,14 +245,21 @@ queued_messages: "Queued messages"
 quick_actions: "Quick actions"
 quick_configuration: "Configuration"
 quick_runtime: "Runtime"
+param_off: Off
+reasoning_high: High
+reasoning_low: Low
+reasoning_max: Max
+reasoning_medium: Medium
 reject: Reject
 rejected_label: Rejected
+result_label: Result
 remove_attachment: "Remove attachment"
 rewind_confirm: Rewind this conversation by removing its latest step?
 rewind_done: Conversation rewound
 rewind_unavailable: The conversation cannot be rewound right now
 root_filter_all: All directories
 sandbox_config: "Sandbox configuration"
+sandbox_execution_mode: "Execution mode"
 sandbox_empty: "No sandbox profiles"
 sandbox_mode_auto: "Auto"
 sandbox_mode_auto_hint: "Use host or sandbox rules by priority, then fall back to the common sandbox"
@@ -261,6 +302,9 @@ snapshot_previous: Previous Context Snapshot
 snapshot_previous_tasks: Previous Tasks
 snapshot_recent_actions: Recent Actions
 snapshot_required_fixes: Required fixes
+shell_decision_allow: "Allow"
+shell_decision_deny: "Deny"
+shell_decision_review: "Review"
 snapshot_review_approved: Approved
 snapshot_review_open: Open
 snapshot_review_round: Review
@@ -376,6 +420,8 @@ tab_automation: Automation
 tab_paths: Authorized paths
 tab_tasks: Tasks
 terminal: Terminal
+terminal_close: Close terminal
+terminal_close_confirm: Close this terminal? Running commands in it will stop.
 terminal_connecting: Opening terminal…
 terminal_exited: Terminal exited
 terminal_input_failed: Terminal input could not be sent

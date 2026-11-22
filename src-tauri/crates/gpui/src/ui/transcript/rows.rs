@@ -190,17 +190,15 @@ pub(crate) fn activity_group(
                 .ml(px(7.))
                 .invisible()
                 .group_hover("activity-header", |style| style.visible())
-                .child(
-                    Icon::new(if items.is_some() {
-                        "caret-down"
-                    } else {
-                        "caret-right"
-                    })
-                    .size(14.)
-                    .color(muted),
-                ),
+                .child(crate::ui::rotating_icon(
+                    format!("activity-{}", group.key),
+                    "caret-right",
+                    14.,
+                    muted,
+                    if items.is_some() { 0. } else { 90. },
+                    if items.is_some() { 90. } else { 0. },
+                )),
         )
-        .tooltip(crate::ui::tip(group.summary.clone()))
         .on_click(on_toggle);
     v_flex()
         .w_full()

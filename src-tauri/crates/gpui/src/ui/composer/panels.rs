@@ -11,15 +11,16 @@ use gpui_kit::*;
 use rust_i18n::t;
 use serde_json::{json, Value};
 
-use super::footer::{apply_model_choice, ModelChoice};
+use super::footer::{apply_model_choice, model_choices, ModelChoice};
+use crate::ui::menu_popover::MenuPopover;
 use crate::ui::Icon;
 use crate::{Observer, QuickPanel, ToolDraft};
 use chatspeed_gpui::types::Command;
 
-const MODEL_SLOTS: [&str; 5] = ["act", "plan", "vision", "utility", "lite"];
+const MODEL_SLOTS: [&str; 5] = ["plan", "act", "utility", "lite", "vision"];
 
 /// The centered modal for the active configuration panel.
-pub fn overlay(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+pub fn overlay(observer: &Observer, window: &mut Window, cx: &mut Context<Observer>) -> AnyElement {
     let Some(panel) = observer.quick_panel else {
         return div().into_any_element();
     };
@@ -36,7 +37,7 @@ pub fn overlay(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let surface = cx.theme().background;
     let body = match panel {
         QuickPanel::Models => model_panel(observer, cx),
-        QuickPanel::Skills => skills_panel(observer, cx),
+        QuickPanel::Skills => skills_panel(observer, window, cx),
         QuickPanel::Mcp => mcp_panel(observer, cx),
         QuickPanel::Tools => tool_panel(observer, cx),
         QuickPanel::Personality => personality_panel(observer, cx),
@@ -59,7 +60,11 @@ pub fn overlay(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .child(
             v_flex()
                 .id("composer-config-panel")
-                .w(px(600.))
+                .w(px(if matches!(panel, QuickPanel::Models) {
+                    480.
+                } else {
+                    600.
+                }))
                 .max_h(px(560.))
                 .min_h_0()
                 .rounded(px(12.))
@@ -184,208 +189,790 @@ fn check_row(
 }
 
 /// Switches between the model slots on the left and the grouped sources on the
-/// right, the way Vue's model configuration dialog separates them.
+/// right, the way Vue's model configuration dialog separates them. Choosing a
+/// model edits a draft; the footer commits the whole slot map at once so
+/// temperature and reasoning edits stay attached to the right model.
 fn model_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
-    let generation = observer.model.generation;
-    let configs = observer.model_configs();
+    let configs = observer
+        .model_config_draft
+        .clone()
+        .unwrap_or_else(|| observer.model_configs());
     let slot = observer.model_config_slot.clone();
-    let slot_config = configs[slot.as_str()].clone();
+    let mut slot_config = configs.get(slot.as_str()).cloned().unwrap_or(Value::Null);
+    if !slot_config.is_object() {
+        slot_config = json!({"id": 0, "model": ""});
+    }
     let current_model = slot_config["model"].as_str().unwrap_or_default().to_owned();
     let current_provider = slot_config["id"].as_i64().unwrap_or_default();
     let proxy = observer.model_config_proxy;
     let border = cx.theme().border;
     let primary = cx.theme().primary;
     let muted = cx.theme().muted_foreground;
+    let foreground = cx.theme().foreground;
+    let observer_entity = cx.entity();
 
-    let mut slots = v_flex().w(px(170.)).flex_none().gap(px(2.)).pr_3();
+    // Vue's PLAN/ACT/UTILITY/LITE/VISION tabs sit across the top of the dialog.
+    let mut tabs = h_flex()
+        .w_full()
+        .min_w_0()
+        .gap(px(2.))
+        .border_b_1()
+        .border_color(border);
     for value in MODEL_SLOTS {
-        let label = match value {
-            "act" => t!("model_slot_act").to_string(),
-            "plan" => t!("model_slot_plan").to_string(),
-            "vision" => t!("model_slot_vision").to_string(),
-            "utility" => t!("model_slot_utility").to_string(),
-            _ => t!("model_slot_lite").to_string(),
-        };
         let selected = slot == value;
         let target = value.to_owned();
-        slots = slots.child(
+        let snapshot = configs.clone();
+        tabs = tabs.child(
             h_flex()
                 .id(SharedString::from(format!("model-slot-{value}")))
-                .w_full()
+                .flex_none()
                 .items_center()
-                .gap_2()
-                .px_2()
-                .py_1()
-                .rounded(px(6.))
+                .justify_center()
+                .px(px(12.))
+                .py(px(8.))
+                .border_b_2()
+                .border_color(if selected {
+                    primary
+                } else {
+                    primary.opacity(0.)
+                })
                 .cursor_pointer()
-                .when(selected, |row| row.bg(primary.opacity(0.12)))
-                .hover(|style| style.bg(cx.theme().muted))
                 .text_size(px(12.))
-                .text_color(if selected { primary } else { cx.theme().foreground })
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .font_weight(if selected {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::NORMAL
+                })
+                .text_color(if selected { primary } else { muted })
+                .child(value.to_uppercase())
+                .on_click(cx.listener(move |this, _, window, cx| {
                     this.model_config_slot = target.clone();
+                    let config = snapshot
+                        .get(target.as_str())
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    this.model_config_proxy = config["id"].as_i64().unwrap_or_default() == 0
+                        && config["model"]
+                            .as_str()
+                            .is_some_and(|model| model.contains('@'));
+                    let temperature = config["temperature"].as_f64().unwrap_or(-0.1) as f32;
+                    this.model_temperature_slider
+                        .update(cx, |state, cx| state.set_value(temperature, window, cx));
                     cx.notify();
                 })),
         );
     }
 
-    // Providers and proxy aliases are different namespaces, like Vue's two
-    // source tabs.
-    let mut sources = h_flex().w_full().min_w_0().gap(px(4.)).mb(px(8.));
-    for (index, key) in ["model_source_provider", "model_source_proxy"]
-        .into_iter()
-        .enumerate()
-    {
-        let active = (index == 1) == proxy;
-        let show_proxy = index == 1;
-        sources = sources.child(
+    // Provider vs proxy mode, Vue's `el-radio-group` in the card header.
+    let mut modes = h_flex()
+        .flex_none()
+        .gap(px(2.))
+        .p(px(2.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(border);
+    for (show_proxy, key) in [
+        (false, "model_source_provider"),
+        (true, "model_source_proxy"),
+    ] {
+        modes = modes.child(
             div()
-                .id(("model-source", index))
+                .id(("model-source", usize::from(show_proxy)))
                 .flex_none()
-                .px(px(8.))
-                .py(px(4.))
-                .rounded(px(8.))
+                .px(px(10.))
+                .py(px(3.))
+                .rounded(px(3.))
                 .cursor_pointer()
-                .text_size(px(12.))
-                .text_color(if active { primary } else { muted })
-                .when(active, |tab| tab.bg(primary.opacity(0.12)))
+                .text_size(px(11.))
+                .text_color(if proxy == show_proxy { primary } else { muted })
+                .when(proxy == show_proxy, |tab| tab.bg(primary.opacity(0.12)))
                 .hover(|style| style.bg(cx.theme().muted))
                 .child(t!(key).to_string())
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if this.model_config_proxy == show_proxy {
+                        return;
+                    }
                     this.model_config_proxy = show_proxy;
+                    // Vue switches the selected source immediately: provider
+                    // mode picks the first provider, proxy mode the first alias.
+                    let first = if show_proxy {
+                        let group = this
+                            .proxy_targets
+                            .as_object()
+                            .and_then(|groups| {
+                                groups.iter().find_map(|(group, aliases)| {
+                                    aliases
+                                        .as_object()
+                                        .is_some_and(|aliases| !aliases.is_empty())
+                                        .then(|| group.clone())
+                                })
+                            });
+                        group.and_then(|group| {
+                            let config = json!({"id": 0, "model": format!("{group}@")});
+                            model_choices(this, &config).1.into_iter().next()
+                        })
+                    } else {
+                        this.models.iter().find_map(|provider| {
+                            let provider_id = provider["id"].as_i64()?;
+                            let entry = provider["models"].as_array()?.first()?;
+                            let model = entry["id"].as_str()?.to_owned();
+                            Some(ModelChoice {
+                                provider_id,
+                                model,
+                                name: entry["name"].as_str().unwrap_or_default().to_owned(),
+                                target: Some(entry.clone()),
+                            })
+                        })
+                    };
+                    if let Some(choice) = first {
+                        let slot = this.model_config_slot.clone();
+                        apply_model_draft(this, &slot, &choice, window, cx);
+                    }
                     cx.notify();
                 })),
         );
     }
 
-    let mut models = v_flex()
-        .id("model-config-choices")
-        .flex_1()
-        .min_w_0()
-        .max_h(px(360.))
-        .overflow_y_scroll()
-        .gap(px(2.));
-    let mut count = 0usize;
-    if proxy {
-        if let Some(groups) = observer.proxy_targets.as_object() {
-            for (group, aliases) in groups {
-                let Some(aliases) = aliases.as_object() else {
-                    continue;
-                };
-                if aliases.is_empty() {
-                    continue;
-                }
-                models = models.child(model_group_label(group.clone(), cx));
-                for (alias, targets) in aliases {
-                    let model_key = format!("{group}@{alias}");
-                    let selected = current_provider == 0 && current_model == model_key;
-                    let choice = ModelChoice {
-                        provider_id: 0,
-                        model: model_key,
-                        name: alias.clone(),
-                        target: targets.as_array().and_then(|targets| targets.first()).cloned(),
-                    };
-                    count += 1;
-                    models = models.child(model_choice_row(
-                        &slot,
-                        &slot_config,
-                        &configs,
-                        &choice,
-                        selected,
-                        generation,
-                        cx,
-                    ));
-                }
-            }
-        }
-    } else {
-        for provider in &observer.models {
-            let Some(provider_id) = provider["id"].as_i64() else {
-                continue;
-            };
-            let Some(entries) = provider["models"].as_array() else {
-                continue;
-            };
-            if entries.is_empty() {
-                continue;
-            }
-            models = models.child(model_group_label(
+    let (group_label, choices) = model_choices(observer, &slot_config);
+    let providers: Vec<(i64, String, ModelChoice)> = observer
+        .models
+        .iter()
+        .filter_map(|provider| {
+            let provider_id = provider["id"].as_i64()?;
+            let entry = provider["models"].as_array()?.first()?;
+            let model = entry["id"].as_str()?.to_owned();
+            Some((
+                provider_id,
                 provider["name"].as_str().unwrap_or_default().to_owned(),
-                cx,
-            ));
-            for entry in entries {
-                let Some(model_id) = entry["id"].as_str() else {
-                    continue;
-                };
-                let selected = current_provider == provider_id && current_model == model_id;
-                let choice = ModelChoice {
+                ModelChoice {
                     provider_id,
-                    model: model_id.to_owned(),
-                    name: entry["name"].as_str().unwrap_or(model_id).to_owned(),
+                    model,
+                    name: entry["name"].as_str().unwrap_or_default().to_owned(),
                     target: Some(entry.clone()),
-                };
-                count += 1;
-                models = models.child(model_choice_row(
-                    &slot,
-                    &slot_config,
-                    &configs,
-                    &choice,
+                },
+            ))
+        })
+        .collect();
+    let proxy_groups: Vec<String> = observer
+        .proxy_targets
+        .as_object()
+        .map(|groups| {
+            groups
+                .iter()
+                .filter(|(_, aliases)| {
+                    aliases.as_object().is_some_and(|aliases| !aliases.is_empty())
+                })
+                .map(|(group, _)| group.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Left select: provider or proxy group. Right select: model or alias.
+    let left_label = if proxy {
+        group_label.clone()
+    } else {
+        providers
+            .iter()
+            .find(|(id, _, _)| *id == current_provider)
+            .map(|(_, name, _)| name.clone())
+            .unwrap_or_else(|| t!("model_placeholder").to_string())
+    };
+    let left_trigger = model_select_trigger("model-left-select", left_label, true, 120., cx);
+    let left_select = if proxy {
+        let observer_entity = observer_entity.clone();
+        let slot_key = slot.clone();
+        let groups = proxy_groups.clone();
+        MenuPopover::new("model-group-popover", left_trigger, move |_, _, cx| {
+            let popover = cx.entity();
+            let mut list = v_flex().id("model-group-list").w(px(220.)).gap(px(2.));
+            for group in groups.clone() {
+                let popover = popover.clone();
+                let observer_entity = observer_entity.clone();
+                let slot_key = slot_key.clone();
+                let selected = group == group_label;
+                list = list.child(check_row(
+                    format!("model-group-{group}"),
+                    group.clone(),
+                    String::new(),
                     selected,
-                    generation,
+                    move |_, window, cx| {
+                        popover.update(cx, |state, cx| state.dismiss(window, cx));
+                        observer_entity.update(cx, |this, cx| {
+                            let config = json!({"id": 0, "model": format!("{group}@")});
+                            if let Some(choice) = model_choices(this, &config).1.into_iter().next() {
+                                apply_model_draft(this, &slot_key, &choice, window, cx);
+                            }
+                            cx.notify();
+                        });
+                    },
                     cx,
                 ));
             }
-        }
-    }
-    if count == 0 {
-        models = models.child(empty_note(t!("model_placeholder").to_string(), cx));
-    }
+            list
+        })
+        .into_any_element()
+    } else {
+        let observer_entity = observer_entity.clone();
+        let slot_key = slot.clone();
+        let providers = providers.clone();
+        MenuPopover::new("model-provider-popover", left_trigger, move |_, _, cx| {
+            let popover = cx.entity();
+            let mut list = v_flex().id("model-provider-list").w(px(220.)).gap(px(2.));
+            for (provider_id, name, choice) in providers.clone() {
+                let popover = popover.clone();
+                let observer_entity = observer_entity.clone();
+                let slot_key = slot_key.clone();
+                let selected = provider_id == current_provider;
+                list = list.child(check_row(
+                    format!("model-provider-{provider_id}"),
+                    name,
+                    String::new(),
+                    selected,
+                    move |_, window, cx| {
+                        popover.update(cx, |state, cx| state.dismiss(window, cx));
+                        observer_entity.update(cx, |this, cx| {
+                            apply_model_draft(this, &slot_key, &choice, window, cx);
+                            cx.notify();
+                        });
+                    },
+                    cx,
+                ));
+            }
+            list
+        })
+        .into_any_element()
+    };
 
-    h_flex()
+    let right_label = choices
+        .iter()
+        .find(|choice| choice.model == current_model)
+        .map(|choice| choice.name.clone())
+        .unwrap_or_else(|| {
+            if current_model.is_empty() {
+                t!("model_placeholder").to_string()
+            } else {
+                current_model.clone()
+            }
+        });
+    let right_trigger = model_select_trigger("model-right-select", right_label, true, 0., cx);
+    let observer_entity = observer_entity.clone();
+    let slot_key = slot.clone();
+    let all_choices = choices.clone();
+    let right_select = MenuPopover::new("model-choice-popover", right_trigger, move |_, _, cx| {
+        let popover = cx.entity();
+        let mut list = v_flex()
+            .id("model-choice-list")
+            .w(px(240.))
+            .max_h(px(280.))
+            .overflow_y_scroll()
+            .gap(px(2.));
+        if all_choices.is_empty() {
+            list = list.child(empty_note(t!("model_placeholder").to_string(), cx));
+        }
+        for choice in all_choices.clone() {
+            let popover = popover.clone();
+            let observer_entity = observer_entity.clone();
+            let slot_key = slot_key.clone();
+            let selected = choice.model == current_model;
+            list = list.child(check_row(
+                format!("model-choice-{}-{}", choice.provider_id, choice.model),
+                choice.name.clone(),
+                String::new(),
+                selected,
+                move |_, window, cx| {
+                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                    observer_entity.update(cx, |this, cx| {
+                        apply_model_draft(this, &slot_key, &choice, window, cx);
+                        cx.notify();
+                    });
+                },
+                cx,
+            ));
+        }
+        list
+    })
+    .into_any_element();
+
+    v_flex()
         .w_full()
-        .p_3()
-        .gap_3()
-        .border_t_1()
-        .border_color(border)
-        .child(slots)
-        .child(div().w(px(1.)).self_stretch().bg(border))
-        .child(v_flex().flex_1().min_w_0().child(sources).child(models))
+        .min_w_0()
+        .child(tabs)
+        .child(
+            v_flex()
+                .w_full()
+                .min_w_0()
+                .gap(px(12.))
+                .p(px(12.))
+                .mt(px(16.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(border)
+                .bg(cx.theme().muted.opacity(0.55))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(foreground)
+                                .child(format!(
+                                    "{} {}",
+                                    slot.to_uppercase(),
+                                    t!("status_panel_models")
+                                )),
+                        )
+                        .child(modes),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap(px(8.))
+                        .child(left_select)
+                        .child(right_select),
+                )
+                .child(model_params(observer, &slot, &slot_config, cx)),
+        )
+        .child(model_footer(observer, cx))
         .into_any_element()
 }
 
-/// One selectable model row; picking it writes the whole slot map.
-fn model_choice_row(
+fn model_select_trigger(
+    id: &'static str,
+    label: String,
+    enabled: bool,
+    width: f32,
+    cx: &App,
+) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    let foreground = cx.theme().foreground;
+    h_flex()
+        .id(id)
+        .when(width > 0., |field| field.w(px(width)).flex_none())
+        .when(width <= 0., |field| field.flex_1())
+        .min_w_0()
+        .items_center()
+        .justify_between()
+        .gap(px(4.))
+        .h(px(28.))
+        .px(px(8.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().background)
+        .when(enabled, |field| field.cursor_pointer())
+        .child(
+            div()
+                .min_w_0()
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_size(px(12.))
+                .text_color(if enabled { foreground } else { muted })
+                .child(label),
+        )
+        .child(Icon::new("caret-down").size(10.).color(muted))
+        .into_any_element()
+}
+
+/// Applies a selected model to the dialog draft and syncs the temperature slider.
+fn apply_model_draft(
+    observer: &mut Observer,
+    slot: &str,
+    choice: &ModelChoice,
+    window: &mut Window,
+    cx: &mut Context<Observer>,
+) {
+    let base = observer
+        .model_config_draft
+        .as_ref()
+        .and_then(|draft| draft.get(slot).cloned())
+        .unwrap_or_else(|| json!({"id": 0, "model": ""}));
+    let next = apply_model_choice(&base, choice);
+    if let Some(draft) = observer.model_config_draft.as_mut() {
+        draft[slot] = next.clone();
+    }
+    let temperature = next["temperature"].as_f64().unwrap_or(-0.1) as f32;
+    observer
+        .model_temperature_slider
+        .update(cx, |state, cx| state.set_value(temperature, window, cx));
+}
+
+/// Writes one edit into the model dialog draft, creating a missing slot.
+fn edit_slot(observer: &mut Observer, slot: &str, edit: impl FnOnce(&mut Value)) {
+    let Some(draft) = observer.model_config_draft.as_mut() else {
+        return;
+    };
+    if !draft[slot].is_object() {
+        draft[slot] = json!({
+            "id": 0,
+            "model": "",
+            "temperature": -0.1,
+            "contextSize": 128000,
+            "maxTokens": 0,
+        });
+    }
+    edit(&mut draft[slot]);
+}
+
+fn param_button(
+    id: impl Into<SharedString>,
+    label: &'static str,
+    enabled: bool,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    div()
+        .id(id.into())
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(20.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(cx.theme().border)
+        .text_size(px(12.))
+        .text_color(if enabled { muted } else { muted.opacity(0.4) })
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(|style| style.bg(cx.theme().muted))
+                .on_click(on_click)
+        })
+        .child(label)
+        .into_any_element()
+}
+
+fn param_label(label: String, cx: &App) -> AnyElement {
+    div()
+        .flex_none()
+        .text_size(px(11.))
+        .text_color(cx.theme().muted_foreground)
+        .child(label)
+        .into_any_element()
+}
+
+/// Vue's compact parameter block: temperature slider, context/max-token
+/// numbers, then reasoning support and effort for models that expose it.
+fn model_params(
+    observer: &Observer,
     slot: &str,
     slot_config: &Value,
-    configs: &Value,
-    choice: &ModelChoice,
-    selected: bool,
-    generation: u64,
     cx: &mut Context<Observer>,
 ) -> AnyElement {
-    let next = apply_model_choice(slot_config, choice);
-    let all = configs.clone();
-    let slot = slot.to_owned();
-    check_row(
-        format!("model-choice-{}-{}", choice.provider_id, choice.model),
-        choice.name.clone(),
-        String::new(),
-        selected,
-        cx.listener(move |this, _, _, cx| {
-            if this.model.accepts(generation) && this.models_pending.is_none() {
-                let mut configs = all.clone();
-                configs[slot.as_str()] = next.clone();
-                this.save_models(configs, cx);
-                this.close_quick_panel(cx);
-            }
-        }),
-        cx,
-    )
+    let border = cx.theme().border;
+    let primary = cx.theme().primary;
+    let muted = cx.theme().muted_foreground;
+    let foreground = cx.theme().foreground;
+
+    let temperature = slot_config["temperature"]
+        .as_f64()
+        .unwrap_or(-0.1)
+        .clamp(-0.1, 2.0);
+    let temperature_text = if temperature < 0.0 {
+        t!("param_off").to_string()
+    } else {
+        format!("{temperature:.1}")
+    };
+    let temperature_row = h_flex()
+        .w_full()
+        .items_center()
+        .gap(px(8.))
+        .child(param_label(t!("model_temperature").to_string(), cx))
+        .child(
+            gpui_kit::component::slider::Slider::new(&observer.model_temperature_slider)
+                .flex_1()
+                .min_w(px(0.)),
+        )
+        .child(
+            div()
+                .flex_none()
+                .min_w(px(38.))
+                .text_align(TextAlign::Right)
+                .text_size(px(11.))
+                .text_color(foreground)
+                .child(temperature_text),
+        );
+
+    let context = slot_config["contextSize"].as_f64().unwrap_or(128000.);
+    let max_tokens = slot_config["maxTokens"].as_f64().unwrap_or(0.);
+    let context_minus_slot = slot.to_owned();
+    let context_minus = cx.listener(move |this, _, _, cx| {
+        edit_slot(this, &context_minus_slot, |config| {
+            let value = config["contextSize"].as_f64().unwrap_or(128000.);
+            config["contextSize"] = json!((value - 1024.).max(1024.));
+        });
+        cx.notify();
+    });
+    let context_plus_slot = slot.to_owned();
+    let context_plus = cx.listener(move |this, _, _, cx| {
+        edit_slot(this, &context_plus_slot, |config| {
+            let value = config["contextSize"].as_f64().unwrap_or(128000.);
+            config["contextSize"] = json!((value + 1024.).min(2_000_000.));
+        });
+        cx.notify();
+    });
+    let max_minus_slot = slot.to_owned();
+    let max_minus = cx.listener(move |this, _, _, cx| {
+        edit_slot(this, &max_minus_slot, |config| {
+            let value = config["maxTokens"].as_f64().unwrap_or(0.);
+            config["maxTokens"] = json!((value - 1024.).max(0.));
+        });
+        cx.notify();
+    });
+    let max_plus_slot = slot.to_owned();
+    let max_plus = cx.listener(move |this, _, _, cx| {
+        edit_slot(this, &max_plus_slot, |config| {
+            let value = config["maxTokens"].as_f64().unwrap_or(0.);
+            config["maxTokens"] = json!((value + 1024.).min(128000.));
+        });
+        cx.notify();
+    });
+
+    let reasoning_enabled = slot_config["thinking"]["type"]
+        .as_str()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("enabled"));
+    let budget = slot_config["thinking"]["budgetTokens"]
+        .as_u64()
+        .unwrap_or(1024);
+    let level = if budget > 4096 {
+        "max"
+    } else if budget > 2048 {
+        "high"
+    } else if budget > 1024 {
+        "medium"
+    } else {
+        "low"
+    };
+    let thinking_slot = slot.to_owned();
+    let thinking_switch = Switch::new("model-thinking")
+        .checked(reasoning_enabled)
+        .small()
+        .on_click(cx.listener(move |this, checked, _, cx| {
+            edit_slot(this, &thinking_slot, |config| {
+                config["thinking"] = if *checked {
+                    json!({"type": "enabled", "budgetTokens": 1024})
+                } else {
+                    json!({"type": "disabled"})
+                };
+            });
+            cx.notify();
+        }));
+
+    let mut reasoning = v_flex().w_full().min_w_0().gap(px(6.)).child(
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap(px(8.))
+            .child(param_label(t!("model_reasoning").to_string(), cx))
+            .child(div().flex_1())
+            .child(thinking_switch),
+    );
+    if reasoning_enabled {
+        let mut levels = h_flex()
+            .w_full()
+            .items_center()
+            .gap(px(6.))
+            .child(param_label(t!("model_reasoning_level").to_string(), cx));
+        for (value, label, tokens) in [
+            ("low", t!("reasoning_low").to_string(), 1024u64),
+            ("medium", t!("reasoning_medium").to_string(), 2048),
+            ("high", t!("reasoning_high").to_string(), 4096),
+            ("max", t!("reasoning_max").to_string(), 8192),
+        ] {
+            let selected = level == value;
+            let level_slot = slot.to_owned();
+            levels = levels.child(
+                div()
+                    .id(SharedString::from(format!("model-level-{value}")))
+                    .flex_none()
+                    .px(px(8.))
+                    .py(px(2.))
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .text_size(px(11.))
+                    .text_color(if selected { primary } else { muted })
+                    .when(selected, |chip| chip.bg(primary.opacity(0.12)))
+                    .hover(|style| style.bg(cx.theme().muted))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let tokens = tokens;
+                        edit_slot(this, &level_slot, |config| {
+                            config["thinking"] = json!({
+                                "type": "enabled",
+                                "budgetTokens": tokens,
+                            });
+                        });
+                        cx.notify();
+                    })),
+            );
+        }
+        reasoning = reasoning.child(levels);
+    }
+
+    v_flex()
+        .id("model-params")
+        .w_full()
+        .min_w_0()
+        .gap(px(8.))
+        .p_3()
+        .border_b_1()
+        .border_color(border)
+        .child(temperature_row)
+        .child(
+            h_flex()
+                .w_full()
+                .gap(px(16.))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(4.))
+                        .child(param_label(t!("model_context_size").to_string(), cx))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .items_center()
+                                .gap(px(6.))
+                                .child(param_button(
+                                    "model-context-minus",
+                                    "−",
+                                    context > 1024.,
+                                    context_minus,
+                                    cx,
+                                ))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_align(TextAlign::Center)
+                                        .text_size(px(12.))
+                                        .text_color(foreground)
+                                        .child(format!("{}", context as u64)),
+                                )
+                                .child(param_button(
+                                    "model-context-plus",
+                                    "+",
+                                    context < 2_000_000.,
+                                    context_plus,
+                                    cx,
+                                )),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(4.))
+                        .child(param_label(t!("model_max_tokens").to_string(), cx))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .items_center()
+                                .gap(px(6.))
+                                .child(param_button(
+                                    "model-max-minus",
+                                    "−",
+                                    max_tokens > 0.,
+                                    max_minus,
+                                    cx,
+                                ))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_align(TextAlign::Center)
+                                        .text_size(px(12.))
+                                        .text_color(foreground)
+                                        .child(format!("{}", max_tokens as u64)),
+                                )
+                                .child(param_button(
+                                    "model-max-plus",
+                                    "+",
+                                    max_tokens < 128000.,
+                                    max_plus,
+                                    cx,
+                                )),
+                        ),
+                ),
+        )
+        .child(reasoning)
+        .into_any_element()
+}
+
+fn model_footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+    let border = cx.theme().border;
+    let primary = cx.theme().primary;
+    let foreground = cx.theme().foreground;
+    let save_enabled = observer.model_config_draft.is_some() && observer.models_pending.is_none();
+    div()
+        .w_full()
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .justify_end()
+                .gap(px(10.))
+                .px_3()
+                .py_2()
+                .child(
+                    div()
+                        .id("model-config-cancel")
+                        .flex_none()
+                        .px(px(14.))
+                        .py(px(5.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(border)
+                        .cursor_pointer()
+                        .text_size(px(13.))
+                        .text_color(foreground)
+                        .hover(|style| style.bg(cx.theme().muted))
+                        .child(t!("action_cancel").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| this.close_quick_panel(cx))),
+                )
+                .child(
+                    div()
+                        .id("model-config-save")
+                        .flex_none()
+                        .px(px(14.))
+                        .py(px(5.))
+                        .rounded(px(6.))
+                        .bg(if save_enabled {
+                            primary
+                        } else {
+                            primary.opacity(0.5)
+                        })
+                        .text_size(px(13.))
+                        .text_color(cx.theme().primary_foreground)
+                        .when(save_enabled, |button| {
+                            button
+                                .cursor_pointer()
+                                .hover(|style| style.opacity(0.9))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(draft) = this.model_config_draft.take() {
+                                        this.save_models(draft, cx);
+                                        this.close_quick_panel(cx);
+                                    }
+                                }))
+                        })
+                        .child(t!("session_save").to_string()),
+                ),
+        )
+        .into_any_element()
 }
 
 /// Vue's skills dialog: an enable switch and the search field share one row.
-fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+fn skills_panel(
+    observer: &Observer,
+    window: &mut Window,
+    cx: &mut Context<Observer>,
+) -> AnyElement {
     let Some(draft) = observer.skills_draft.clone() else {
         return empty_note(t!("skills_empty").to_string(), cx);
     };
@@ -442,9 +1029,29 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             div()
                 .flex_1()
                 .min_w_0()
-                .child(gpui_kit::component::input::Input::new(
-                    &observer.skill_search,
-                )),
+                .rounded(px(6.))
+                .border_1()
+                // The library adds a wide halo and a thicker edge on focus.
+                // Vue only recolors the existing hairline with the primary
+                // color, so the ring is disabled and the edge is ours.
+                .border_color(
+                    if observer
+                        .skill_search
+                        .read(cx)
+                        .focus_handle(cx)
+                        .is_focused(window)
+                    {
+                        primary
+                    } else {
+                        border
+                    },
+                )
+                .bg(crate::ui::field_bg(cx))
+                .child(
+                    gpui_kit::component::input::Input::new(&observer.skill_search)
+                        .bordered(false)
+                        .focus_bordered(false),
+                ),
         );
 
     let mut list = v_flex().w_full().min_w_0().gap(px(2.)).p_3();
@@ -499,8 +1106,7 @@ fn skills_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .hover(|style| style.opacity(0.9))
         .child(t!("session_save").to_string())
         .on_click(cx.listener(|this, _, _, cx| {
-            let (Some(session), Some(draft)) =
-                (this.selected.clone(), this.skills_draft.clone())
+            let (Some(session), Some(draft)) = (this.selected.clone(), this.skills_draft.clone())
             else {
                 return;
             };
@@ -602,7 +1208,7 @@ fn tool_display_name(observer: &Observer, id: &str) -> String {
         .to_owned()
 }
 
-fn shell_rules(observer: &Observer) -> Vec<(String, String)> {
+fn shell_rules(observer: &Observer) -> Vec<(String, String, String)> {
     let config = observer.agent_config();
     let policy = config
         .get("shellPolicy")
@@ -610,7 +1216,7 @@ fn shell_rules(observer: &Observer) -> Vec<(String, String)> {
     let Some(Value::Array(rules)) = policy else {
         return Vec::new();
     };
-    let mut rules: Vec<(String, String)> = rules
+    let mut rules: Vec<(String, String, String)> = rules
         .iter()
         .filter_map(|rule| {
             let pattern = rule["pattern"].as_str()?.trim();
@@ -618,6 +1224,7 @@ fn shell_rules(observer: &Observer) -> Vec<(String, String)> {
                 (
                     pattern.to_owned(),
                     rule["description"].as_str().unwrap_or_default().to_owned(),
+                    rule["decision"].as_str().unwrap_or("review").to_owned(),
                 )
             })
         })
@@ -626,11 +1233,7 @@ fn shell_rules(observer: &Observer) -> Vec<(String, String)> {
     rules
 }
 
-fn persist_shell_rules(
-    observer: &mut Observer,
-    rules: Vec<Value>,
-    cx: &mut Context<Observer>,
-) {
+fn persist_shell_rules(observer: &mut Observer, rules: Vec<Value>, cx: &mut Context<Observer>) {
     let Some(session) = observer.selected.clone() else {
         return;
     };
@@ -639,10 +1242,7 @@ fn persist_shell_rules(
     let _ = observer
         .worker
         .commands
-        .try_send(Command::SetAgentConfig {
-            session,
-            config,
-        });
+        .try_send(Command::SetAgentConfig { session, config });
     cx.notify();
 }
 
@@ -695,7 +1295,14 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         );
     }
 
-    let mut body = v_flex().w_full().min_w_0().flex_1().min_h_0().overflow_y_scroll().p_3();
+    let mut body = v_flex()
+        .id("tool-panel-body")
+        .w_full()
+        .min_w_0()
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .p_3();
     match tab {
         0 => {
             if ids.is_empty() {
@@ -704,15 +1311,23 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             for id in ids {
                 let available = draft.available.contains(&id);
                 let name = tool_display_name(observer, &id);
+                // Vue only renders the description when it differs from the
+                // id; the native row used to repeat the same string twice.
+                let detail = if name == id { String::new() } else { name };
                 body = body.child(toggle_row(
                     format!("tool-available-{id}"),
                     id.clone(),
-                    name,
+                    detail,
                     available,
                     {
                         let id = id.clone();
                         cx.listener(move |this, checked: &bool, _, cx| {
-                            if *checked != this.tool_draft.as_ref().is_some_and(|draft| draft.available.contains(&id)) {
+                            if *checked
+                                != this
+                                    .tool_draft
+                                    .as_ref()
+                                    .is_some_and(|draft| draft.available.contains(&id))
+                            {
                                 this.toggle_tool(&id, false, ToolFlag::Available, cx);
                             }
                         })
@@ -733,15 +1348,21 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             for id in checkable {
                 let approved = draft.auto_approve.contains(&id);
                 let name = tool_display_name(observer, &id);
+                let detail = if name == id { String::new() } else { name };
                 body = body.child(toggle_row(
                     format!("tool-approve-{id}"),
                     id.clone(),
-                    name,
+                    detail,
                     approved,
                     {
                         let id = id.clone();
                         cx.listener(move |this, checked: &bool, _, cx| {
-                            if *checked != this.tool_draft.as_ref().is_some_and(|draft| draft.auto_approve.contains(&id)) {
+                            if *checked
+                                != this
+                                    .tool_draft
+                                    .as_ref()
+                                    .is_some_and(|draft| draft.auto_approve.contains(&id))
+                            {
                                 this.toggle_tool(&id, false, ToolFlag::AutoApprove, cx);
                             }
                         })
@@ -762,10 +1383,47 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             if rules.is_empty() {
                 rules_body = rules_body.child(empty_note(t!("tools_empty").to_string(), cx));
             }
-            for (pattern, description) in rules {
+            for (pattern, description, decision) in rules {
                 let mut remaining = existing.clone();
                 remaining.retain(|rule| rule["pattern"].as_str() != Some(pattern.as_str()));
                 let observer_entity = observer_entity.clone();
+                let mut decisions = h_flex().flex_none().items_center().gap(px(2.));
+                for (value, label) in [
+                    ("allow", t!("shell_decision_allow").to_string()),
+                    ("deny", t!("shell_decision_deny").to_string()),
+                    ("review", t!("shell_decision_review").to_string()),
+                ] {
+                    let mut updated = existing.clone();
+                    for rule in &mut updated {
+                        if rule["pattern"].as_str() == Some(pattern.as_str()) {
+                            rule["decision"] = Value::from(value);
+                        }
+                    }
+                    let selected = decision == value;
+                    let observer_entity = observer_entity.clone();
+                    decisions = decisions.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "shell-rule-decision-{pattern}-{value}"
+                            )))
+                            .flex_none()
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .text_size(px(10.))
+                            .text_color(if selected { primary } else { muted })
+                            .when(selected, |button| button.bg(primary.opacity(0.12)))
+                            .hover(|style| style.bg(cx.theme().muted))
+                            .child(label)
+                            .on_click(move |_, _, cx: &mut App| {
+                                let updated = updated.clone();
+                                observer_entity.update(cx, |this, cx| {
+                                    persist_shell_rules(this, updated, cx);
+                                });
+                            }),
+                    );
+                }
                 rules_body = rules_body.child(
                     h_flex()
                         .w_full()
@@ -787,18 +1445,21 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                                 .text_color(cx.theme().foreground)
                                 .child(pattern.clone()),
                         )
-                        .child(
-                            div()
-                                .flex_none()
-                                .px(px(4.))
-                                .py(px(1.))
-                                .rounded(px(4.))
-                                .border_1()
-                                .border_color(border)
-                                .text_size(px(10.))
-                                .text_color(muted)
-                                .child(description),
-                        )
+                        .when(!description.is_empty(), |row| {
+                            row.child(
+                                div()
+                                    .flex_none()
+                                    .px(px(4.))
+                                    .py(px(1.))
+                                    .rounded(px(4.))
+                                    .border_1()
+                                    .border_color(border)
+                                    .text_size(px(10.))
+                                    .text_color(muted)
+                                    .child(description),
+                            )
+                        })
+                        .child(decisions)
                         .child(
                             div()
                                 .id(SharedString::from(format!("shell-rule-remove-{pattern}")))
@@ -812,7 +1473,7 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                                 .hover(|style| style.bg(cx.theme().border))
                                 .child(Icon::new("close").size(10.).color(muted))
                                 .on_click(move |_, _, cx: &mut App| {
-                                    let _ = observer_entity.update(cx, |this, cx| {
+                                    observer_entity.update(cx, |this, cx| {
                                         persist_shell_rules(this, remaining.clone(), cx);
                                     });
                                 }),
@@ -851,7 +1512,11 @@ fn mcp_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             Some((id, name))
         })
         .collect();
-    for id in draft.mcp_available.iter().chain(draft.mcp_auto_approve.iter()) {
+    for id in draft
+        .mcp_available
+        .iter()
+        .chain(draft.mcp_auto_approve.iter())
+    {
         if !tools.iter().any(|(existing, _)| existing == id) {
             tools.push((id.clone(), id.clone()));
         }
@@ -907,7 +1572,17 @@ fn mcp_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         let available = draft.mcp_available.contains(&id);
         let approved = draft.mcp_auto_approve.contains(&id);
         let expanded = draft.mcp_auto_expand.contains(&id);
-        let mut row = h_flex().w_full().min_w_0().items_center().gap(px(8.)).px_2().py_1();
+        let mut row = h_flex()
+            .id(SharedString::from(format!("mcp-tool-row-{id}")))
+            .w_full()
+            .min_w_0()
+            .items_center()
+            .gap(px(8.))
+            .px_2()
+            .py_1()
+            .rounded(px(6.))
+            // A faint row wash; `muted` follows the active light/dark theme.
+            .hover(|style| style.bg(cx.theme().muted.opacity(0.7)));
         row = row.child(
             v_flex()
                 .flex_1()
@@ -942,14 +1617,20 @@ fn mcp_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         ] {
             let id = id.clone();
             row = row.child(
-                div().w(px(64.)).flex_none().flex().items_center().justify_center().child(
-                    Switch::new(SharedString::from(format!("mcp-{flag:?}-{id}")))
-                        .checked(checked)
-                        .small()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.toggle_tool(&id, true, flag, cx);
-                        })),
-                ),
+                div()
+                    .w(px(64.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Switch::new(SharedString::from(format!("mcp-{flag:?}-{id}")))
+                            .checked(checked)
+                            .small()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_tool(&id, true, flag, cx);
+                            })),
+                    ),
             );
         }
         rows = rows.child(row);
