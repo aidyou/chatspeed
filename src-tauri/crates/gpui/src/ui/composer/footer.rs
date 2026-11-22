@@ -32,7 +32,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     h_flex()
         .w_full()
         .items_center()
-        .gap_2()
+        .gap(px(8.))
         .px_3()
         .pb_2()
         .child(
@@ -40,7 +40,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 .flex_1()
                 .min_w_0()
                 .items_center()
-                .gap_1()
+                .gap(px(8.))
                 .child(agent_selector(observer, hover, muted, cx))
                 .child(model_selector(observer, hover, muted, cx))
                 .child(quick_actions(observer, hover, muted, cx))
@@ -49,7 +49,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                         .child(clear_context(observer, hover, muted, cx))
                 })
                 .when(observer.can_continue(), |row| {
-                    row.child(continue_button(accent, hover, cx))
+                    row.child(continue_button(accent, cx))
                 }),
         )
         .when(can_stop, |row| {
@@ -127,18 +127,35 @@ impl MenuRowStyle {
 }
 
 /// One footer pill: a label, an optional caret, and a hover surface.
-fn pill(id: &'static str, label: String, caret: bool, hover: Hsla, color: Hsla) -> AnyElement {
+///
+/// Vue's agent trigger is a bordered capsule while the model trigger is a bare
+/// text button, so the shape is passed in instead of duplicated.
+fn pill(
+    id: &'static str,
+    label: String,
+    caret: bool,
+    hover: Hsla,
+    color: Hsla,
+    bordered: bool,
+    cx: &App,
+) -> AnyElement {
+    let primary = cx.theme().primary;
     h_flex()
         .id(id)
         .flex_none()
         .items_center()
-        .gap_1()
-        .px_2()
-        .py(px(2.))
-        .rounded(px(6.))
+        .gap(px(4.))
+        .px(px(8.))
+        .py(px(4.))
+        .rounded(px(16.))
         .cursor_pointer()
-        .hover(move |style| style.bg(hover))
-        .text_size(px(11.))
+        .when(bordered, |row| {
+            row.bg(cx.theme().background)
+                .border_1()
+                .border_color(if color == primary { primary } else { cx.theme().border })
+        })
+        .hover(move |style| style.bg(hover).text_color(primary))
+        .text_size(px(14.))
         .text_color(color)
         .child(
             div()
@@ -230,8 +247,9 @@ fn agent_selector(
     // Vue disables the selector while a session is live, or once the workflow
     // has run without clearing its context.
     let editable = observer.can_switch_agent();
-    let color = if editable { muted } else { muted.opacity(0.4) };
-    let trigger_el = pill("composer-agent", label, editable, hover, color);
+    let primary = cx.theme().primary;
+    let color = if editable { primary } else { muted.opacity(0.4) };
+    let trigger_el = pill("composer-agent", label, editable, hover, color, true, cx);
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
@@ -440,7 +458,7 @@ fn model_selector(
     cx: &mut Context<Observer>,
 ) -> AnyElement {
     let label = observer.model_label();
-    let trigger_el = pill("composer-model", label, true, hover, muted);
+    let trigger_el = pill("composer-model", label, true, hover, muted, false, cx);
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
@@ -532,6 +550,7 @@ fn quick_actions(
         + usize::from(final_audit)
         + usize::from(auto_compress);
     let accent = cx.theme().primary;
+    // Vue's `icon-btn`: 2x4 padding with a hover surface, no fixed box.
     let trigger_el = div()
         .id("composer-quick-actions")
         .relative()
@@ -539,11 +558,12 @@ fn quick_actions(
         .flex()
         .items_center()
         .justify_center()
-        .size(px(22.))
-        .rounded(px(6.))
+        .px(px(4.))
+        .py(px(2.))
+        .rounded(px(8.))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(Icon::new("add").size(13.).color(muted))
+        .child(Icon::new("add").size(14.).color(muted))
         .when(active_count > 0, |button| {
             button.child(
                 div()
@@ -1161,20 +1181,23 @@ fn icon_action(
 }
 
 /// Vue offers "Continue" for every resumable status.
-fn continue_button(accent: Hsla, hover: Hsla, cx: &mut Context<Observer>) -> AnyElement {
+fn continue_button(accent: Hsla, cx: &mut Context<Observer>) -> AnyElement {
+    // Vue renders this as a small round primary button.
+    let foreground = cx.theme().primary_foreground;
     h_flex()
         .id("continue-workflow")
         .flex_none()
         .items_center()
-        .gap_1()
-        .px_2()
-        .py(px(2.))
-        .rounded(px(6.))
+        .gap(px(4.))
+        .px(px(10.))
+        .py(px(4.))
+        .rounded(px(9999.))
         .cursor_pointer()
-        .hover(move |style| style.bg(hover))
-        .text_size(px(11.))
-        .text_color(accent)
-        .child(Icon::new("send").size(11.).color(accent))
+        .bg(accent)
+        .hover(|style| style.opacity(0.9))
+        .text_size(px(12.))
+        .text_color(foreground)
+        .child(Icon::new("send").size(12.).color(foreground))
         .child(t!("continue_workflow").to_string())
         .on_click(cx.listener(|this, _, _, cx| this.continue_workflow(cx)))
         .into_any_element()

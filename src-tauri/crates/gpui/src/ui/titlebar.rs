@@ -360,6 +360,7 @@ fn valid_daily_time(time: &str) -> bool {
 }
 
 pub(super) fn toggle_chat_hub(this: &mut Observer, window: &mut Window, cx: &mut Context<Observer>) {
+    #[cfg(not(feature = "chat-hub"))]
     let _ = window;
     #[cfg(not(feature = "chat-hub"))]
     {
@@ -368,7 +369,7 @@ pub(super) fn toggle_chat_hub(this: &mut Observer, window: &mut Window, cx: &mut
     #[cfg(feature = "chat-hub")]
     {
         if this.chat_hub.is_some() {
-            this.toggle_chat_hub_dock(cx);
+            this.toggle_chat_hub_dock(window, cx);
         } else {
             this.ensure_chat_hub_sites(cx);
             this.show_toast(

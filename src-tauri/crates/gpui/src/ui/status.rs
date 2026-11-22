@@ -772,6 +772,22 @@ fn child_card(
 
     let id = card.task_id.clone();
     let title = card.agent.clone();
+    // Vue titles a delegated session with its workflow title, which for these
+    // tasks is the query itself; only an empty title falls back to the summary.
+    // The row stays one line so a long query never grows the card.
+    let heading_text = {
+        let task = card.task.trim();
+        if task.is_empty() {
+            let summary = card.result_preview.trim();
+            if summary.is_empty() {
+                card.agent.clone()
+            } else {
+                summary.to_owned()
+            }
+        } else {
+            task.to_owned()
+        }
+    };
     v_flex()
         .id(SharedString::from(format!("status-child-{}", card.key)))
         .w_full()
@@ -844,34 +860,13 @@ fn child_card(
         .child(
             div()
                 .w_full()
+                .min_w_0()
                 .text_size(px(10.))
                 .line_height(px(14.))
                 .text_color(foreground)
-                .line_clamp(2)
-                .child(card.task.clone()),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap(px(8.))
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(10.))
-                        .text_color(muted)
-                        .child(t!("status_panel_latest").to_string().to_uppercase()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(10.))
-                        .text_color(muted)
-                        .text_ellipsis()
-                        .child(card.result_preview.clone()),
-                ),
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(heading_text),
         )
         .child(
             h_flex()
@@ -913,7 +908,7 @@ fn efficiency_card(agent: &Value, compact: bool, cx: &App) -> AnyElement {
     let foreground = cx.theme().foreground;
     let background = cx.theme().background;
     let border = cx.theme().border;
-    let title = ["title", "userQuery", "sessionId"]
+    let title = ["title", "userQuery", "summary", "sessionId"]
         .into_iter()
         .find_map(|key| agent[key].as_str().filter(|value| !value.is_empty()))
         .unwrap_or("—")
@@ -1048,7 +1043,12 @@ fn efficiency_card(agent: &Value, compact: bool, cx: &App) -> AnyElement {
                         .text_size(px(12.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(foreground)
-                        .line_clamp(if compact { 1 } else { 2 })
+                        // Sub-agent cards keep one ellipsized title line; the
+                        // main card keeps Vue's two-line clamp.
+                        .when(compact, |text| {
+                            text.whitespace_nowrap().text_ellipsis()
+                        })
+                        .when(!compact, |text| text.line_clamp(2))
                         .child(title),
                 )
                 .child(
@@ -1560,7 +1560,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                 ));
                 body = body.child(section);
 
-                let expanded = observer.expanded.contains("status-panel-all-todos");
+                let expanded = observer.status_panel_todos_expanded;
                 let shown = if expanded { total } else { total.min(TODO_PREVIEW) };
                 let mut todos = v_flex()
                     .w_full()
@@ -1629,12 +1629,14 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                             .cursor_pointer()
                             .hover(move |style| style.text_color(primary))
                             .child(if expanded {
-                                format!("− {}", t!("status_panel_todos"))
+                                t!("collapse").to_string()
                             } else {
-                                format!("+{} {}", total - TODO_PREVIEW, t!("status_panel_todos"))
+                                format!("+{} {}", total - TODO_PREVIEW, t!("more"))
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle("status-panel-all-todos".into(), cx)
+                                this.status_panel_todos_expanded =
+                                    !this.status_panel_todos_expanded;
+                                cx.notify();
                             })),
                     );
                 }

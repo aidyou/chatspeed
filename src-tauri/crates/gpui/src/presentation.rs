@@ -1091,21 +1091,159 @@ fn tool_detail(
     sections.join("\n\n")
 }
 
-/// Extract canonical edit details for the native diff renderer.
-pub fn edit_lines(tool: &Value) -> Option<Vec<(bool, String)>> {
+/// One rendered diff row with Vue's two line-number columns.
+#[derive(Clone, Debug)]
+pub struct DiffLine {
+    pub kind: DiffKind,
+    pub old_line: Option<usize>,
+    pub new_line: Option<usize>,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffKind {
+    Context,
+    Removed,
+    Added,
+}
+
+fn string_list(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|line| line.as_str().map(str::to_owned))
+        .collect()
+}
+
+fn split_diff_lines(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    lines
+}
+
+/// Line-level LCS, like the `diff` package Vue uses for `FilePreviewDiff`.
+/// Replacements too large for the table fall back to remove-then-add.
+fn diff_sequence<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<(DiffKind, &'a str)> {
+    let stride = new.len() + 1;
+    if (old.len() + 1).saturating_mul(stride) > 250_000 {
+        return old
+            .iter()
+            .map(|line| (DiffKind::Removed, *line))
+            .chain(new.iter().map(|line| (DiffKind::Added, *line)))
+            .collect();
+    }
+    let mut lengths = vec![0_u32; (old.len() + 1) * stride];
+    for i in (0..old.len()).rev() {
+        for j in (0..new.len()).rev() {
+            let at = i * stride + j;
+            lengths[at] = if old[i] == new[j] {
+                1 + lengths[at + stride + 1]
+            } else {
+                lengths[at + stride].max(lengths[at + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut rows = Vec::new();
+    while i < old.len() || j < new.len() {
+        if i < old.len() && j < new.len() && old[i] == new[j] {
+            rows.push((DiffKind::Context, old[i]));
+            i += 1;
+            j += 1;
+        } else if i < old.len()
+            && (j == new.len() || lengths[(i + 1) * stride + j] >= lengths[i * stride + j + 1])
+        {
+            rows.push((DiffKind::Removed, old[i]));
+            i += 1;
+        } else {
+            rows.push((DiffKind::Added, new[j]));
+            j += 1;
+        }
+    }
+    rows
+}
+
+/// Extract canonical edit details for the native diff renderer, including the
+/// `context_before` / `context_after` lines the runtime sends with the edit.
+pub fn edit_lines(tool: &Value) -> Option<Vec<DiffLine>> {
     let name = tool_name(tool);
     if !matches!(name, "edit_file" | "write_file" | "plan_note") && tool["display_type"] != "diff" {
         return None;
     }
     let args = tool_arguments(tool);
-    let mut lines = Vec::new();
-    if let Some(old) = args["old_string"].as_str() {
-        lines.extend(old.lines().map(|line| (false, line.to_owned())));
-    }
+    let start_line = args["start_line"].as_u64().unwrap_or(1).max(1) as usize;
+    let before = string_list(&args["context_before"]);
+    let after = string_list(&args["context_after"]);
+    let old = args["old_string"].as_str().unwrap_or("");
     let new = args["new_string"]
         .as_str()
         .or_else(|| args["content"].as_str())?;
-    lines.extend(new.lines().map(|line| (true, line.to_owned())));
+
+    let mut lines = Vec::new();
+    let before_start = args["context_before_start_line"]
+        .as_u64()
+        .map(|value| value.max(1) as usize)
+        .unwrap_or_else(|| start_line.saturating_sub(before.len()).max(1));
+    for (index, text) in before.iter().enumerate() {
+        let number = before_start + index;
+        lines.push(DiffLine {
+            kind: DiffKind::Context,
+            old_line: Some(number),
+            new_line: Some(number),
+            text: text.clone(),
+        });
+    }
+
+    let old_lines = split_diff_lines(old);
+    let new_lines = split_diff_lines(new);
+    let mut old_number = start_line;
+    let mut new_number = start_line;
+    for (kind, text) in diff_sequence(&old_lines, &new_lines) {
+        let (old_line, new_line) = match kind {
+            DiffKind::Context => {
+                let numbers = (Some(old_number), Some(new_number));
+                old_number += 1;
+                new_number += 1;
+                numbers
+            }
+            DiffKind::Removed => {
+                let numbers = (Some(old_number), None);
+                old_number += 1;
+                numbers
+            }
+            DiffKind::Added => {
+                let numbers = (None, Some(new_number));
+                new_number += 1;
+                numbers
+            }
+        };
+        lines.push(DiffLine {
+            kind,
+            old_line,
+            new_line,
+            text: text.to_owned(),
+        });
+    }
+
+    let after_start = args["context_after_start_line"]
+        .as_u64()
+        .map(|value| value.max(1) as usize)
+        .unwrap_or(new_number);
+    for (index, text) in after.iter().enumerate() {
+        let number = after_start + index;
+        lines.push(DiffLine {
+            kind: DiffKind::Context,
+            old_line: Some(number),
+            new_line: Some(number),
+            text: text.clone(),
+        });
+    }
     Some(lines)
 }
 

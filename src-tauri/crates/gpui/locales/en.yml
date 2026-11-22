@@ -58,6 +58,7 @@ clear_context_frame_done: "Context cleared for subsequent AI turns"
 clear_context_no_session: "No task session available to clear"
 click_to_expand: (click to expand)
 close_window: Close window
+collapse: Collapse
 collapse_sidebar: Collapse sidebar
 completed: Completed
 composer_placeholder: Ask for the next step, Enter to send
@@ -158,6 +159,9 @@ model_slot_lite: "Lite model"
 model_slot_plan: "Planning model"
 model_slot_utility: "Utility model"
 model_slot_vision: "Vision model"
+model_source_provider: "Provider"
+model_source_proxy: "Proxy"
+more: More
 new_task: New task
 no_sessions: No workflow sessions yet
 not_supported_native: Not available in the native window yet
@@ -285,7 +289,6 @@ status_panel_empty: No tasks yet
 status_panel_execution: Execution
 status_panel_fallback: Fallback
 status_panel_global: Global
-status_panel_latest: Latest
 status_panel_lite_model: Lite
 status_panel_load_failed: Failed to load efficiency report
 status_panel_loading: Loading...
@@ -382,6 +385,9 @@ todo_status_pending: pending
 todo_update: Update todo
 todo_view: View todo
 tool_config: "Tool configuration"
+tool_tab_auto_approve: "Auto approve"
+tool_tab_available: "Available tools"
+tool_tab_shell: "Shell rules"
 tools_empty: "No tools found"
 tree_loading: Loading
 turn_delivery_pending: "Waiting for confirmation…"

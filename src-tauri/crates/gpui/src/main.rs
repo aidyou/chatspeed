@@ -175,19 +175,20 @@ fn choice_option(label: String, selected: bool, cx: &mut App) -> AnyElement {
     h_flex()
         .w_full()
         .min_w_0()
-        .items_center()
+        .items_start()
         .gap_2()
         .py(px(1.))
         .child(Icon::new(icon).size(14.).color(color))
         .child(
             div()
                 .min_w_0()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(if selected {
-                    cx.theme().foreground
+                    cx.theme().primary
                 } else {
-                    cx.theme().muted_foreground
+                    cx.theme().foreground
                 })
+                .when(selected, |text| text.font_weight(FontWeight::SEMIBOLD))
                 .child(label),
         )
         .into_any_element()
@@ -210,7 +211,7 @@ fn choice_option_live(
         .id(id)
         .w_full()
         .min_w_0()
-        .items_center()
+        .items_start()
         .gap_2()
         .px(px(4.))
         .py(px(2.))
@@ -221,12 +222,13 @@ fn choice_option_live(
         .child(
             div()
                 .min_w_0()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .text_color(if selected {
-                    cx.theme().foreground
+                    cx.theme().primary
                 } else {
-                    cx.theme().muted_foreground
+                    cx.theme().foreground
                 })
+                .when(selected, |text| text.font_weight(FontWeight::SEMIBOLD))
                 .child(label),
         )
         .on_click(on_click)
@@ -436,6 +438,7 @@ struct Observer {
     automation_history: Option<(String, Option<Result<Vec<AutomationRun>, String>>)>,
     status_title_model: Value,
     status_panel_tab: usize,
+    status_panel_todos_expanded: bool,
     status_panel_mode: ui::status::PanelMode,
     status_panel_position: Option<Point<Pixels>>,
     status_panel_drag: Option<Point<Pixels>>,
@@ -484,6 +487,13 @@ struct Observer {
     /// the next render, where `&mut Window` is available.
     #[cfg(feature = "chat-hub")]
     pending_chat_hub: Option<chat_hub::Site>,
+    /// Network proxy the docked pages have to use, read from the runtime settings.
+    #[cfg(feature = "chat-hub")]
+    chat_hub_proxy: Option<chat_hub::ProxySettings>,
+    #[cfg(feature = "chat-hub")]
+    chat_hub_proxy_loaded: bool,
+    #[cfg(feature = "chat-hub")]
+    chat_hub_proxy_loading: bool,
     sidebar_collapsed: bool,
     sidebar_changed: bool,
     pending_settings: BTreeMap<(String, &'static str), (bool, Option<Instant>)>,
@@ -579,6 +589,10 @@ struct Observer {
     quick_panel: Option<QuickPanel>,
     /// Slot being edited in the model configuration dialog.
     model_config_slot: String,
+    /// Whether the model dialog lists proxy aliases instead of providers.
+    model_config_proxy: bool,
+    /// Active tab of the tool configuration dialog.
+    tool_panel_tab: usize,
     skills_draft: Option<SkillsDraft>,
     tool_draft: Option<ToolDraft>,
     /// Image files attached to the next message, shown above the box.
@@ -719,7 +733,17 @@ impl Observer {
                 if composing {
                     return;
                 }
-                let consumed = ui::composer::suggestions::handle_key(this, &key.key, window, cx);
+                let mut consumed =
+                    ui::composer::suggestions::handle_key(this, &key.key, window, cx);
+                if !consumed && key.key == "tab" {
+                    // Tab indents the prompt; the completion list above already
+                    // claimed it while a suggestion is highlighted.
+                    let input = this.composer.clone();
+                    input.update(cx, |state, cx| {
+                        EntityInputHandler::replace_text_in_range(state, None, "    ", window, cx);
+                    });
+                    consumed = true;
+                }
                 let send =
                     !consumed && key.key == "enter" && modifiers.shift == this.send_with_shift;
                 if send {
@@ -783,6 +807,7 @@ impl Observer {
             automation_history: None,
             status_title_model: Value::Null,
             status_panel_tab: 0,
+            status_panel_todos_expanded: false,
             status_panel_mode: ui::status::PanelMode::Circle,
             status_panel_position: None,
             status_panel_drag: None,
@@ -832,6 +857,12 @@ impl Observer {
             chat_hub_sites_loading: false,
             #[cfg(feature = "chat-hub")]
             pending_chat_hub: None,
+            #[cfg(feature = "chat-hub")]
+            chat_hub_proxy: None,
+            #[cfg(feature = "chat-hub")]
+            chat_hub_proxy_loaded: false,
+            #[cfg(feature = "chat-hub")]
+            chat_hub_proxy_loading: false,
             sidebar_collapsed: false,
             sidebar_changed: false,
             pending_settings: BTreeMap::new(),
@@ -899,6 +930,8 @@ impl Observer {
             ask_user_answered: BTreeMap::new(),
             quick_panel: None,
             model_config_slot: "act".into(),
+            model_config_proxy: false,
+            tool_panel_tab: 0,
             skills_draft: None,
             tool_draft: None,
             attachments: Vec::new(),
@@ -2060,6 +2093,7 @@ impl Observer {
         match panel {
             QuickPanel::Skills => self.skills_draft = Some(SkillsDraft::from_config(&config)),
             QuickPanel::Mcp | QuickPanel::Tools => {
+                self.tool_panel_tab = 0;
                 self.tool_draft = Some(ToolDraft::from_config(&config));
                 if self.tools.is_empty() {
                     let _ = self.worker.commands.try_send(Command::Tools);
@@ -2067,6 +2101,10 @@ impl Observer {
             }
             QuickPanel::Models => {
                 self.model_config_slot = if self.planning_mode { "plan" } else { "act" }.into();
+                let configs = self.model_configs();
+                let slot = configs[self.model_config_slot.as_str()].clone();
+                self.model_config_proxy = slot["id"].as_i64().unwrap_or_default() == 0
+                    && slot["model"].as_str().is_some_and(|model| model.contains('@'));
             }
             QuickPanel::Personality => {}
         }
@@ -2944,6 +2982,17 @@ impl Observer {
             theme.colors.primary_hover = accent.opacity(0.9);
             theme.colors.primary_active = accent.opacity(0.8);
             theme.colors.ring = accent.opacity(0.45);
+            // Element Plus paints primary buttons with the configured primary
+            // color; the kit's own token defaults to a dark slate, which read as
+            // a black button in the light theme.
+            theme.colors.button_primary = accent;
+            theme.colors.button_primary_hover = accent.opacity(0.9);
+            theme.colors.button_primary_active = accent.opacity(0.8);
+            theme.colors.button_primary_foreground = theme.colors.primary_foreground;
+            theme.tokens.button_primary = accent.into();
+            theme.tokens.button_primary_hover = accent.opacity(0.9).into();
+            theme.tokens.button_primary_active = accent.opacity(0.8).into();
+            theme.tokens.button_primary_foreground = theme.colors.primary_foreground.into();
             theme.colors.background = background.into();
             theme.colors.popover = background.into();
             theme.colors.muted = muted.into();
@@ -3029,6 +3078,34 @@ impl Observer {
         .detach();
     }
 
+    /// Loads the network settings the docked pages need for their proxy. A page
+    /// reads them while it is built, so the first open waits for this round trip.
+    #[cfg(feature = "chat-hub")]
+    fn ensure_chat_hub_proxy(&mut self, cx: &mut Context<Self>) {
+        if self.chat_hub_proxy_loaded || self.chat_hub_proxy_loading {
+            return;
+        }
+        self.chat_hub_proxy_loading = true;
+        let options = self.options.clone();
+        cx.spawn(async move |owner, cx| {
+            let config = chatspeed_gpui::native::data_command(
+                &options,
+                "get_all_config",
+                serde_json::json!({}),
+            )
+            .await
+            .ok();
+            let _ = owner.update(cx, |this, cx| {
+                this.chat_hub_proxy_loading = false;
+                this.chat_hub_proxy_loaded = true;
+                this.chat_hub_proxy =
+                    config.as_ref().and_then(chat_hub::proxy_from_config);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Queues a chat site; the next render owns the window the page needs.
     #[cfg(feature = "chat-hub")]
     fn request_chat_hub(&mut self, site: chat_hub::Site, cx: &mut Context<Self>) {
@@ -3044,7 +3121,19 @@ impl Observer {
             return;
         };
         if self.chat_hub.is_none() {
-            match chat_hub::Dock::new(cx) {
+            if !self.chat_hub_proxy_loaded {
+                self.ensure_chat_hub_proxy(cx);
+                self.pending_chat_hub = Some(site);
+                return;
+            }
+            let background: gpui_kit::Rgba = cx.theme().background.into();
+            let background = (
+                (background.r * 255.).round() as u8,
+                (background.g * 255.).round() as u8,
+                (background.b * 255.).round() as u8,
+                255,
+            );
+            match chat_hub::Dock::new(cx, background, self.chat_hub_proxy.clone()) {
                 Ok(dock) => self.chat_hub = Some(dock),
                 Err(error) => {
                     self.show_toast(ToastKind::Error, error, cx);
@@ -3080,9 +3169,17 @@ impl Observer {
 
     /// The docked site logo hides or shows the page without releasing it.
     #[cfg(feature = "chat-hub")]
-    fn toggle_chat_hub_dock(&mut self, cx: &mut Context<Self>) {
-        if let Some(dock) = self.chat_hub.as_mut() {
-            dock.toggle_visible();
+    fn toggle_chat_hub_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dock) = self.chat_hub.as_mut() else {
+            return;
+        };
+        dock.toggle_visible();
+        // Hiding the page hands its width back to the screen so the transcript
+        // keeps its size instead of stretching into the freed column.
+        if dock.visible() {
+            dock.expand(window, cx);
+        } else {
+            dock.release(window);
         }
         cx.notify();
     }
@@ -3336,14 +3433,60 @@ impl Observer {
 
     fn message_with_copy(&self, message: AnyElement, key: &str, text: &str, cx: &mut Context<Self>) -> AnyElement {
         let text = text.to_owned();
-        v_flex().id(SharedString::from(format!("message-copy-scope-{key}"))).min_w_0().child(message)
+        let flash_key = code_key(key);
+        let copied = self
+            .copy_flash
+            .lock()
+            .ok()
+            .and_then(|slot| *slot)
+            .is_some_and(|copy| copy.key == flash_key && copy.at.elapsed() < COPY_FLASH);
+        let muted = cx.theme().muted_foreground;
+        let foreground = cx.theme().foreground;
+        let hover = cx.theme().muted;
+        let group = SharedString::from(format!("message-copy-scope-{key}"));
+        let hover_group = group.clone();
+        let copy_id = SharedString::from(format!("copy-message-{key}"));
+        let (icon, label, color) = if copied {
+            ("check", t!("copied").to_string(), Hsla::from(success()))
+        } else {
+            ("copy", t!("copy").to_string(), muted)
+        };
+        v_flex()
+            .id(group.clone())
+            .group(group)
+            .min_w_0()
+            .child(message)
             .when(!text.is_empty(), |row| {
-                row.child(h_flex().justify_end().child(ui::icon_button(
-                    "copy-message", "copy", cx.theme().muted_foreground, cx.theme().muted,
-                    cx.listener(move |_, _, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                    }),
-                )))
+                // Vue reveals the copy action only while the message is hovered.
+                row.child(
+                    h_flex().w_full().justify_end().child(
+                        h_flex()
+                            .id(copy_id)
+                            .items_center()
+                            .gap(px(2.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .invisible()
+                            .group_hover(hover_group, |style| style.visible())
+                            .text_size(px(11.))
+                            .text_color(color)
+                            .hover(move |style| style.bg(hover).text_color(foreground))
+                            .child(Icon::new(icon).size(12.).color(color))
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                                if let Ok(mut slot) = this.copy_flash.lock() {
+                                    *slot = Some(CopyFlash {
+                                        key: flash_key,
+                                        at: Instant::now(),
+                                    });
+                                }
+                                cx.notify();
+                            })),
+                    ),
+                )
             })
             .into_any_element()
     }
@@ -3661,7 +3804,16 @@ impl Observer {
             }
         } && !answered;
         if !tool.choices.is_empty() {
-            let mut choices = v_flex().w_full().min_w_0().gap_3();
+            // Vue wraps the ask_user groups in a padded card and gives each
+            // question its own surface.
+            let mut choices = v_flex()
+                .w_full()
+                .min_w_0()
+                .gap(px(8.))
+                .mt(px(8.))
+                .p(px(8.))
+                .rounded(px(8.))
+                .bg(cx.theme().muted);
             for (index, group) in tool.choices.iter().enumerate() {
                 choices = choices.child(self.choice_group(tool, group, index, answering, cx));
             }
@@ -3694,46 +3846,95 @@ impl Observer {
         if let Some(lines) = &tool.diff {
             let mut diff = v_flex()
                 .w_full()
+                .min_w_0()
                 .rounded(px(4.))
+                .overflow_hidden()
                 .text_size(px(12.))
                 .font_family(MONO_FONT);
-            let (mut old_line, mut new_line) = (0usize, 0usize);
-            for (added, line) in lines {
-                if *added {
-                    new_line += 1;
-                } else {
-                    old_line += 1;
-                }
-                let color = if *added { success() } else { danger() };
-                diff =
-                    diff.child(
-                        h_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_2()
-                            .px_2()
-                            .bg(color.opacity(0.12))
-                            .text_color(color)
-                            .child(div().flex_none().w(px(36.)).text_size(px(10.)).child(
-                                if *added {
-                                    new_line.to_string()
-                                } else {
-                                    old_line.to_string()
-                                },
-                            ))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(format!("{} {line}", if *added { "+" } else { "−" })),
-                            ),
-                    );
+            for line in lines {
+                // Vue's FilePreviewDiff shows both line-number columns plus the
+                // runtime's surrounding context lines.
+                let (sign, color, tint) = match line.kind {
+                    presentation::DiffKind::Added => {
+                        ("+", success(), success().opacity(0.12))
+                    }
+                    presentation::DiffKind::Removed => ("−", danger(), danger().opacity(0.12)),
+                    presentation::DiffKind::Context => (
+                        " ",
+                        cx.theme().foreground,
+                        Hsla::transparent_black(),
+                    ),
+                };
+                diff = diff.child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .items_start()
+                        .gap_2()
+                        .px_2()
+                        .bg(tint)
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(32.))
+                                .text_size(px(10.))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    line.old_line
+                                        .map(|number| number.to_string())
+                                        .unwrap_or_default(),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .w(px(32.))
+                                .text_size(px(10.))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    line.new_line
+                                        .map(|number| number.to_string())
+                                        .unwrap_or_default(),
+                                ),
+                        )
+                        .child(div().flex_none().text_color(color).child(sign))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_color(color)
+                                .child(line.text.clone()),
+                        ),
+                );
             }
             detail = detail.child(diff);
         }
         if let Some(command) = &tool.command {
+            // Vue's command frame is a selectable `pre`; the native renderer has
+            // no selectable plain text, so the frame carries its own copy action.
+            let flash_key = code_key(&format!("{}:command", tool.detail_key));
+            let copied = self
+                .copy_flash
+                .lock()
+                .ok()
+                .and_then(|slot| *slot)
+                .is_some_and(|copy| copy.key == flash_key && copy.at.elapsed() < COPY_FLASH);
+            let flash = self.copy_flash.clone();
+            let command_text = command.clone();
+            let group = SharedString::from(format!("bash-command:{}", tool.key));
+            let hover_group = group.clone();
+            let copy_id = SharedString::from(format!("bash-command-copy:{}", tool.key));
+            let (icon, label, icon_color) = if copied {
+                ("check", t!("copied").to_string(), Hsla::from(success()))
+            } else {
+                ("copy", t!("copy").to_string(), cx.theme().muted_foreground)
+            };
+            let hover = cx.theme().muted;
+            let foreground = cx.theme().foreground;
             detail = detail.child(
                 h_flex()
+                    .id(group.clone())
+                    .group(group)
                     .w_full()
                     .min_w_0()
                     .items_start()
@@ -3753,6 +3954,36 @@ impl Observer {
                             .min_w_0()
                             .text_color(cx.theme().muted_foreground)
                             .child(plain_text(command, cx.theme().muted_foreground)),
+                    )
+                    .child(
+                        h_flex()
+                            .id(copy_id)
+                            .flex_none()
+                            .items_center()
+                            .gap_1()
+                            .px(px(4.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .invisible()
+                            .group_hover(hover_group, |style| style.visible())
+                            .text_size(px(10.))
+                            .text_color(icon_color)
+                            .hover(move |style| style.bg(hover).text_color(foreground))
+                            .child(Icon::new(icon).size(12.).color(icon_color))
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    command_text.clone(),
+                                ));
+                                if let Ok(mut slot) = this.copy_flash.lock() {
+                                    *slot = Some(CopyFlash {
+                                        key: flash_key,
+                                        at: Instant::now(),
+                                    });
+                                }
+                                cx.notify();
+                            })),
                     ),
             );
         }
@@ -4240,11 +4471,14 @@ impl Observer {
                         .w_full()
                         .min_w_0()
                         .mt_2()
-                        .px_3()
-                        .py_2()
-                        .rounded(px(6.))
+                        .p_2()
+                        .max_h(px(250.))
+                        .overflow_y_scroll()
+                        .rounded(px(4.))
+                        .border_1()
+                        .border_color(cx.theme().border)
                         .bg(cx.theme().muted)
-                        .text_size(px(12.))
+                        .text_size(px(13.))
                         .child(plain_text(answer, cx.theme().foreground)),
                 );
             }
@@ -4298,11 +4532,14 @@ impl Observer {
         v_flex()
             .w_full()
             .min_w_0()
-            .gap_2()
+            .gap(px(8.))
+            .p(px(8.))
+            .rounded(px(8.))
+            .bg(cx.theme().background)
             .child(
                 div()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(px(14.))
+                    .font_weight(FontWeight::BOLD)
                     .text_color(cx.theme().foreground)
                     .child(group.title.clone()),
             )

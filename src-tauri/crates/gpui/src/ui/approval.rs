@@ -9,7 +9,7 @@
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::*;
 
-use crate::presentation::ToolView;
+use crate::presentation::{DiffKind, ToolView};
 use crate::ui::Icon;
 #[derive(Clone, Copy)]
 pub(crate) enum Decision {
@@ -17,64 +17,6 @@ pub(crate) enum Decision {
     Approve,
     Whitelist,
     Batch,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Change {
-    Context,
-    Remove,
-    Add,
-}
-
-// Bound the comparison cost for large replacements; they still show every line.
-fn diff_rows(diff: &[(bool, String)]) -> Vec<(Change, &str)> {
-    let old: Vec<_> = diff
-        .iter()
-        .filter(|(added, _)| !added)
-        .map(|(_, text)| text.as_str())
-        .collect();
-    let new: Vec<_> = diff
-        .iter()
-        .filter(|(added, _)| *added)
-        .map(|(_, text)| text.as_str())
-        .collect();
-    let stride = new.len() + 1;
-    if (old.len() + 1).saturating_mul(stride) > 250_000 {
-        return old
-            .into_iter()
-            .map(|line| (Change::Remove, line))
-            .chain(new.into_iter().map(|line| (Change::Add, line)))
-            .collect();
-    }
-    let mut lengths = vec![0_u32; (old.len() + 1) * stride];
-    for i in (0..old.len()).rev() {
-        for j in (0..new.len()).rev() {
-            let at = i * stride + j;
-            lengths[at] = if old[i] == new[j] {
-                1 + lengths[at + stride + 1]
-            } else {
-                lengths[at + stride].max(lengths[at + 1])
-            };
-        }
-    }
-    let (mut i, mut j) = (0, 0);
-    let mut rows = Vec::new();
-    while i < old.len() || j < new.len() {
-        if i < old.len() && j < new.len() && old[i] == new[j] {
-            rows.push((Change::Context, old[i]));
-            i += 1;
-            j += 1;
-        } else if i < old.len()
-            && (j == new.len() || lengths[(i + 1) * stride + j] >= lengths[i * stride + j + 1])
-        {
-            rows.push((Change::Remove, old[i]));
-            i += 1;
-        } else {
-            rows.push((Change::Add, new[j]));
-            j += 1;
-        }
-    }
-    rows
 }
 
 /// Renders the approval panel shown inside a pending tool row.
@@ -94,27 +36,27 @@ pub fn approval_card(
 
     let mut body = v_flex().w_full().min_w_0().gap_1().text_size(px(11.));
     if let Some(diff) = &tool.diff {
-        let mut old = 0;
-        let mut new = 0;
         let mut lines = v_flex()
             .id("approval-diff-lines")
             .max_h(px(320.))
             .overflow_y_scroll();
-        for (change, line) in diff_rows(diff) {
-            let (number, sign, color) = match change {
-                Change::Add => {
-                    new += 1;
-                    (new, "+", Hsla::from(crate::success()))
-                }
-                Change::Remove => {
-                    old += 1;
-                    (old, "−", Hsla::from(danger))
-                }
-                Change::Context => {
-                    old += 1;
-                    new += 1;
-                    (new, " ", Hsla::transparent_black())
-                }
+        for line in diff {
+            let (number, sign, color) = match line.kind {
+                DiffKind::Added => (
+                    line.new_line.unwrap_or_default(),
+                    "+",
+                    Hsla::from(crate::success()),
+                ),
+                DiffKind::Removed => (
+                    line.old_line.unwrap_or_default(),
+                    "−",
+                    Hsla::from(danger),
+                ),
+                DiffKind::Context => (
+                    line.new_line.unwrap_or_default(),
+                    " ",
+                    Hsla::transparent_black(),
+                ),
             };
             lines = lines.child(
                 h_flex()
@@ -137,7 +79,7 @@ pub fn approval_card(
                             .flex_1()
                             .min_w_0()
                             .text_color(foreground)
-                            .child(line.to_owned()),
+                            .child(line.text.clone()),
                     ),
             );
         }
@@ -156,6 +98,33 @@ pub fn approval_card(
                         .child(tool.target.clone()),
                 )
                 .child(lines),
+        );
+    } else if let Some(command) = &tool.command {
+        // Vue's shell approval shows the command in its own frame with a prompt,
+        // so the header never has to share a line with the command text.
+        body = body.child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_start()
+                .gap_2()
+                .max_h(px(240.))
+                .overflow_y_scroll()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(border)
+                .bg(cx.theme().muted)
+                .px_2()
+                .py_1()
+                .font_family(crate::MONO_FONT)
+                .child(div().flex_none().text_color(muted).child("$"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(foreground)
+                        .child(command.clone()),
+                ),
         );
     } else if !tool.detail.is_empty() {
         let color = if tool.name == "submit_plan" {
@@ -179,24 +148,18 @@ pub fn approval_card(
         .child(
             h_flex()
                 .w_full()
+                .min_w_0()
                 .items_center()
                 .gap_2()
                 .child(Icon::new("approval").size(14.).color(accent))
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
+                        .flex_none()
+                        .whitespace_nowrap()
                         .text_size(px(12.))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(foreground)
                         .child(rust_i18n::t!("awaiting_approval").to_string()),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(11.))
-                        .text_color(muted)
-                        .child(tool.action.clone()),
                 ),
         )
         .child(body);
@@ -244,7 +207,11 @@ pub fn approval_card(
             actions.child(button.on_click(move |_, window, cx| dispatch(decision, window, cx)));
     }
     let card = if let Some(reason) = reason {
-        card.child(Textarea::new(reason).w_full())
+        card.child(
+            Textarea::new(reason)
+                .w_full()
+                .placeholder(rust_i18n::t!("approval_rejection_reason").into_owned()),
+        )
     } else {
         card
     };

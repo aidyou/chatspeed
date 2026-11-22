@@ -47,6 +47,68 @@ pub(crate) fn sites_from_json(sites: &serde_json::Value) -> Vec<Site> {
     sites
 }
 
+/// Proxy a ChatHub page has to reach the network through.
+///
+/// Mirrors the desktop's webview rule: only an explicit HTTP proxy applies, and a
+/// proxy that asks for credentials cannot be passed to a webview.
+#[derive(Clone, Debug)]
+pub(crate) struct ProxySettings {
+    host: String,
+    port: u16,
+    socks: bool,
+}
+
+/// Reads the network settings the runtime published for its webviews.
+pub(crate) fn proxy_from_config(config: &serde_json::Value) -> Option<ProxySettings> {
+    let proxy_type = config["proxy_type"].as_str().unwrap_or("none");
+    if proxy_type != "http" {
+        return None;
+    }
+    let server = config["proxy_server"].as_str().unwrap_or("").trim();
+    let username = config["proxy_username"].as_str().unwrap_or("");
+    if server.is_empty() || !username.trim().is_empty() {
+        return None;
+    }
+    let lower = server.to_ascii_lowercase();
+    let (socks, rest) = if let Some(rest) = lower
+        .strip_prefix("socks5://")
+        .or_else(|| lower.strip_prefix("socks://"))
+    {
+        (true, rest)
+    } else if let Some(rest) = lower
+        .strip_prefix("http://")
+        .or_else(|| lower.strip_prefix("https://"))
+    {
+        (false, rest)
+    } else if lower.contains("://") {
+        return None;
+    } else {
+        (false, lower.as_str())
+    };
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let default_port = if socks { 1080 } else { 80 };
+    let (host, port) = if let Some(stripped) = authority.strip_prefix('[') {
+        // IPv6 literal: `[::1]` or `[::1]:8080`.
+        let (host, tail) = stripped.split_once(']')?;
+        let port = tail
+            .strip_prefix(':')
+            .and_then(|port| port.parse::<u16>().ok())
+            .unwrap_or(default_port);
+        (host.to_owned(), port)
+    } else if let Some((host, port)) = authority.rsplit_once(':') {
+        match port.parse::<u16>() {
+            Ok(port) => (host.to_owned(), port),
+            Err(_) => (authority.to_owned(), default_port),
+        }
+    } else {
+        (authority.to_owned(), default_port)
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(ProxySettings { host, port, socks })
+}
+
 struct Page {
     site: Site,
     view: Rc<WebView>,
@@ -59,6 +121,9 @@ pub(crate) struct Dock {
     active: Option<i64>,
     visible: bool,
     growth: Option<(gpui_kit::Pixels, gpui_kit::Pixels)>,
+    /// The page paints this before the site has loaded, instead of black.
+    background: wry::RGBA,
+    proxy: Option<ProxySettings>,
     #[cfg(not(target_os = "macos"))]
     context: wry::WebContext,
     _profile_lock: File,
@@ -116,7 +181,11 @@ fn persistent_store_supported() -> bool {
 }
 
 impl Dock {
-    pub(crate) fn new(cx: &mut Context<crate::Observer>) -> Result<Self, String> {
+    pub(crate) fn new(
+        cx: &mut Context<crate::Observer>,
+        background: wry::RGBA,
+        proxy: Option<ProxySettings>,
+    ) -> Result<Self, String> {
         #[cfg(target_os = "macos")]
         if !persistent_store_supported() {
             return Err("Persistent ChatHub requires macOS 14 or later".into());
@@ -138,6 +207,8 @@ impl Dock {
             active: None,
             visible: true,
             growth: None,
+            background,
+            proxy,
             #[cfg(not(target_os = "macos"))]
             context,
             _profile_lock: profile_lock,
@@ -221,6 +292,12 @@ impl Dock {
     fn sync_visibility(&self) {
         for page in &self.pages {
             let shown = self.visible && self.active == Some(page.site.id);
+            if !shown {
+                // Forgetting the last rectangle makes the next frame re-apply the
+                // geometry: a page that was only hidden otherwise keeps whatever
+                // size the platform restored, which showed up as a tiny view.
+                page.bounds.set(None);
+            }
             let _ = page.view.set_visible(shown);
         }
     }
@@ -239,8 +316,23 @@ impl Dock {
         let builder = builder
             .with_visible(false)
             .with_url(url)
+            .with_background_color(self.background)
             .with_navigation_handler(|url| web_url(&url))
             .with_new_window_req_handler(|_, _| NewWindowResponse::Deny);
+        let builder = match self.proxy.clone() {
+            Some(proxy) => {
+                let endpoint = wry::ProxyEndpoint {
+                    host: proxy.host,
+                    port: proxy.port.to_string(),
+                };
+                builder.with_proxy_config(if proxy.socks {
+                    wry::ProxyConfig::Socks5(endpoint)
+                } else {
+                    wry::ProxyConfig::Http(endpoint)
+                })
+            }
+            None => builder,
+        };
         #[cfg(target_os = "linux")]
         {
             use raw_window_handle::{RawWindowHandle, WindowHandle, XlibWindowHandle};
@@ -285,7 +377,7 @@ impl Dock {
         .detach();
     }
 
-    fn expand(&mut self, window: &mut Window, cx: &gpui_kit::App) {
+    pub(crate) fn expand(&mut self, window: &mut Window, cx: &gpui_kit::App) {
         use gpui_kit::{px, size};
         if window.is_maximized() || window.is_fullscreen() {
             return;
@@ -310,13 +402,29 @@ impl Dock {
         })
     }
 
-    pub(crate) fn close(self, window: &mut Window) {
-        let bounds = window.bounds();
-        let growth = self.added_width(bounds.size.width);
-        drop(self);
-        if growth > gpui_kit::px(0.) && !window.is_maximized() && !window.is_fullscreen() {
-            window.resize(gpui_kit::size(bounds.size.width - growth, bounds.size.height));
+    /// Hands back the width the dock took from the screen.
+    pub(crate) fn release(&mut self, window: &mut Window) {
+        let Some((base, requested)) = self.growth else {
+            return;
+        };
+        self.growth = None;
+        if window.is_maximized() || window.is_fullscreen() {
+            return;
         }
+        let bounds = window.bounds();
+        let grown = (bounds.size.width - base)
+            .max(gpui_kit::px(0.))
+            .min(requested);
+        if grown > gpui_kit::px(0.) {
+            window.resize(gpui_kit::size(
+                bounds.size.width - grown,
+                bounds.size.height,
+            ));
+        }
+    }
+
+    pub(crate) fn close(mut self, window: &mut Window) {
+        self.release(window);
     }
 
     /// The active page's canvas; the other pages stay hidden until selected.

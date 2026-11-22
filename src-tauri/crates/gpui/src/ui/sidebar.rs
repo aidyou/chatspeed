@@ -1253,8 +1253,8 @@ fn chat_hub_entry(
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover))
                 .child(hub_logo(&site, 20.))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.toggle_chat_hub_dock(cx);
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.toggle_chat_hub_dock(window, cx);
                 })),
         );
     }

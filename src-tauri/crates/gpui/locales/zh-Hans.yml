@@ -58,6 +58,7 @@ clear_context_frame_done: "已为后续 AI 回合清空上下文"
 clear_context_no_session: "没有可清空上下文的会话"
 click_to_expand: （点击展开）
 close_window: 关闭窗口
+collapse: 收起
 collapse_sidebar: 折叠侧栏
 completed: 已完成
 composer_placeholder: 输入下一步指令，Enter 发送
@@ -158,6 +159,9 @@ model_slot_lite: "轻量模型"
 model_slot_plan: "规划模型"
 model_slot_utility: "工具模型"
 model_slot_vision: "视觉模型"
+model_source_provider: "供应商"
+model_source_proxy: "代理"
+more: 更多
 new_task: 新建任务
 no_sessions: 暂无工作流会话
 not_supported_native: 原生窗口暂未支持
@@ -285,7 +289,6 @@ status_panel_empty: 暂无任务
 status_panel_execution: 执行分
 status_panel_fallback: 回退
 status_panel_global: 全局
-status_panel_latest: 最新动态
 status_panel_lite_model: 轻量
 status_panel_load_failed: 加载效率分析失败
 status_panel_loading: 加载中...
@@ -382,6 +385,9 @@ todo_status_pending: 待处理
 todo_update: 更新待办
 todo_view: 查看待办
 tool_config: "工具配置"
+tool_tab_auto_approve: "自动审批"
+tool_tab_available: "可用工具"
+tool_tab_shell: "Shell 规则"
 tools_empty: "未发现工具"
 tree_loading: 加载中
 turn_delivery_pending: "等待确认…"
