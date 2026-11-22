@@ -544,7 +544,7 @@ fn model_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .into_any_element()
 }
 
-fn model_select_trigger(
+pub(crate) fn model_select_trigger(
     id: &'static str,
     label: String,
     enabled: bool,
@@ -632,7 +632,7 @@ fn param_label(label: String, cx: &App) -> AnyElement {
 }
 
 /// A capsule segmented control: one active option on a rounded track.
-fn capsule_segments(
+pub(crate) fn capsule_segments(
     id_prefix: &str,
     options: Vec<(&'static str, String)>,
     selected: &str,
@@ -1302,44 +1302,25 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let ids = agent_tool_ids(observer);
     let rules = shell_rules(observer);
     let border = cx.theme().border;
-    let primary = cx.theme().primary;
     let muted = cx.theme().muted_foreground;
 
-    let mut tabs = h_flex()
-        .w_full()
-        .min_w_0()
-        .gap(px(4.))
-        .px_3()
-        .py_2()
-        .border_b_1()
-        .border_color(border);
-    for (index, title) in [
-        format!("{} ({})", t!("tool_tab_available"), ids.len()),
-        format!("{} ({})", t!("tool_tab_shell"), rules.len()),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let active = index == tab;
-        tabs = tabs.child(
-            div()
-                .id(("tool-tab", index))
-                .flex_none()
-                .px(px(8.))
-                .py(px(4.))
-                .rounded(px(8.))
-                .cursor_pointer()
-                .text_size(px(12.))
-                .text_color(if active { primary } else { muted })
-                .when(active, |button| button.bg(primary.opacity(0.12)))
-                .hover(|style| style.bg(cx.theme().muted))
-                .child(title)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.tool_panel_tab = index;
-                    cx.notify();
-                })),
-        );
-    }
+    let observer_entity = cx.entity();
+    let tabs = crate::ui::tabs::underline_tabs(
+        "tool-tab",
+        vec![
+            format!("{} ({})", t!("tool_tab_available"), ids.len()),
+            format!("{} ({})", t!("tool_tab_shell"), rules.len()),
+        ],
+        tab,
+        move |index, window, cx| {
+            observer_entity.update(cx, |this, cx| {
+                this.tool_panel_tab = index;
+                cx.notify();
+            });
+            window.refresh();
+        },
+        cx,
+    );
 
     let mut body = v_flex()
         .id("tool-panel-body")

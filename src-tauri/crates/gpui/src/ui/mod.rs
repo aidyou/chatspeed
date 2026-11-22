@@ -7,6 +7,7 @@ use gpui_kit::prelude::FluentBuilder;
 pub(crate) mod history_scrollbar;
 mod icon;
 mod menu_popover;
+pub(crate) mod tabs;
 pub(crate) mod terminal;
 
 pub use icon::Icon;

@@ -134,6 +134,7 @@ impl MenuRowStyle {
 /// text button, so the shape is passed in instead of duplicated.
 fn pill(
     id: &'static str,
+    icon: Option<&'static str>,
     label: String,
     caret: bool,
     hover: Hsla,
@@ -159,8 +160,13 @@ fn pill(
                 .border_color(if color == primary { primary } else { cx.theme().border })
         })
         .hover(move |style| style.bg(hover).text_color(primary))
-        .text_size(px(if bordered { 16. } else { 14. }))
+        // Vue's agent trigger inherits the footer's 14px size; the leading
+        // icon keeps the 18px size its `cs` component uses.
+        .text_size(px(14.))
         .text_color(color)
+        .when_some(icon, |row, icon| {
+            row.child(Icon::new(icon).size(18.).color(color))
+        })
         .child(
             div()
                 .max_w(px(160.))
@@ -169,7 +175,7 @@ fn pill(
                 .child(crate::ui::chrome_label(label.clone())),
         )
         .when(caret, |row| {
-            row.child(Icon::new("caret-down").size(10.).color(color))
+            row.child(Icon::new("caret-down").size(12.).color(color))
         })
         .into_any_element()
 }
@@ -253,7 +259,16 @@ fn agent_selector(
     let editable = observer.can_switch_agent();
     let primary = cx.theme().primary;
     let color = if editable { primary } else { muted.opacity(0.4) };
-    let trigger_el = pill("composer-agent", label, editable, hover, color, true, cx);
+    let trigger_el = pill(
+        "composer-agent",
+        Some("agent"),
+        label,
+        true,
+        hover,
+        color,
+        true,
+        cx,
+    );
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
@@ -326,9 +341,8 @@ pub(crate) struct ModelChoice {
 }
 
 /// The provider model behind an `(id, model)` pair, used for capabilities.
-fn provider_model(observer: &Observer, provider_id: i64, model: &str) -> Option<Value> {
-    observer
-        .models
+fn provider_model(models: &[Value], provider_id: i64, model: &str) -> Option<Value> {
+    models
         .iter()
         .find(|provider| provider["id"].as_i64() == Some(provider_id))
         .and_then(|provider| {
@@ -342,23 +356,33 @@ fn provider_model(observer: &Observer, provider_id: i64, model: &str) -> Option<
 
 /// Model choices for one slot, matching Vue's `buildCurrentModelOptions`.
 pub(crate) fn model_choices(observer: &Observer, config: &Value) -> (String, Vec<ModelChoice>) {
+    model_choices_from(&observer.models, &observer.proxy_targets, config)
+}
+
+/// Same resolution for callers that own a detached catalog, such as the
+/// automation editor's local model draft.
+pub(crate) fn model_choices_from(
+    models: &[Value],
+    proxy_targets: &Value,
+    config: &Value,
+) -> (String, Vec<ModelChoice>) {
     let current = config["model"].as_str().unwrap_or("");
     let provider_id = config["id"].as_i64().unwrap_or_default();
     if provider_id == 0 && current.contains('@') {
         let group = current.split('@').next().unwrap_or("");
-        let aliases: Vec<ModelChoice> = observer.proxy_targets[group]
+        let aliases: Vec<ModelChoice> = proxy_targets[group]
             .as_object()
             .map(|aliases| {
                 aliases
                     .keys()
                     .map(|alias| {
-                        let target = observer.proxy_targets[group][alias]
+                        let target = proxy_targets[group][alias]
                             .as_array()
                             .and_then(|targets| targets.first());
                         let target = target.and_then(|target| {
                             let id = target["id"].as_i64()?;
                             let model = target["model"].as_str()?;
-                            provider_model(observer, id, model)
+                            provider_model(models, id, model)
                         });
                         ModelChoice {
                             provider_id: 0,
@@ -389,8 +413,7 @@ pub(crate) fn model_choices(observer: &Observer, config: &Value) -> (String, Vec
         }
         return (group.to_owned(), aliases);
     }
-    let Some(provider) = observer
-        .models
+    let Some(provider) = models
         .iter()
         .find(|provider| provider["id"].as_i64() == Some(provider_id))
     else {
@@ -462,7 +485,7 @@ fn model_selector(
     cx: &mut Context<Observer>,
 ) -> AnyElement {
     let label = observer.model_label();
-    let trigger_el = pill("composer-model", label, true, hover, muted, false, cx);
+    let trigger_el = pill("composer-model", None, label, true, hover, muted, false, cx);
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };

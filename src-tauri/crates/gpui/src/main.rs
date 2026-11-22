@@ -561,11 +561,15 @@ struct Observer {
     ask_user_choice: BTreeMap<String, usize>,
     /// Free text typed for an `ask_user` "Other" row, by the same key.
     approval_drafts: BTreeMap<String, Entity<TextareaState>>,
+    /// Tool calls whose approval card was optimistically hidden by "Approve
+    /// all" while the runtime processes the batch one call at a time.
+    hidden_approvals: BTreeSet<String>,
     ask_user_text: BTreeMap<String, Entity<TextareaState>>,
     /// Child transcripts requested but not loaded yet.
     child_epoch: u64,
     child_model: Model,
     child_approval_drafts: BTreeMap<String, Entity<TextareaState>>,
+    child_hidden_approvals: BTreeSet<String>,
     child_question_text: BTreeMap<usize, Entity<TextareaState>>,
     child_question_choices: BTreeMap<usize, usize>,
     child_question_id: Option<String>,
@@ -997,10 +1001,12 @@ impl Observer {
             active_child: None,
             ask_user_choice: BTreeMap::new(),
             approval_drafts: BTreeMap::new(),
+            hidden_approvals: BTreeSet::new(),
             ask_user_text: BTreeMap::new(),
             child_epoch: 0,
             child_model: Model::default(),
             child_approval_drafts: BTreeMap::new(),
+            child_hidden_approvals: BTreeSet::new(),
             child_question_text: BTreeMap::new(),
             child_question_choices: BTreeMap::new(),
             child_question_id: None,
@@ -1140,6 +1146,7 @@ impl Observer {
         self.clear_pending = false;
         self.close_child();
         self.approval_drafts.clear();
+        self.hidden_approvals.clear();
         self.rewind_pending = false;
         self.markdown.clear();
         self.status_panel_tab = 0;
@@ -2136,6 +2143,7 @@ impl Observer {
         self.clear_pending = false;
         self.close_child();
         self.approval_drafts.clear();
+        self.hidden_approvals.clear();
         self.rows.clear();
         self.markdown.clear();
         self.status_panel_tab = 0;
@@ -2801,11 +2809,38 @@ impl Observer {
         self.child_rows.clear();
         self.child_markdown.clear();
         self.child_approval_drafts.clear();
+        self.child_hidden_approvals.clear();
         self.child_question_text.clear();
         self.child_question_choices.clear();
         self.child_question_id = None;
         self.child_model = Model::default();
         self.child_connected = None;
+    }
+
+    /// Drops optimistic batch-approval hides once the runtime no longer lists
+    /// the tool call as pending. Until then the cards stay hidden even though
+    /// the batch signal is processed one call at a time.
+    fn prune_hidden_approvals(&mut self) {
+        let pending: BTreeSet<String> = self
+            .model
+            .pending_tool_ids
+            .iter()
+            .cloned()
+            .chain(
+                self.model
+                    .messages
+                    .values()
+                    .filter(|row| {
+                        row.metadata["approval_status"] == "pending"
+                            || row.metadata["execution_status"] == "pending_approval"
+                    })
+                    .filter_map(|row| row.metadata["tool_call_id"].as_str().map(str::to_owned)),
+            )
+            .collect();
+        self.hidden_approvals.retain(|id| pending.contains(id));
+        let child_pending = self.child_model.pending_tool_ids.clone();
+        self.child_hidden_approvals
+            .retain(|id| child_pending.contains(id));
     }
 
     fn open_child(&mut self, card: SubAgentView, cx: &mut Context<Self>) {
@@ -3076,6 +3111,10 @@ impl Observer {
                     continue;
                 }
                 UpdateKind::Error(message) => {
+                    // A failed batch signal must not leave its cards hidden
+                    // forever; the runtime still lists them as pending.
+                    self.hidden_approvals.clear();
+                    self.child_hidden_approvals.clear();
                     self.show_toast(ToastKind::Error, message, cx);
                 }
                 UpdateKind::Catalogue {
@@ -3222,6 +3261,7 @@ impl Observer {
                     self.model.event(event);
                 }
             }
+            self.prune_hidden_approvals();
             dirty = true;
         }
         if self.model.compressing && self.compression_started.is_none() {
@@ -3436,6 +3476,17 @@ impl Observer {
             theme.colors.primary = accent;
             theme.colors.primary_hover = accent.opacity(0.9);
             theme.colors.primary_active = accent.opacity(0.8);
+            // Element Plus paints text on a primary surface white, regardless
+            // of which primary preset the user selected.
+            theme.colors.primary_foreground = gpui_kit::white();
+            // The switch thumb and slider knob are white in Element Plus; the
+            // surrounding track carries the user's primary color.
+            theme.colors.switch_thumb = gpui_kit::white();
+            theme.colors.slider_bar = accent;
+            theme.colors.slider_thumb = gpui_kit::white();
+            theme.tokens.switch_thumb = gpui_kit::white().into();
+            theme.tokens.slider_bar = accent.into();
+            theme.tokens.slider_thumb = gpui_kit::white().into();
             // Focus only recolors the existing border with the user's primary
             // color. The library's outer ring reads as an outline/shadow.
             theme.colors.ring = accent;
@@ -4003,7 +4054,12 @@ impl Observer {
             MsgScope::Main => &self.model.pending_tool_ids,
             MsgScope::Child => &self.child_model.pending_tool_ids,
         };
+        let batch_hidden = match scope {
+            MsgScope::Main => self.hidden_approvals.contains(&tool.tool_call_id),
+            MsgScope::Child => self.child_hidden_approvals.contains(&tool.tool_call_id),
+        };
         let pending = !tool.tool_call_id.is_empty()
+            && !batch_hidden
             && (tool.status == presentation::ToolStatus::Pending
                 || pending_ids.contains(&tool.tool_call_id));
         let answered = match scope {
@@ -4181,12 +4237,16 @@ impl Observer {
                                     this.submit_approval(id.clone(), true, true, cx)
                                 }
                                 Decision::Batch => {
-                                    let tool_ids = this.approval_drafts.keys().cloned().collect();
+                                    let tool_ids: Vec<String> =
+                                        this.approval_drafts.keys().cloned().collect();
+                                    this.hidden_approvals.extend(tool_ids.iter().cloned());
+                                    this.approval_drafts.clear();
                                     if let Some(session) = this.selected.clone() {
                                         let _ = this.worker.commands.try_send(
                                             Command::ApprovalBatch { session, tool_ids },
                                         );
                                     }
+                                    cx.notify();
                                 }
                             }
                         });
@@ -4659,12 +4719,15 @@ impl Observer {
                     return;
                 }
                 if matches!(decision, Decision::Batch) {
-                    let tool_ids = this.child_approval_drafts.keys()
+                    let tool_ids: Vec<String> = this.child_approval_drafts.keys()
                         .filter(|id| this.child_model.pending_tool_ids.contains(*id))
                         .cloned().collect();
+                    this.child_hidden_approvals.extend(tool_ids.iter().cloned());
+                    this.child_approval_drafts.clear();
                     if this.worker.commands.try_send(Command::ApprovalBatch { session: session.clone(), tool_ids }).is_err() {
                         this.show_toast(ToastKind::Error, t!("approval_submit_failed").to_string(), cx);
                     }
+                    cx.notify();
                     return;
                 }
                 let mut signal = serde_json::json!({
@@ -5342,6 +5405,7 @@ impl Render for Observer {
                     .filter_map(|row| row.metadata["tool_call_id"].as_str().map(str::to_owned)),
             )
             .filter(|id| self.model.awaiting_user_tool_call_id.as_ref() != Some(id))
+            .filter(|id| !self.hidden_approvals.contains(id))
             .collect();
         self.approval_drafts
             .retain(|id, _| approval_ids.contains(id));
@@ -5358,8 +5422,14 @@ impl Render for Observer {
         self.ensure_child_question_fields(window, cx);
         let child_ids = &self.child_model.pending_tool_ids;
         let question = self.child_model.awaiting_user_tool_call_id.as_ref();
-        self.child_approval_drafts.retain(|id, _| child_ids.contains(id) && question != Some(id));
-        for id in child_ids.iter().filter(|id| question != Some(*id)) {
+        let child_hidden = &self.child_hidden_approvals;
+        self.child_approval_drafts.retain(|id, _| {
+            child_ids.contains(id) && question != Some(id) && !child_hidden.contains(id)
+        });
+        for id in child_ids
+            .iter()
+            .filter(|id| question != Some(*id) && !child_hidden.contains(*id))
+        {
             self.child_approval_drafts.entry(id.clone()).or_insert_with(|| {
                 cx.new(|cx| {
                     TextareaState::new(window, cx)

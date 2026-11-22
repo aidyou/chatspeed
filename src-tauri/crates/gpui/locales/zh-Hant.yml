@@ -28,65 +28,66 @@ auto_compress_hint: "自動彙總過長的上下文"
 automation_acknowledge_apply: 確認權限變更並套用
 automation_action_failed: 無法執行排程任務操作
 automation_add_directory: 新增目錄…
-automation_allowed_paths: 允許的目錄
+automation_agent: 智能體
+automation_agent_required: 暫無可用智能體
+automation_allowed_paths: 授權目錄
 automation_allowed_paths_hint: "多個絕對路徑用逗號分隔"
-automation_execution_date: 執行日期
-automation_execution_time: 執行時間
-automation_interval_minutes: 間隔分鐘
-automation_model: 模型
-automation_continuous_context: 持續上下文
-automation_frequency: 執行頻率
-automation_frequency_daily: 每天
-automation_frequency_interval: 間隔
-automation_frequency_once: 一次
-automation_schedule_daily_hint: "本地 HH:MM，多個時間用逗號分隔"
-automation_schedule_interval_hint: "間隔分鐘數，例如 30m（最小 5m）"
-automation_schedule_once_hint: "本地時間，格式 YYYY-MM-DD HH:MM"
-automation_self_review: 自我審查
-automation_start: 建立後啟用
-automation_tab_advanced: 附加資訊
-automation_tab_basic: 基本資訊
-automation_task_title: 任務標題
-automation_review_plan: 審核自動化計畫
-automation_select_file: 選擇檔案…
-automation_agent_label: "代理：%{agent}"
-automation_agent_required: 暫無可用代理
+automation_continuous_context: 連續上下文
+automation_continuous_context_hint: 每次執行都會重用同一個任務工作階段；如果該工作階段已被刪除，會自動建立新的工作階段。
 automation_create_failed: 無法建立排程任務
 automation_created: 已建立排程任務
 automation_daily_time: "每日執行時間（本機 HH:MM，多個時點用半形逗號分隔）"
 automation_delete: 刪除自動化
 automation_delete_confirm: 確定永久刪除此自動化嗎？
 automation_disable: 停用
-automation_empty: 暫無自動化
 automation_edit: 編輯
+automation_effective_range: 生效日期區間
+automation_empty: 暫無自動化
 automation_enable: 啟用
+automation_end_date: 結束日期
+automation_execution_date: 執行日期
+automation_execution_time: 執行時間
+automation_frequency: 執行頻率
+automation_frequency_daily: 每天
+automation_frequency_interval: 間隔
+automation_frequency_once: 一次
 automation_history: 歷程
 automation_history_empty: 暫無執行紀錄
+automation_interval_minutes: 間隔分鐘數
+automation_model: 模型
 automation_name: 任務名稱
-automation_prompt: 任務指令
+automation_prompt: 提示詞
 automation_prompt_file: 提示詞檔案
-automation_prompt_file_hint: Markdown/文字提示詞檔案的絕對路徑
-automation_shell_command: Shell 命令
-automation_shell_command_hint: 可選的、任務執行前執行的命令
-automation_weekdays: 執行星期
-automation_effective_range: 生效日期範圍
-automation_weekday_mon: 週一
-automation_weekday_tue: 週二
-automation_weekday_wed: 週三
-automation_weekday_thu: 週四
+automation_prompt_file_hint: 選擇提示詞檔案後，執行時會優先使用檔案內容覆蓋目前提示詞。
+automation_required_fields: 請輸入名稱、提示詞和有效排程。
+automation_review_plan: 審核自動化計畫
+automation_run: 立即執行
+automation_schedule_input: "每日：09:00，18:00；間隔：30m（最少 5m）；單次：YYYY-MM-DD HH:MM（本機時間）"
+automation_select_file: 選擇檔案…
+automation_self_review: 自審
+automation_shell_command: Shell 路徑或命令
+automation_shell_command_hint: 啟動任務前會先執行此命令；成功後會把輸出結果追加到任務輸入。
+automation_shell_command_placeholder: "例如：python3 /path/to/task.py --env prod"
+automation_start: 啟動
+automation_start_date: 開始日期
+automation_tab_advanced: 附加資訊
+automation_tab_basic: 基礎資訊
+automation_task_title: 任務標題
 automation_weekday_fri: 週五
+automation_weekday_mon: 週一
 automation_weekday_sat: 週六
-automation_weekday_sun: 週日
-automation_weekday_short_mon: 一
-automation_weekday_short_tue: 二
-automation_weekday_short_wed: 三
-automation_weekday_short_thu: 四
 automation_weekday_short_fri: 五
+automation_weekday_short_mon: 一
 automation_weekday_short_sat: 六
 automation_weekday_short_sun: 日
-automation_required_fields: 請輸入名稱、任務指令和有效排程。
-automation_schedule_input: "每日：09:00，18:00；間隔：30m（最少 5m）；單次：YYYY-MM-DD HH:MM（本機時間）"
-automation_run: 立即執行
+automation_weekday_short_thu: 四
+automation_weekday_short_tue: 二
+automation_weekday_short_wed: 三
+automation_weekday_sun: 週日
+automation_weekday_thu: 週四
+automation_weekday_tue: 週二
+automation_weekday_wed: 週三
+automation_weekdays: 週幾執行
 awaiting_approval: 等待用戶審批
 chat_hub: ChatHub
 chat_hub_close: 關閉

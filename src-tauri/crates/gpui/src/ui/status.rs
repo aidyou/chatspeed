@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::presentation::{format_display_path, single_line, tool_arguments, tool_name};
 use crate::MONO_FONT;
 use crate::ui::Icon;
-use crate::{accent, danger, info, success, violet, warning, Model};
+use crate::{accent, danger, success, violet, warning, Model};
 
 /// How long a finished tool stays in the status line, as in Vue.
 const COMPLETED_VISIBLE: Duration = Duration::from_secs(5);
@@ -78,46 +78,19 @@ fn todo_status(task: &Value) -> &str {
     task["status"].as_str().unwrap_or("")
 }
 
-/// Vue's `contextUsageStatusClass`.
-fn context_class(percent: u32) -> &'static str {
-    if percent >= 90 {
-        "complete"
-    } else if percent >= 70 {
-        "good"
-    } else if percent >= 40 {
-        "medium"
-    } else {
-        "start"
-    }
+/// Context usage stays in the user's primary hue. Lower usage is allowed to
+/// fade toward the track so the ring and bar read as one tonal ramp instead of
+/// switching through unrelated semantic colors.
+fn context_fill(percent: u32) -> Hsla {
+    const MIN_OPACITY: f32 = 0.35;
+    let fraction = percent.min(100) as f32 / 100.;
+    Hsla::from(accent()).opacity(MIN_OPACITY + (1. - MIN_OPACITY) * fraction)
 }
 
-/// Vue's `progressStatusClass`.
-fn progress_class(percent: u32) -> &'static str {
-    if percent == 100 {
-        "complete"
-    } else if percent >= 60 {
-        "good"
-    } else if percent >= 30 {
-        "medium"
-    } else {
-        "start"
-    }
-}
-
-fn context_fill(class: &str) -> Rgba {
-    match class {
-        "good" => warning(),
-        "complete" => danger(),
-        _ => success(),
-    }
-}
-
-fn task_fill(class: &str) -> Rgba {
-    match class {
-        "start" => info(),
-        "medium" => accent(),
-        _ => success(),
-    }
+/// Task completion is a solid primary bar; completed todo checks reuse the same
+/// hue so the panel has one progress color.
+fn task_fill() -> Hsla {
+    Hsla::from(accent())
 }
 
 /// Tool-type rail colors from Vue's `.op-item.tool-*` rules.
@@ -259,8 +232,7 @@ pub(crate) fn overlay(
     );
 
     if mode == PanelMode::Circle {
-        let class = context_class(context.unwrap_or(0));
-        let ring: Hsla = context_fill(class).into();
+        let ring = context_fill(context.unwrap_or(0));
         let mut trigger = div()
             .id("status-panel-trigger")
             .occlude()
@@ -488,7 +460,7 @@ pub(crate) fn overlay(
                 .top_0()
                 .bottom_0()
                 .w(relative(percent as f32 / 100.))
-                .bg(context_fill(context_class(percent)).opacity(0.2))
+                .bg(context_fill(percent).opacity(0.2))
                 .into_any_element(),
         ),
         _ => None,
@@ -609,7 +581,7 @@ fn section_header(icon: &'static str, title: String, meta: Option<String>, cx: &
         .into_any_element()
 }
 
-fn progress_bar(percent: u32, fill: Rgba, cx: &App) -> AnyElement {
+fn progress_bar(percent: u32, fill: Hsla, cx: &App) -> AnyElement {
     h_flex()
         .w_full()
         .min_w_0()
@@ -1654,11 +1626,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                     None,
                     cx,
                 ));
-                section = section.child(progress_bar(
-                    percent,
-                    context_fill(context_class(percent)),
-                    cx,
-                ));
+                section = section.child(progress_bar(percent, context_fill(percent), cx));
                 section = section.child(
                     div()
                         .w_full()
@@ -1679,11 +1647,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                         cx,
                     ),
                 );
-                section = section.child(progress_bar(
-                    percent,
-                    task_fill(progress_class(percent)),
-                    cx,
-                ));
+                section = section.child(progress_bar(percent, task_fill(), cx));
                 body = body.child(section);
 
                 let expanded = observer.status_panel_todos_expanded;
@@ -1700,7 +1664,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                 for (index, task) in observer.model.todo_list.iter().take(shown).enumerate() {
                     let status = todo_status(task);
                     let (icon, color) = match status {
-                        "completed" => ("check", Hsla::from(success())),
+                        "completed" => ("check", primary),
                         "in_progress" => ("loading", primary),
                         "failed" => ("error", Hsla::from(danger())),
                         "data_missing" => ("error", Hsla::from(warning())),
@@ -2223,7 +2187,20 @@ fn truncate(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{live_state, preview_segment, tool_phase, truncate, Model};
+    use super::{
+        context_fill, live_state, preview_segment, tool_phase, truncate, Model,
+    };
+
+    #[test]
+    fn context_usage_ramps_opacity_within_one_hue() {
+        let low = context_fill(0);
+        let middle = context_fill(50);
+        let high = context_fill(100);
+        assert_eq!(low.h, high.h);
+        assert!(low.a < middle.a);
+        assert!(middle.a < high.a);
+        assert!((high.a - 1.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn local_answer_hides_stale_waiting_status() {

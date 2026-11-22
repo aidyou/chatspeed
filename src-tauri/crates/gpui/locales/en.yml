@@ -28,65 +28,66 @@ auto_compress_hint: "Roll up long context automatically"
 automation_acknowledge_apply: Acknowledge permission changes and apply
 automation_action_failed: Could not perform the scheduled task action
 automation_add_directory: Add directory…
-automation_allowed_paths: Allowed directories
-automation_allowed_paths_hint: "Comma-separated absolute paths"
-automation_execution_date: Execution date
-automation_execution_time: Execution time
-automation_interval_minutes: Interval (minutes)
-automation_model: Model
-automation_continuous_context: Continuous context
-automation_frequency: Frequency
-automation_frequency_daily: Daily
-automation_frequency_interval: Interval
-automation_frequency_once: Once
-automation_schedule_daily_hint: "Times in local HH:MM, comma-separated"
-automation_schedule_interval_hint: "Interval in minutes, for example 30m (minimum 5m)"
-automation_schedule_once_hint: "Local time as YYYY-MM-DD HH:MM"
-automation_self_review: Self review
-automation_start: Start enabled
-automation_tab_advanced: Additional information
-automation_tab_basic: Basic information
-automation_task_title: Task title
-automation_review_plan: Review automation plan
-automation_select_file: Select file…
-automation_agent_label: "Agent: %{agent}"
+automation_agent: Agent
 automation_agent_required: No agent is available
+automation_allowed_paths: Authorized directories
+automation_allowed_paths_hint: "Comma-separated absolute paths"
+automation_continuous_context: Continuous context
+automation_continuous_context_hint: Reuse the same task session for each run. If that session was deleted, a new one is created automatically.
 automation_create_failed: Could not create the scheduled task
 automation_created: Scheduled task created
 automation_daily_time: "Daily times (local HH:MM, comma-separated)"
 automation_delete: Delete automation
 automation_delete_confirm: Permanently delete this automation?
 automation_disable: Disable
-automation_empty: No automations yet
 automation_edit: Edit
+automation_effective_range: Effective range
+automation_empty: No automations yet
 automation_enable: Enable
+automation_end_date: End date
+automation_execution_date: Execution date
+automation_execution_time: Execution time
+automation_frequency: Frequency
+automation_frequency_daily: Daily
+automation_frequency_interval: Interval
+automation_frequency_once: Once
 automation_history: History
 automation_history_empty: No runs yet
+automation_interval_minutes: Interval minutes
+automation_model: Model
 automation_name: Task name
-automation_prompt: Task instructions
+automation_prompt: Prompt
 automation_prompt_file: Prompt file
-automation_prompt_file_hint: Absolute path to a Markdown/text prompt file
-automation_shell_command: Shell command
-automation_shell_command_hint: Optional command to run before the task
-automation_weekdays: Weekdays
-automation_effective_range: Effective range
-automation_weekday_mon: Mon
-automation_weekday_tue: Tue
-automation_weekday_wed: Wed
-automation_weekday_thu: Thu
+automation_prompt_file_hint: When a prompt file is selected, its content overrides the prompt at runtime.
+automation_required_fields: Enter a name, instructions, and a valid schedule.
+automation_review_plan: Review automation plan
+automation_run: Run now
+automation_schedule_input: "Daily: 09:00, 18:00 · Interval: 30m (minimum 5m) · Once: YYYY-MM-DD HH:MM (local time)"
+automation_select_file: Select file…
+automation_self_review: Self-review
+automation_shell_command: Shell path or command
+automation_shell_command_hint: This command runs before the task starts. On success, its output is appended to the task input.
+automation_shell_command_placeholder: "For example: python3 /path/to/task.py --env prod"
+automation_start: Start
+automation_start_date: Start date
+automation_tab_advanced: Additional info
+automation_tab_basic: Basic info
+automation_task_title: Task title
 automation_weekday_fri: Fri
+automation_weekday_mon: Mon
 automation_weekday_sat: Sat
-automation_weekday_sun: Sun
-automation_weekday_short_mon: M
-automation_weekday_short_tue: T
-automation_weekday_short_wed: W
-automation_weekday_short_thu: T
 automation_weekday_short_fri: F
+automation_weekday_short_mon: M
 automation_weekday_short_sat: S
 automation_weekday_short_sun: S
-automation_required_fields: Enter a name, instructions, and a valid schedule.
-automation_schedule_input: "Daily: 09:00, 18:00 · Interval: 30m (minimum 5m) · Once: YYYY-MM-DD HH:MM (local time)"
-automation_run: Run now
+automation_weekday_short_thu: T
+automation_weekday_short_tue: T
+automation_weekday_short_wed: W
+automation_weekday_sun: Sun
+automation_weekday_thu: Thu
+automation_weekday_tue: Tue
+automation_weekday_wed: Wed
+automation_weekdays: Weekdays
 awaiting_approval: Awaiting approval
 chat_hub: ChatHub
 chat_hub_close: Close
