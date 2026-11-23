@@ -62,7 +62,7 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 .bottom(relative(1.))
                 .left(px(0.))
                 .right(px(0.))
-                .mb(px(6.))
+                .mb(px(8.))
                 .justify_center()
                 .child(panel),
         );
@@ -85,7 +85,7 @@ fn attachment_row(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement
                 .relative()
                 .flex_none()
                 .w(px(96.))
-                .rounded(px(6.))
+                .rounded(px(8.))
                 .border_1()
                 .border_color(border)
                 .overflow_hidden()

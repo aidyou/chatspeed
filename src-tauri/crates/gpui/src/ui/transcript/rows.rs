@@ -91,8 +91,8 @@ pub(crate) fn activity_group(
         .items_center()
         .gap(px(8.))
         .h(px(26.))
-        .px(px(6.))
-        .rounded(px(6.))
+        .px(px(4.))
+        .rounded(px(4.))
         .cursor_pointer();
     let primary = cx.theme().primary;
     let mut title = h_flex()

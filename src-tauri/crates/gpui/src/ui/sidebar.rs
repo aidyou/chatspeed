@@ -531,7 +531,7 @@ fn tab_button(
         .flex_none()
         .justify_center()
         .items_center()
-        .gap(px(6.))
+        .gap(px(4.))
         .px(px(8.))
         .cursor_pointer()
         .child(

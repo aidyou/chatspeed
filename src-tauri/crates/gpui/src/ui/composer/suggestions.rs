@@ -201,7 +201,7 @@ pub fn panel(observer: &Observer, cx: &mut Context<Observer>) -> Option<AnyEleme
                 .id(SharedString::from(row.id))
                 .w_full()
                 .min_w_0()
-                .rounded(px(6.))
+                .rounded(px(4.))
                 .cursor_pointer()
                 .when(selected, |line| line.bg(primary.opacity(0.14)))
                 .hover(move |style| style.bg(hover))
@@ -218,7 +218,7 @@ pub fn panel(observer: &Observer, cx: &mut Context<Observer>) -> Option<AnyEleme
             .min_w_0()
             .max_h(px(300.))
             .popover_style(cx)
-            .rounded(px(10.))
+            .rounded(px(8.))
             .p_1()
             .child(list)
             .into_any_element(),

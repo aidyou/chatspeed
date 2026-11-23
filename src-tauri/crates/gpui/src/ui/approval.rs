@@ -85,7 +85,7 @@ pub fn approval_card(
         }
         body = body.child(
             v_flex()
-                .rounded(px(6.))
+                .rounded(px(8.))
                 .border_1()
                 .border_color(border)
                 .overflow_hidden()
@@ -111,7 +111,7 @@ pub fn approval_card(
                 .max_h(px(240.))
                 .id("approval-shell-command")
                 .overflow_y_scroll()
-                .rounded(px(6.))
+                .rounded(px(8.))
                 .border_1()
                 .border_color(border)
                 .bg(cx.theme().muted)
@@ -203,7 +203,7 @@ pub fn approval_card(
         let button = Button::new(id)
             .label(label)
             .h(px(32.))
-            .px(px(15.))
+            .px(px(16.))
             .text_size(px(14.))
             .rounded(px(9999.));
         let button = match decision {

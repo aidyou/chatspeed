@@ -411,7 +411,7 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
             div()
                 .id(("model-source", usize::from(show_proxy)))
                 .flex_none()
-                .px(px(10.))
+                .px(px(8.))
                 .py(px(3.))
                 .rounded(px(3.))
                 .cursor_pointer()
@@ -756,7 +756,7 @@ fn model_params(
             });
         });
 
-    let mut reasoning = v_flex().w_full().min_w_0().gap(px(6.)).child(
+    let mut reasoning = v_flex().w_full().min_w_0().gap(px(8.)).child(
         h_flex()
             .w_full()
             .items_center()
@@ -843,16 +843,16 @@ pub(crate) fn model_config_footer(
                 .w_full()
                 .items_center()
                 .justify_end()
-                .gap(px(10.))
+                .gap(px(12.))
                 .px_3()
                 .py_2()
                 .child(
                     div()
                         .id(SharedString::from(format!("{id_prefix}-cancel")))
                         .flex_none()
-                        .px(px(14.))
-                        .py(px(5.))
-                        .rounded(px(6.))
+                        .px(px(16.))
+                        .py(px(4.))
+                        .rounded(px(8.))
                         .border_1()
                         .border_color(border)
                         .cursor_pointer()
@@ -866,9 +866,9 @@ pub(crate) fn model_config_footer(
                     div()
                         .id(SharedString::from(format!("{id_prefix}-save")))
                         .flex_none()
-                        .px(px(14.))
-                        .py(px(5.))
-                        .rounded(px(6.))
+                        .px(px(16.))
+                        .py(px(4.))
+                        .rounded(px(8.))
                         .bg(if save_enabled {
                             primary
                         } else {

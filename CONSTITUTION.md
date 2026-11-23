@@ -2,11 +2,17 @@
 
 ## Scope
 
-These rules apply to platform compatibility, logging, and error diagnostics
+These rules apply to platform compatibility, UI layout, logging, and error diagnostics
 throughout the repository.
 Read them together with `AGENTS.md` and the applicable module constitution.
 Module-specific rules continue to protect their existing runtime, persistence,
 and protocol contracts. This document does not authorize unrelated migrations.
+
+## UI Layout
+
+- Use a 4px logical grid for fixed spacing and layout insets. Choose the nearest appropriate step for the component's density and hierarchy, rather than rounding mechanically.
+- Share spacing, corner radii, and semantic colors through design tokens: `src/style/element/css-vars.css` for Vue and `src-tauri/crates/gpui/src/ui/tokens.rs` for GPUI. Keep standard GPUI colors in the active theme.
+- Prefer 4px radii for compact controls and 8px for standard surfaces. Full pills, hairlines, typography, icon metrics, optical alignment, and geometry determined by available space may deviate when needed.
 
 ## Platform Compatibility
 

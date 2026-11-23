@@ -102,7 +102,7 @@ pub fn overlay(observer: &Observer, window: &mut Window, cx: &mut Context<Observ
                                 .items_center()
                                 .justify_center()
                                 .size(px(22.))
-                                .rounded(px(6.))
+                                .rounded(crate::ui::tokens::RADIUS_MEDIUM)
                                 .cursor_pointer()
                                 .hover(|style| style.bg(cx.theme().muted))
                                 .child(Icon::new("close").size(13.).color(muted))
@@ -142,7 +142,7 @@ pub(crate) fn check_row(
         .gap(px(1.))
         .px_2()
         .py(px(4.))
-        .rounded(px(6.))
+        .rounded(crate::ui::tokens::RADIUS_MEDIUM)
         .cursor_pointer()
         .hover(|style| style.bg(cx.theme().muted))
         .child(
@@ -344,7 +344,7 @@ fn skills_panel(
             div()
                 .flex_1()
                 .min_w_0()
-                .rounded(px(6.))
+                .rounded(crate::ui::tokens::RADIUS_MEDIUM)
                 .border_1()
                 // The library adds a wide halo and a thicker edge on focus.
                 // Vue only recolors the existing hairline with the primary
@@ -397,9 +397,9 @@ fn skills_panel(
     let cancel = div()
         .id("skills-cancel")
         .flex_none()
-        .px(px(14.))
-        .py(px(5.))
-        .rounded(px(6.))
+        .px(px(16.))
+        .py(px(4.))
+        .rounded(crate::ui::tokens::RADIUS_MEDIUM)
         .border_1()
         .border_color(border)
         .cursor_pointer()
@@ -411,9 +411,9 @@ fn skills_panel(
     let save = div()
         .id("skills-save")
         .flex_none()
-        .px(px(14.))
-        .py(px(5.))
-        .rounded(px(6.))
+        .px(px(16.))
+        .py(px(4.))
+        .rounded(crate::ui::tokens::RADIUS_MEDIUM)
         .bg(primary)
         .cursor_pointer()
         .text_size(px(14.))
@@ -616,8 +616,8 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .px(px(crate::ui::tabs::SPACE_16))
-        .pt(px(crate::ui::tabs::SPACE_16))
+        .px(crate::ui::tokens::SPACE_16)
+        .pt(crate::ui::tokens::SPACE_16)
         .pb_3();
     match tab {
         0 => {
@@ -669,7 +669,7 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                         .gap(px(8.))
                         .px_2()
                         .py_1()
-                        .rounded(px(6.))
+                        .rounded(crate::ui::tokens::RADIUS_MEDIUM)
                         .hover(|style| style.bg(cx.theme().muted.opacity(0.7)))
                         .child(
                             v_flex()
@@ -793,7 +793,7 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                         .gap(px(8.))
                         .px_2()
                         .py_1()
-                        .rounded(px(6.))
+                        .rounded(crate::ui::tokens::RADIUS_MEDIUM)
                         .hover(|style| style.bg(cx.theme().muted))
                         .child(
                             div()
@@ -941,7 +941,7 @@ fn mcp_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             .gap(px(8.))
             .px_2()
             .py_1()
-            .rounded(px(6.))
+            .rounded(crate::ui::tokens::RADIUS_MEDIUM)
             // A faint row wash; `muted` follows the active light/dark theme.
             .hover(|style| style.bg(cx.theme().muted.opacity(0.7)));
         row = row.child(

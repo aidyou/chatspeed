@@ -6,10 +6,7 @@ use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-/// Layout spacing is measured in 4px increments; borders and optical offsets are separate.
-pub(crate) const SPACE_4: f32 = 4.;
-pub(crate) const SPACE_8: f32 = 8.;
-pub(crate) const SPACE_16: f32 = 16.;
+use super::tokens::{SPACE_4, SPACE_8, SPACE_24};
 
 /// A single-selection capsule shared by configuration forms.
 pub(crate) fn capsule_segments(
@@ -21,25 +18,32 @@ pub(crate) fn capsule_segments(
 ) -> AnyElement {
     use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
     let on_select = Rc::new(on_select);
-    h_flex()
+    let height = 24_f32;
+    let font_size = (height / 2.).clamp(11., 16.);
+    let track = h_flex()
         .id(SharedString::from(id_prefix.to_owned()))
+        .min_w_0()
+        .items_center()
         .flex_wrap()
-        .gap(px(SPACE_4))
-        .p(px(SPACE_4))
+        .gap(SPACE_4)
+        .p(SPACE_4)
         .rounded_full()
         .bg(cx.theme().muted)
         .children(options.into_iter().map(|(value, label)| {
             let callback = on_select.clone();
             Button::new(SharedString::from(value))
-                .rounded(ButtonRounded::Size(px(12.)))
-                .h(px(24.))
-                .px(px(SPACE_8))
-                .py(px(0.))
-                .label(label)
+                .rounded(ButtonRounded::Size(px(height / 2.)))
+                .h(px(height))
+                .px(SPACE_8)
+                .pt(px(0.))
+                .pb(px(2.)) // Optical baseline correction, not layout spacing.
+                .line_height(px(font_size + 4.))
+                .accessibility_label(label.clone())
+                .child(div().text_size(px(font_size)).child(label))
                 .map(|button| if selected == value { button.primary() } else { button.ghost() })
                 .on_click(move |_, window, cx| callback(value, window, cx))
-        }))
-        .into_any_element()
+        }));
+    h_flex().min_w_0().justify_start().child(track).into_any_element()
 }
 
 /// Renders Vue's default `el-tabs` header: bottom hairline, primary-colored
@@ -60,7 +64,7 @@ pub(crate) fn underline_tabs(
         .w_full()
         .min_w_0()
         .items_end()
-        .gap(px(24.))
+        .gap(SPACE_24)
         .border_b_1()
         .border_color(border);
     for (index, label) in labels.into_iter().enumerate() {

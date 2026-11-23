@@ -205,7 +205,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
             .primary()
             .label(t!("create_automation").to_string())
             .h(px(32.))
-            .px(px(15.))
+            .px(px(16.))
             .text_size(px(14.))
             .on_click(move |_, window, cx| {
                 let name = submit_title_state.read(cx).value().trim().to_owned();
@@ -327,7 +327,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 .w_full()
                 .min_w_0()
                 .items_start()
-                .gap(px(12.))
+                .gap(super::tokens::SPACE_12)
                 .child(
                     h_flex()
                         .w(px(120.))
@@ -428,15 +428,15 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         };
         let body = if tab_state.get() == 0 {
             v_flex()
-                .gap(px(12.))
+                .gap(super::tokens::SPACE_12)
                 .child(field(
                     format!("*{}", t!("automation_task_title")),
                     Input::new(&title)
                         .w_full()
                         .h(px(36.))
                         .min_h(px(36.))
-                        .py(px(6.))
-                        .px(px(10.))
+                        .py(px(4.))
+                        .px(px(8.))
                         .bg(crate::ui::field_bg(cx))
                         .into_any_element(),
                 ))
@@ -470,7 +470,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     v_flex()
                         .w_full()
                         .min_w_0()
-                        .gap(px(6.))
+                        .gap(px(8.))
                         .child(
                             h_flex()
                                 .w_full()
@@ -481,8 +481,8 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                         Input::new(&prompt_file)
                                             .readonly(true)
                                             .w_full()
-                                            .py(px(5.))
-                                            .px(px(10.))
+                                            .py(px(4.))
+                                            .px(px(8.))
                                             .min_h(px(32.))
                                             .h(px(32.))
                                             .bg(crate::ui::field_bg(cx))
@@ -563,9 +563,9 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             .min_w_0()
                             .items_center()
                             .justify_between()
-                            .gap(px(6.))
-                            .px(px(10.))
-                            .rounded(px(6.))
+                            .gap(px(8.))
+                            .px(px(8.))
+                            .rounded(super::tokens::RADIUS_MEDIUM)
                             .border_1()
                             .border_color(border)
                             .bg(crate::ui::field_bg(cx))
@@ -608,7 +608,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                             .w_full()
                                             .px_2()
                                             .py_1()
-                                            .rounded(px(4.))
+                                            .rounded(super::tokens::RADIUS_SMALL)
                                             .cursor_pointer()
                                             .text_size(px(12.))
                                             .when(is_selected, |row| {
@@ -645,9 +645,9 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             .min_w_0()
                             .items_center()
                             .justify_between()
-                            .gap(px(6.))
-                            .px(px(10.))
-                            .rounded(px(6.))
+                            .gap(px(8.))
+                            .px(px(8.))
+                            .rounded(super::tokens::RADIUS_MEDIUM)
                             .border_1()
                             .border_color(border)
                             .bg(crate::ui::field_bg(cx))
@@ -686,7 +686,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                 h_flex()
                                     .min_w_0()
                                     .items_center()
-                                    .gap(px(6.))
+                                    .gap(px(8.))
                                     .child(Icon::new("setting").size(13.).color(primary))
                                     .child(
                                         div()
@@ -809,7 +809,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 .child(match frequency_state.get() {
                     0 => {
                         let times = daily_times_state.clone();
-                        let mut rows = v_flex().w_full().gap(px(6.));
+                        let mut rows = v_flex().w_full().gap(px(8.));
                         let count = times.borrow().len();
                         for index in 0..count {
                             let state = times.borrow()[index].clone();
@@ -819,7 +819,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                 h_flex()
                                     .w_full()
                                     .items_center()
-                                    .gap(px(6.))
+                                    .gap(px(8.))
                                     .child(
                                         gpui_kit::component::time_field::TimeField::new(&state)
                                             .w(px(110.))
@@ -868,7 +868,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             h_flex()
                                 .w(px(168.))
                                 .items_center()
-                                .rounded(px(6.))
+                                .rounded(super::tokens::RADIUS_MEDIUM)
                                 .border_1()
                                 .border_color(border)
                                 .bg(crate::ui::field_bg(cx))
@@ -998,13 +998,13 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 })
         } else {
             v_flex()
-                .gap(px(12.))
+                .gap(super::tokens::SPACE_12)
                 .child(field(
                     t!("automation_allowed_paths").to_string(),
                     v_flex()
                         .w_full()
                         .min_w_0()
-                        .gap(px(6.))
+                        .gap(px(8.))
                         .child(
                             h_flex().w_full().child(
                                 form_button("automation-directory-pick".into())
@@ -1028,7 +1028,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                         .gap(px(2.))
                                         .px_2()
                                         .py(px(1.))
-                                        .rounded(px(4.))
+                                        .rounded(super::tokens::RADIUS_SMALL)
                                         .bg(cx.theme().muted)
                                         .text_size(px(11.))
                                         .child(path.clone())
@@ -1061,7 +1061,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     v_flex()
                         .w_full()
                         .min_w_0()
-                        .gap(px(6.))
+                        .gap(px(8.))
                         .child(
                             Textarea::new(&shell)
                                 .w_full()
@@ -1082,7 +1082,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     v_flex()
                         .w_full()
                         .min_w_0()
-                        .gap(px(6.))
+                        .gap(px(8.))
                         .child(
                             Switch::new("automation-continuous")
                                 .checked(continuous_state.get())
@@ -1658,7 +1658,7 @@ pub fn titlebar(observer: &Observer, window: &Window, cx: &mut Context<Observer>
                     .gap_1()
                     .px_2()
                     .py(px(2.))
-                    .rounded(px(6.))
+                    .rounded(super::tokens::RADIUS_MEDIUM)
                     .cursor_pointer()
                     .hover(move |style| style.bg(skin.hover))
                     .child(Icon::new("ext-folder").size(12.).color(secondary))
@@ -1942,7 +1942,7 @@ fn approval_queue(
         // Vue's `.approval-queue-btn` keeps `--cs-space` on the right; with the
         // 8px group gap this comes to the same 20px before the sound button.
         .mr(px(12.))
-        .rounded(px(8.))
+        .rounded(super::tokens::RADIUS_MEDIUM)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new("approval").size(18.).color(secondary))
@@ -1993,8 +1993,8 @@ fn approval_queue(
                         .w_full()
                         .gap(px(2.))
                         .px_2()
-                        .py(px(6.))
-                        .rounded(px(6.))
+                        .py(px(4.))
+                        .rounded(super::tokens::RADIUS_MEDIUM)
                         .cursor_pointer()
                         .hover(move |style| style.bg(hover))
                         .child(
@@ -2120,7 +2120,7 @@ fn flat_button(
         .justify_center()
         .w(px(26.))
         .h(px(22.))
-        .rounded(px(8.))
+        .rounded(super::tokens::RADIUS_MEDIUM)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(18.).color(color))
@@ -2145,8 +2145,8 @@ fn menu_row(
         .items_center()
         .gap_2()
         .px_2()
-        .py(px(6.))
-        .rounded(px(6.))
+        .py(px(4.))
+        .rounded(super::tokens::RADIUS_MEDIUM)
         .cursor_pointer()
         .text_color(text)
         .hover(move |style| style.bg(hover))
@@ -2173,8 +2173,8 @@ fn switch_row(
         .items_center()
         .gap_2()
         .px_2()
-        .py(px(6.))
-        .rounded(px(6.))
+        .py(px(4.))
+        .rounded(super::tokens::RADIUS_MEDIUM)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
         .child(

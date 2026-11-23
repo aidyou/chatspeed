@@ -14,16 +14,8 @@ pub(crate) mod terminal;
 pub use icon::Icon;
 pub(crate) use icon::{IconAssets, Spin};
 
-/// Surfaces an input field uses in the native window. Element Plus paints text
-/// fields white in the light theme; the dark token comes from
-/// `--cs-input-bg-color` (`#282b2d`).
-pub(crate) fn field_bg(cx: &App) -> Hsla {
-    if cx.theme().is_dark() {
-        rgb(0x282b2d).into()
-    } else {
-        gpui_kit::white()
-    }
-}
+pub(crate) mod tokens;
+pub(crate) use tokens::{field_bg, surfaces, Surfaces};
 
 /// Hover hints appear faster than the library's 500ms default.
 pub(crate) const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
@@ -196,43 +188,6 @@ pub const SIDEBAR_WIDTH: f32 = 300.;
 pub const SIDEBAR_COLLAPSED_WIDTH: f32 = 50.;
 /// Vue pins the navigation rail to the same 50px column.
 pub const RAIL_WIDTH: f32 = 50.;
-
-/// Vue surfaces the theme does not carry as named tokens.
-///
-/// The values are the light and dark entries of `--cs-bg-color-deep`,
-/// `--cs-titlebar-bg-color`, `--cs-titlebar-border-color`,
-/// `--cs-hover-bg-color` and `--cs-active-bg-color`, so the chrome matches the
-/// web window instead of the component library's approximations.
-pub struct Surfaces {
-    /// Rail and compact sidebar background.
-    pub deep: Hsla,
-    /// Titlebar strip, one step lighter than the body it sits on.
-    pub titlebar: Hsla,
-    pub titlebar_border: Hsla,
-    pub hover: Hsla,
-    /// Selected row, tab and rail item background.
-    pub active: Hsla,
-}
-
-pub fn surfaces(dark: bool) -> Surfaces {
-    if dark {
-        Surfaces {
-            deep: rgb(0x232629).into(),
-            titlebar: rgb(0x21221e).into(),
-            titlebar_border: rgb(0x111111).into(),
-            hover: rgb(0x2e2f2c).into(),
-            active: rgb(0x2f3234).into(),
-        }
-    } else {
-        Surfaces {
-            deep: rgb(0xe7e7e6).into(),
-            titlebar: rgb(0xfcfcfc).into(),
-            titlebar_border: rgb(0xe2e2e0).into(),
-            hover: rgb(0xefefef).into(),
-            active: rgb(0xd2d3d1).into(),
-        }
-    }
-}
 
 /// A flat icon button used by the titlebar and the composer footer.
 ///
