@@ -6,17 +6,14 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 pub(crate) mod history_scrollbar;
-mod icon;
 pub(crate) use chatspeed_gpui::components::{select as menu_popover, tabs, tokens};
 pub(crate) mod terminal;
 
-pub use icon::Icon;
-pub(crate) use icon::{IconAssets, Spin};
+pub use chatspeed_gpui::components::icon::Icon;
+pub(crate) use chatspeed_gpui::components::icon::{self, IconAssets, Spin};
+pub(crate) use chatspeed_gpui::components::tooltip::{tip, TOOLTIP_DELAY};
 
 pub(crate) use tokens::{field_bg, surfaces, Surfaces};
-
-/// Hover hints appear faster than the library's 500ms default.
-pub(crate) const TOOLTIP_DELAY: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Rotates an icon between two angles when a disclosure state flips.
 ///
@@ -53,29 +50,6 @@ pub(crate) fn chrome_label(text: impl Into<SharedString>) -> ChromeLabel {
     ChromeLabel(text.into())
 }
 
-/// A plain-text hover hint, the native counterpart of Vue's `title`/`el-tooltip`.
-///
-/// Element Plus renders tooltips at 12px on a dark surface with a tight 4px
-/// radius. The component library's default is one step larger than the rest of
-/// the titlebar, so the shared helper pins the compact size for every hint.
-pub(crate) fn tip(
-    text: impl Into<SharedString>,
-) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let text = text.into();
-    move |window, cx| {
-        gpui_kit::component::tooltip::Tooltip::new(text.clone())
-            .text_size(px(12.))
-            .line_height(px(18.))
-            .px(px(8.))
-            .py(px(4.))
-            .rounded(px(4.))
-            .border_color(rgb(0x303133))
-            .bg(rgb(0x303133))
-            .text_color(gpui_kit::white())
-            .build(window, cx)
-    }
-}
-
 /// Vue's sidebar tooltip: the conversation title with the primary authorized
 /// folder underneath, so a collapsed badge still identifies both.
 pub(crate) fn tip_session(
@@ -87,7 +61,7 @@ pub(crate) fn tip_session(
     move |window, cx| {
         let title = title.clone();
         let root = root.clone();
-        gpui_kit::component::tooltip::Tooltip::element(move |_, cx| {
+        let tooltip = chatspeed_gpui::components::tooltip::Tooltip::element(move |_, cx| {
             let mut content = v_flex().gap(px(2.)).child(
                 div()
                     .text_size(px(12.))
@@ -108,16 +82,8 @@ pub(crate) fn tip_session(
                 );
             }
             content
-        })
-        .text_size(px(12.))
-        .line_height(px(18.))
-        .px(px(8.))
-        .py(px(4.))
-        .rounded(px(4.))
-        .border_color(rgb(0x303133))
-        .bg(rgb(0x303133))
-        .text_color(gpui_kit::white())
-        .build(window, cx)
+        });
+        chatspeed_gpui::components::tooltip::compact(tooltip).build(window, cx)
     }
 }
 
@@ -244,7 +210,19 @@ pub use chatspeed_gpui::components::trigger;
 
 pub mod approval;
 pub mod composer;
-pub(crate) mod confirm;
+pub(crate) mod confirm {
+    pub use chatspeed_gpui::components::confirm::dialog;
+    pub type ConfirmRequest = chatspeed_gpui::components::confirm::ConfirmRequest<ConfirmKind>;
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum ConfirmKind {
+        Rewind,
+        StopWorkflow,
+        CloseTerminal(usize),
+        DeleteSession(String),
+        DeleteAutomation(String),
+    }
+}
 pub(crate) mod file_editor;
 pub mod file_tree;
 pub mod frame;
@@ -305,6 +283,5 @@ pub(crate) mod letter_avatar {
 pub mod sidebar;
 pub mod status;
 pub mod titlebar;
-pub(crate) mod toast;
 pub mod transcript;
 pub(crate) mod window_pin;

@@ -9,30 +9,19 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::*;
 use rust_i18n::t;
 
-use crate::ui::Icon;
-
-/// What the dialog will do once accepted. The dialog itself stays presentation
-/// only; the observer owns the side effects.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ConfirmKind {
-    Rewind,
-    StopWorkflow,
-    CloseTerminal(usize),
-    DeleteSession(String),
-    DeleteAutomation(String),
-}
+use super::icon::Icon;
 
 #[derive(Clone, Debug)]
-pub struct ConfirmRequest {
-    pub kind: ConfirmKind,
+pub struct ConfirmRequest<K> {
+    pub kind: K,
     pub title: String,
     pub message: String,
     pub confirm_label: String,
     pub danger: bool,
 }
 
-pub fn dialog(
-    request: &ConfirmRequest,
+pub fn dialog<K>(
+    request: &ConfirmRequest<K>,
     on_accept: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
@@ -43,7 +32,7 @@ pub fn dialog(
     let muted = cx.theme().muted_foreground;
     let primary = cx.theme().primary;
     let accent: Hsla = if request.danger {
-        crate::danger().into()
+        cx.theme().danger
     } else {
         primary
     };

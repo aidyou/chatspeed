@@ -5,11 +5,10 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::*;
 
-use super::{Icon, TITLEBAR_HEIGHT};
-use crate::{accent, danger, success, warning, Observer};
+use super::icon::Icon;
 
 #[derive(Clone, Copy)]
-pub(crate) enum ToastKind {
+pub enum ToastKind {
     Error,
     Warning,
     Success,
@@ -17,7 +16,7 @@ pub(crate) enum ToastKind {
 }
 
 impl ToastKind {
-    pub(crate) fn duration(self) -> Duration {
+    pub fn duration(self) -> Duration {
         Duration::from_secs(match self {
             Self::Error => 5,
             Self::Warning => 4,
@@ -26,14 +25,14 @@ impl ToastKind {
     }
 }
 
-pub(crate) struct Toast {
+pub struct Toast {
     kind: ToastKind,
     message: String,
     expires: Instant,
 }
 
 impl Toast {
-    pub(crate) fn new(kind: ToastKind, message: String, now: Instant, duration: Duration) -> Self {
+    pub fn new(kind: ToastKind, message: String, now: Instant, duration: Duration) -> Self {
         Self {
             kind,
             message,
@@ -41,20 +40,25 @@ impl Toast {
         }
     }
 
-    pub(crate) fn expired(&self, now: Instant) -> bool {
+    pub fn expired(&self, now: Instant) -> bool {
         now >= self.expires
     }
 
-    pub(crate) fn render(&self, cx: &mut Context<Observer>) -> AnyElement {
+    pub fn render(
+        &self,
+        top: Pixels,
+        on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+        cx: &App,
+    ) -> AnyElement {
         let (icon, color) = match self.kind {
-            ToastKind::Error => ("check-x", danger()),
-            ToastKind::Warning => ("warning", warning()),
-            ToastKind::Success => ("check-circle", success()),
-            ToastKind::Info => ("ask_user", accent()),
+            ToastKind::Error => ("check-x", cx.theme().danger),
+            ToastKind::Warning => ("warning", cx.theme().warning),
+            ToastKind::Success => ("check-circle", cx.theme().success),
+            ToastKind::Info => ("ask_user", cx.theme().primary),
         };
         h_flex()
             .absolute()
-            .top(px(TITLEBAR_HEIGHT + 8.))
+            .top(top)
             .left_0()
             .right_0()
             .px_3()
@@ -94,10 +98,7 @@ impl Toast {
                                     .size(12.)
                                     .color(cx.theme().muted_foreground),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toast = None;
-                                cx.notify();
-                            })),
+                            .on_click(on_close),
                     ),
             )
             .into_any_element()

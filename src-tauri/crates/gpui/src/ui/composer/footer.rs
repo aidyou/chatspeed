@@ -475,25 +475,167 @@ pub(crate) fn model_choices_from(
     (label, choices)
 }
 
+/// An explicit catalogue capability wins over a session's possibly stale setting.
+fn model_supports_thinking(choice: &ModelChoice, config: &Value) -> bool {
+    let enabled = |thinking: &Value| {
+        thinking["type"]
+            .as_str()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("enabled"))
+    };
+    if let Some(target) = &choice.target {
+        return target["reasoning"]
+            .as_bool()
+            .unwrap_or_else(|| enabled(&target["thinking"]));
+    }
+    // Unresolved proxy aliases and legacy entries only have the active slot to consult.
+    config["id"].as_i64() == Some(choice.provider_id)
+        && config["model"].as_str() == Some(choice.model.as_str())
+        && enabled(&config["thinking"])
+}
+
 /// Applies a choice to a slot config, copying Vue's capability fields.
 pub(crate) fn apply_model_choice(config: &Value, choice: &ModelChoice) -> Value {
     let mut next = config.clone();
     next["id"] = Value::from(choice.provider_id);
     next["model"] = Value::from(choice.model.clone());
     if let Some(target) = &choice.target {
-        for key in [
-            "functionCall",
-            "thinking",
-            "temperature",
-            "contextSize",
-            "maxTokens",
-        ] {
+        next["thinking"] =
+            if target["thinking"].is_null() || target["reasoning"].as_bool() == Some(false) {
+                serde_json::json!({ "type": "disabled" })
+            } else {
+                target["thinking"].clone()
+            };
+        for key in ["functionCall", "temperature", "contextSize", "maxTokens"] {
             if !target[key].is_null() {
                 next[key] = target[key].clone();
             }
         }
     }
     next
+}
+
+#[cfg(test)]
+mod model_effort_tests {
+    use super::{apply_model_choice, model_supports_thinking, ModelChoice};
+    use serde_json::{json, Value};
+
+    fn model(name: &str, target: Option<Value>) -> ModelChoice {
+        ModelChoice {
+            provider_id: 7,
+            model: name.into(),
+            name: name.into(),
+            target,
+        }
+    }
+
+    #[test]
+    fn model_effort_uses_catalogue_capability_over_stale_session_thinking() {
+        let config = json!({
+            "id": 7,
+            "model": "plain",
+            "thinking": {"type": "enabled", "budgetTokens": 8192}
+        });
+        assert!(!model_supports_thinking(
+            &model("plain", Some(json!({"reasoning": false}))),
+            &config,
+        ));
+        assert!(!model_supports_thinking(
+            &model("plain", Some(json!({}))),
+            &config,
+        ));
+        assert!(model_supports_thinking(
+            &model("reasoner", Some(json!({"reasoning": true}))),
+            &config,
+        ));
+        assert!(model_supports_thinking(
+            &model("legacy", Some(json!({"thinking": {"type": "enabled"}}))),
+            &config,
+        ));
+        assert!(model_supports_thinking(&model("plain", None), &config));
+        assert!(!model_supports_thinking(&model("other", None), &config));
+    }
+
+    #[test]
+    fn model_effort_does_not_leak_to_a_new_model() {
+        let config = json!({
+            "id": 7,
+            "model": "reasoner",
+            "thinking": {"type": "enabled", "budgetTokens": 8192}
+        });
+        let plain = model("plain", Some(json!({"reasoning": false})));
+        let switched = apply_model_choice(&config, &plain);
+        assert_eq!(switched["model"], "plain");
+        assert_eq!(switched["thinking"], json!({"type": "disabled"}));
+        assert!(!model_supports_thinking(&plain, &switched));
+    }
+}
+
+fn model_effort_row(
+    thinking: &Value,
+    on_select: impl Fn(u32, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> impl IntoElement {
+    use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants};
+    let on_select = std::rc::Rc::new(on_select);
+    let current = thinking["budgetTokens"].as_u64().unwrap_or_default();
+    let current = match current {
+        4097.. => 8192,
+        2049.. => 4096,
+        1025.. => 2048,
+        _ => 1024,
+    };
+    let primary = cx.theme().primary;
+    let muted = cx.theme().muted_foreground;
+    let border = cx.theme().border;
+    h_flex()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .pb_1()
+        .child(
+            div()
+                .mr_1()
+                .flex_none()
+                .whitespace_nowrap()
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(muted)
+                .child(t!("model_reasoning_level").to_string()),
+        )
+        .children(
+            [
+                (1024, t!("reasoning_low").to_string()),
+                (2048, t!("reasoning_medium").to_string()),
+                (4096, t!("reasoning_high").to_string()),
+                (8192, t!("reasoning_max").to_string()),
+            ]
+            .into_iter()
+            .map(|(budget, label)| {
+                let select = on_select.clone();
+                let selected = budget == current;
+                let style = ButtonCustomVariant::new(cx)
+                    .color(if selected { primary } else { border })
+                    .foreground(if selected { primary } else { muted })
+                    .hover(primary.opacity(0.12))
+                    .active(primary.opacity(0.18));
+                Button::new(("composer-thinking-level", budget as usize))
+                    .custom(style)
+                    .outline()
+                    .rounded(ButtonRounded::Size(crate::ui::tokens::RADIUS_SMALL))
+                    .h(px(20.))
+                    .px_1()
+                    .flex_none()
+                    .accessibility_label(label.clone())
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .text_size(px(11.))
+                            .line_height(px(16.))
+                            .child(label),
+                    )
+                    .on_click(move |_, window, cx| select(budget, window, cx))
+            }),
+        )
 }
 
 /// The model pill: the active provider's models, as Vue's compact selector lists.
@@ -541,36 +683,114 @@ fn model_selector(
         trigger_el,
         move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
             let popover = cx.entity();
-            let mut list = v_flex().id("composer-model-list").w(px(260.)).gap(px(2.));
+            let mut list = v_flex().id("composer-model-list").w(px(280.)).gap(px(4.));
             if !group.is_empty() {
                 list = list.child(model_group_label(group.clone(), cx));
             }
-            for choice in entries.clone() {
+            let colors = OptionColors::new(cx);
+            for choice in &entries {
+                let is_selected = current_model == choice.model;
+                let effort =
+                    (is_selected && model_supports_thinking(choice, &base_config)).then(|| {
+                        let entity = observer_entity.clone();
+                        let session = session.clone();
+                        let model = choice.model.clone();
+                        let popover = popover.clone();
+                        model_effort_row(
+                            &base_config["thinking"],
+                            move |budget, window, cx| {
+                                entity.update(cx, |this, cx| {
+                                    if this.model.accepts(generation)
+                                        && this.selected.as_ref() == Some(&session)
+                                        && this.planning_mode == (slot == "plan")
+                                        && this.active_model_config()["model"].as_str()
+                                            == Some(model.as_str())
+                                    {
+                                        let mut configs = this.model_configs();
+                                        configs[slot] = this.active_model_config();
+                                        configs[slot]["thinking"] = serde_json::json!({
+                                            "type": "enabled", "budgetTokens": budget
+                                        });
+                                        this.save_models(configs, cx);
+                                    }
+                                });
+                                popover.update(cx, |state, cx| state.dismiss(window, cx));
+                            },
+                            cx,
+                        )
+                    });
                 let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
                 let session = session.clone();
-                // Vue copies the model's own capabilities into the slot config.
-                let next = apply_model_choice(&base_config, &choice);
                 let mut configs = all_configs.clone();
-                configs[slot] = next;
-                let is_selected = current_model == choice.model;
-                list = list.child(option_row(
-                    format!("composer-model-{}", choice.model),
-                    choice.name,
-                    String::new(),
-                    is_selected,
-                    move |_, window, cx| {
+                configs[slot] = apply_model_choice(&base_config, choice);
+                let title = h_flex()
+                    .id(SharedString::from(format!(
+                        "composer-model-{}",
+                        choice.model
+                    )))
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded(crate::ui::tokens::RADIUS_SMALL)
+                    .cursor_pointer()
+                    .when(!is_selected, |row| {
+                        row.hover(move |style| style.bg(colors.hover))
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .text_size(px(12.))
+                            .text_color(colors.foreground)
+                            .child(crate::ui::chrome_label(choice.name.clone())),
+                    )
+                    .when(is_selected, |row| {
+                        row.child(Icon::new("check").size(14.).color(colors.primary))
+                    })
+                    .on_click(move |_, window, cx| {
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        observer_entity.update(cx, |this, cx| {
-                            if this.model.accepts(generation)
-                                && this.selected.as_ref() == Some(&session)
-                            {
-                                this.save_models(configs.clone(), cx);
-                            }
-                        });
-                    },
-                    OptionColors::new(cx),
-                ));
+                        if !is_selected {
+                            observer_entity.update(cx, |this, cx| {
+                                if this.model.accepts(generation)
+                                    && this.selected.as_ref() == Some(&session)
+                                    && this.planning_mode == (slot == "plan")
+                                {
+                                    this.save_models(configs.clone(), cx);
+                                }
+                            });
+                        }
+                    });
+                list = list.child(
+                    v_flex()
+                        .relative()
+                        .min_w_0()
+                        .border_1()
+                        .border_color(if is_selected {
+                            colors.primary.opacity(0.45)
+                        } else {
+                            transparent_black()
+                        })
+                        .rounded(crate::ui::tokens::RADIUS_SMALL)
+                        .when(is_selected, |card| {
+                            card.bg(colors.primary.opacity(0.09)).child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .top_1()
+                                    .bottom_1()
+                                    .w(px(2.))
+                                    .rounded_full()
+                                    .bg(colors.primary),
+                            )
+                        })
+                        .child(title)
+                        // Only the title selects the model; the effort buttons are siblings.
+                        .when_some(effort, |card, effort| card.child(effort)),
+                );
             }
             list
         },

@@ -44,7 +44,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         button::{Button, ButtonVariants},
         input::{Input, InputState, Textarea, TextareaState},
     };
-    use gpui_kit::component::WindowExt;
+    use chatspeed_gpui::components::dialog::WindowExt;
     if observer.automation_pending || window.has_active_dialog(cx) {
         return;
     }
@@ -1158,8 +1158,8 @@ pub(super) fn edit_automation(
     use gpui_kit::component::{
         button::{Button, ButtonVariants},
         input::{Input, InputState},
-        WindowExt,
     };
+    use chatspeed_gpui::components::dialog::WindowExt;
     let (reply, response) = tokio::sync::oneshot::channel();
     if observer
         .worker
@@ -1385,8 +1385,8 @@ fn review_automation(plan: serde_json::Value, window: &mut Window, cx: &mut Cont
     use chatspeed_gpui::types::Command;
     use gpui_kit::component::{
         button::{Button, ButtonVariants},
-        WindowExt,
     };
+    use chatspeed_gpui::components::dialog::WindowExt;
     if window.has_active_dialog(cx) {
         return;
     }

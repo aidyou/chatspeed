@@ -5,10 +5,8 @@
 //! `src/styles/workflow/messages.scss`: a CLI-style tool transcript, grouped
 //! tool activity, collapsible snapshots and delegated-task cards.
 
-use crate::ui::{
-    toast::{Toast, ToastKind},
-    Icon,
-};
+use crate::ui::Icon;
+use chatspeed_gpui::components::toast::{Toast, ToastKind};
 mod http_client;
 use chatspeed_gpui::{
     chimes::{self, Chime, DecisionKind, PendingDecision, Reminder},
@@ -4103,7 +4101,7 @@ impl Observer {
             title = title
                 .on_click(cx.listener(move |this, _, _, cx| this.toggle(target_key.clone(), cx)));
         }
-        let mut body = v_flex().w_full().min_w_0().child(title);
+        let mut body = v_flex().w_full().min_w_0().child(h_flex().min_w_0().child(title));
         if !open {
             let summary_text = tool.summary.clone();
             let mut summary = h_flex()
@@ -5512,11 +5510,37 @@ impl Render for Observer {
                     })),
             );
         }
-        if self.selected.is_some() && self.switched.is_some() {
-            content = content.child(ui::transcript::child_loading(cx));
+        let switching_session = self.selected.is_some() && self.switched.is_some();
+        if switching_session {
+            let block = |width, max_width, height, radius| {
+                chatspeed_gpui::components::skeleton::block(width, max_width, height, radius, cx)
+            };
+            content = content.child(chatspeed_gpui::components::skeleton::pulse(
+                "session-switch-skeleton",
+                v_flex()
+                    .w_full()
+                    .gap_5()
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(block(0.72, 480., 12., 4.))
+                            .child(block(0.58, 384., 12., 4.))
+                            .child(block(0.32, 224., 12., 4.)),
+                    )
+                    .child(h_flex().w_full().justify_end().child(block(0.40, 256., 32., 8.)))
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(block(0.64, 416., 12., 4.))
+                            .child(block(0.36, 240., 12., 4.)),
+                    ),
+                cx,
+            ));
         }
         let active_group = ui::transcript::latest_active_group(&self.rows, self.workflow_running());
-        for row in &self.rows {
+        for row in self.rows.iter().filter(|_| !switching_session) {
             // Vue separates transcript entries with the medium spacing token.
             content = content.child(div().w_full().min_w_0().mb(px(20.)).child(self.row(
                 row,
@@ -5785,7 +5809,11 @@ impl Render for Observer {
             shell = shell.child(self.new_task_dialog(cx));
         }
         if let Some(toast) = &self.toast {
-            shell = shell.child(toast.render(cx));
+            let close = cx.listener(|this, _, _, cx| {
+                this.toast = None;
+                cx.notify();
+            });
+            shell = shell.child(toast.render(px(ui::TITLEBAR_HEIGHT + 8.), close, cx));
         }
         shell
     }

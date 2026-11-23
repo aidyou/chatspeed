@@ -7,6 +7,8 @@ use crate::Observer;
 use alacritty_terminal::{
     event::VoidListener,
     grid::{Dimensions, Scroll},
+    index::{Column, Line, Point as CellPoint, Side},
+    selection::{Selection, SelectionType},
     term::{cell::Flags, Config, Term, TermMode},
     vte::ansi::Processor,
 };
@@ -108,6 +110,23 @@ mod tests {
     }
 
     #[test]
+    fn terminal_selection_copies_across_rows_in_drag_order() {
+        use super::{CellPoint, Column, Line, Selection, SelectionType, Side};
+
+        let mut screen = Term::new(Config::default(), &TermSize::new(24, 80), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut screen, b"abc\r\ndef");
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            CellPoint::new(Line(1), Column(0)),
+            Side::Right,
+        );
+        selection.update(CellPoint::new(Line(0), Column(1)), Side::Left);
+        screen.selection = Some(selection);
+        assert_eq!(screen.selection_to_string().as_deref(), Some("bc\nd"));
+    }
+
+    #[test]
     fn resizing_keeps_the_cursor_inside_the_grid() {
         let mut screen = Term::new(Config::default(), &TermSize::new(24, 80), VoidListener);
         screen.resize(TermSize::new(10, 40));
@@ -131,6 +150,7 @@ pub struct Panel {
     /// workflow column.
     maximized: bool,
     height: Pixels,
+    selection_drag: bool,
     resize_start: Option<(Pixels, Pixels)>,
 }
 
@@ -156,6 +176,7 @@ impl Panel {
             follow: true,
             maximized: false,
             height: px(PANEL_HEIGHT),
+            selection_drag: false,
             resize_start: None,
         }
     }
@@ -510,9 +531,34 @@ fn clear_keep_input(tab: &mut Tab) {
     tab.screen.scroll_display(Scroll::Bottom);
 }
 
-fn key(tab: &mut Tab, event: &KeyDownEvent, cx: &App) {
+fn selection_position(
+    scroll: &ScrollHandle,
+    position: Point<Pixels>,
+    cell_width: Pixels,
+    tab: &Tab,
+) -> (CellPoint, Side) {
+    let local = position - scroll.bounds().origin - scroll.offset();
+    let x = local.x / cell_width;
+    let column = (x as usize).min(tab.size.columns - 1);
+    let row = ((local.y / px(LINE_HEIGHT)) as usize).min(tab.size.lines - 1);
+    let side = if x - (column as f32) < 0.5 { Side::Left } else { Side::Right };
+    let line = row as i32 - tab.screen.renderable_content().display_offset as i32;
+    (CellPoint::new(Line(line), Column(column)), side)
+}
+
+fn key(tab: &mut Tab, event: &KeyDownEvent, cx: &mut App) -> bool {
     let key = &event.keystroke;
     let mods = key.modifiers;
+    if key.key == "c" && (mods.platform || mods.control) {
+        if let Some(text) = tab.screen.selection_to_string() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            return false;
+        }
+        if mods.platform || mods.shift {
+            return false;
+        }
+    }
+    tab.screen.selection = None;
     if (mods.platform || (mods.control && mods.shift)) && key.key == "v" {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = text.replace('\x1b', "");
@@ -523,7 +569,7 @@ fn key(tab: &mut Tab, event: &KeyDownEvent, cx: &App) {
             };
             send(tab, text);
         }
-        return;
+        return true;
     }
     let cursor = if tab.screen.mode().contains(TermMode::APP_CURSOR) {
         "\x1bO"
@@ -557,6 +603,7 @@ fn key(tab: &mut Tab, event: &KeyDownEvent, cx: &App) {
     if !value.is_empty() {
         send(tab, value);
     }
+    true
 }
 
 fn terminal_color(
@@ -894,6 +941,10 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
             if cell.flags.contains(Flags::DIM) {
                 fg = fg.opacity(0.55);
             }
+            if content.selection.is_some_and(|range| range.contains(cell.point)) {
+                bg = cx.theme().primary;
+                fg = cx.theme().primary_foreground;
+            }
             let width = if cell.flags.contains(Flags::WIDE_CHAR) {
                 cell_width * 2.
             } else {
@@ -923,6 +974,45 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&panel.scroll)
+            .cursor(CursorStyle::IBeam)
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                if let Some(tab) = this.terminal.tabs.get(this.terminal.active).cloned() {
+                    let scroll = &this.terminal.scroll;
+                    tab.update(cx, |tab, _| {
+                        let (point, side) = selection_position(scroll, event.position, cell_width, tab);
+                        tab.screen.selection = Some(Selection::new(SelectionType::Simple, point, side));
+                    });
+                    this.terminal.selection_drag = true;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| {
+                this.terminal.selection_drag = false;
+            }))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, _| {
+                this.terminal.selection_drag = false;
+            }))
+            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                if !this.terminal.selection_drag || event.pressed_button != Some(MouseButton::Left) {
+                    return;
+                }
+                if let Some(tab) = this.terminal.tabs.get(this.terminal.active).cloned() {
+                    let scroll = &this.terminal.scroll;
+                    let changed = tab.update(cx, |tab, _| {
+                        let (point, side) = selection_position(scroll, event.position, cell_width, tab);
+                        if let Some(selection) = &mut tab.screen.selection {
+                            selection.update(point, side);
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if changed {
+                        this.terminal.follow = false;
+                        cx.notify();
+                    }
+                }
+            }))
             .on_scroll(cx.listener(|this, _: &ScrollEvent, _, cx| {
                 let follow = this.terminal.near_bottom();
                 if follow != this.terminal.follow {
@@ -945,9 +1035,8 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                         .absolute()
                         .left(cell_width * cursor_column as f32)
                         .top(px(2.))
-                        .w(cell_width)
+                        .w(px(1.))
                         .h(px(FONT_SIZE))
-                        .rounded(px(1.))
                         .bg(foreground)
                         .with_animation(
                             ("terminal-caret", line),
@@ -962,11 +1051,9 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
             .child(rows_view)
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                 if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
-                    tab.update(cx, |tab, cx| key(tab, event, cx));
+                    this.terminal.follow = tab.update(cx, |tab, cx| key(tab, event, cx));
                 }
-                // The cursor row is what must stay visible. Scrolling straight
-                // to the bottom hid the first prompt line on a fresh shell.
-                this.terminal.follow = true;
+                // Follow the cursor after typing, but not when copying a selection.
                 cx.stop_propagation();
                 cx.notify();
             }));

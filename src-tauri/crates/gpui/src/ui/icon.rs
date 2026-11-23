@@ -14,7 +14,7 @@ const REASONING_BULB: &[u8] = include_bytes!("../../assets/vue-reasoning.svg");
 const LOADING: &[u8] = include_bytes!("../../assets/vue-loading.svg");
 const PIN: &[u8] = include_bytes!("../../assets/vue-pin.svg");
 
-pub(crate) struct IconAssets;
+pub struct IconAssets;
 
 impl AssetSource for IconAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
@@ -86,7 +86,7 @@ pub struct Icon {
 /// `Accelerate` starts slow and speeds up, which reads as work in progress;
 /// `Linear` is the steady spin used by the thinking bulb.
 #[derive(Clone, Copy)]
-pub(crate) enum Spin {
+pub enum Spin {
     Linear,
     Accelerate,
     Eased,
@@ -145,13 +145,13 @@ impl Icon {
         self
     }
 
-    pub(crate) fn rotate(mut self, degrees: f32) -> Self {
+    pub fn rotate(mut self, degrees: f32) -> Self {
         self.turns = degrees / 360.;
         self
     }
 
     /// Animate an active indicator using its caller's stable element ID.
-    pub(crate) fn spin(mut self, id: impl Into<ElementId>, curve: Spin) -> Self {
+    pub fn spin(mut self, id: impl Into<ElementId>, curve: Spin) -> Self {
         self.spin = Some((id.into(), curve));
         self
     }
@@ -188,7 +188,11 @@ impl RenderOnce for Icon {
                 return icon
                     .with_animation(
                         id,
-                        Animation::new(Duration::from_secs(seconds)).repeat_synced(),
+                        // Use view-local timer invalidation so a busy indicator
+                        // can advance even when the desktop window is idle.
+                        Animation::new(Duration::from_secs(seconds))
+                            .repeat_synced()
+                            .with_max_fps(30.),
                         move |icon, phase| {
                             icon.with_transformation(Transformation::rotate(percentage(
                                 curve.phase(phase),

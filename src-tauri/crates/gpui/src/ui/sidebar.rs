@@ -720,7 +720,8 @@ fn session_row(
 }
 
 fn session_actions(session: &Session, cx: &mut Context<Observer>) -> impl IntoElement {
-    use gpui_kit::component::{button::Button, input::InputState, WindowExt};
+    use chatspeed_gpui::components::dialog::WindowExt;
+    use gpui_kit::component::{button::Button, input::InputState};
     let hover = cx.theme().background;
     let rename = session.clone();
     let delete = session.id.clone();

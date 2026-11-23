@@ -624,6 +624,10 @@ fn progress_bar(percent: u32, fill: Hsla, cx: &App) -> AnyElement {
 }
 
 fn empty_state(icon: &'static str, text: String, compact: bool, cx: &App) -> AnyElement {
+    empty_state_with_icon(Icon::new(icon), text, compact, cx)
+}
+
+fn empty_state_with_icon(icon: Icon, text: String, compact: bool, cx: &App) -> AnyElement {
     v_flex()
         .w_full()
         .items_center()
@@ -632,8 +636,7 @@ fn empty_state(icon: &'static str, text: String, compact: bool, cx: &App) -> Any
         .py(if compact { px(16.) } else { px(24.) })
         .px(px(12.))
         .child(
-            Icon::new(icon)
-                .size(if compact { 24. } else { 28. })
+            icon.size(if compact { 24. } else { 28. })
                 .color(cx.theme().muted_foreground),
         )
         .child(
@@ -1534,11 +1537,13 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                 .to_string()
             });
             let refresh_color = Hsla::from(accent());
-            let mut refresh_icon = Icon::new("refresh").size(12.).color(refresh_color);
-            if observer.efficiency_loading {
-                refresh_icon =
-                    refresh_icon.spin("status-efficiency-spin", crate::ui::icon::Spin::Linear);
+            let refresh_icon = if observer.efficiency_loading {
+                Icon::new("loading").spin("status-efficiency-spin", crate::ui::icon::Spin::Linear)
+            } else {
+                Icon::new("refresh")
             }
+            .size(12.)
+            .color(refresh_color);
             let refresh = h_flex()
                 .id("status-efficiency-refresh")
                 .flex_none()
@@ -1584,8 +1589,11 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
             body = body.child(header);
             if observer.efficiency_loading && observer.efficiency_report.is_none() {
                 return body
-                    .child(empty_state(
-                        "loading",
+                    .child(empty_state_with_icon(
+                        Icon::new("loading").spin(
+                            "status-efficiency-initial-spin",
+                            crate::ui::icon::Spin::Linear,
+                        ),
                         t!("status_panel_loading").to_string(),
                         false,
                         cx,

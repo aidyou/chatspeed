@@ -35,14 +35,13 @@ pub(crate) fn sub_agent_card(
     let header = h_flex()
         .id(SharedString::from(card.key.clone()))
         .group("sub-agent-header")
-        .w_full()
+        .max_w_full()
         .min_w_0()
         .items_center()
         .gap_2()
         .py_1()
         .pl_2()
         .cursor_pointer()
-        .hover(|style| style.bg(cx.theme().muted))
         .child(Icon::new("skill-relation-chart").size(15.).color(muted))
         .child(if card.status.is_running() {
             crate::ui::running_badge(card.status_label.clone(), "sub-agent-running", cx)
@@ -68,7 +67,7 @@ pub(crate) fn sub_agent_card(
         )
         .child(crate::ui::disclosure_caret("sub-agent-header", open, muted))
         .on_click(on_toggle);
-    let mut body = v_flex().w_full().min_w_0().child(header);
+    let mut body = v_flex().w_full().min_w_0().child(h_flex().min_w_0().child(header));
     if let Some(SubAgentDetails {
         task,
         result,
