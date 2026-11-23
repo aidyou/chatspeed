@@ -16,8 +16,8 @@ use rust_i18n::t;
 use serde_json::Value;
 
 use crate::presentation::{format_display_path, single_line, tool_arguments, tool_name};
-use crate::MONO_FONT;
 use crate::ui::Icon;
+use crate::MONO_FONT;
 use crate::{accent, danger, success, violet, warning, Model};
 
 /// How long a finished tool stays in the status line, as in Vue.
@@ -548,12 +548,15 @@ pub(crate) fn overlay(
                 }
             }
         }))
-        .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
-            if this.status_panel_drag.take().is_some() {
-                this.save_status_panel_positions();
-            }
-            cx.notify();
-        }));
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if this.status_panel_drag.take().is_some() {
+                    this.save_status_panel_positions();
+                }
+                cx.notify();
+            }),
+        );
     Some(panel.into_any_element())
 }
 
@@ -575,9 +578,13 @@ fn section_header(icon: &'static str, title: String, meta: Option<String>, cx: &
                 .child(title.to_uppercase()),
         )
         .child(div().flex_1())
-        .children(
-            meta.map(|meta| div().flex_none().text_size(px(10.)).text_color(muted).child(meta)),
-        )
+        .children(meta.map(|meta| {
+            div()
+                .flex_none()
+                .text_size(px(10.))
+                .text_color(muted)
+                .child(meta)
+        }))
         .into_any_element()
 }
 
@@ -624,7 +631,11 @@ fn empty_state(icon: &'static str, text: String, compact: bool, cx: &App) -> Any
         .gap(px(8.))
         .py(if compact { px(16.) } else { px(24.) })
         .px(px(12.))
-        .child(Icon::new(icon).size(if compact { 24. } else { 28. }).color(cx.theme().muted_foreground))
+        .child(
+            Icon::new(icon)
+                .size(if compact { 24. } else { 28. })
+                .color(cx.theme().muted_foreground),
+        )
         .child(
             div()
                 .text_size(px(12.))
@@ -756,11 +767,19 @@ fn model_rows(observer: &crate::Observer) -> Vec<ModelRow> {
     );
     let global_title = &observer.status_title_model;
     let title = if model_name(observer, &configs["lite"]).is_some() {
-        (&configs["lite"], t!("status_panel_direct").to_string(), "direct")
+        (
+            &configs["lite"],
+            t!("status_panel_direct").to_string(),
+            "direct",
+        )
     } else if global_title["id"].as_i64().unwrap_or_default() > 0
         && model_name(observer, global_title).is_some()
     {
-        (global_title, t!("status_panel_global").to_string(), "global")
+        (
+            global_title,
+            t!("status_panel_global").to_string(),
+            "global",
+        )
     } else if model_name(observer, utility.0).is_some() {
         (
             utility.0,
@@ -841,15 +860,10 @@ fn child_card(
         .line_height(px(14.))
         .text_color(color);
     if card.status.is_running() {
-        pill_row = pill_row.child(
-            Icon::new("loading")
-                .size(10.)
-                .color(color)
-                .spin(
-                    SharedString::from(format!("status-child-spin-{}", card.key)),
-                    crate::ui::icon::Spin::Accelerate,
-                ),
-        );
+        pill_row = pill_row.child(Icon::new("loading").size(10.).color(color).spin(
+            SharedString::from(format!("status-child-spin-{}", card.key)),
+            crate::ui::icon::Spin::Accelerate,
+        ));
     }
     pill_row = pill_row.child(card.status_label.clone());
 
@@ -1003,8 +1017,7 @@ fn efficiency_card(agent: &Value, compact: bool, cx: &App) -> AnyElement {
         "error" | "failed" | "cancelled" => Hsla::from(danger()),
         _ => muted,
     };
-    let score =
-        |field: &str| agent["metrics"][field].as_f64().unwrap_or_default().round() as i64;
+    let score = |field: &str| agent["metrics"][field].as_f64().unwrap_or_default().round() as i64;
     let score_pill = |label: String, value: i64| {
         let tone = if value >= 80 {
             Hsla::from(success())
@@ -1068,9 +1081,18 @@ fn efficiency_card(agent: &Value, compact: bool, cx: &App) -> AnyElement {
     };
     let mut grid = h_flex().w_full().flex_wrap().gap(px(8.));
     let mut chips = vec![
-        (t!("status_panel_search_calls").to_string(), score("searchCalls")),
-        (t!("status_panel_read_calls").to_string(), score("readCalls")),
-        (t!("status_panel_edit_calls").to_string(), score("editCalls")),
+        (
+            t!("status_panel_search_calls").to_string(),
+            score("searchCalls"),
+        ),
+        (
+            t!("status_panel_read_calls").to_string(),
+            score("readCalls"),
+        ),
+        (
+            t!("status_panel_edit_calls").to_string(),
+            score("editCalls"),
+        ),
     ];
     if compact {
         chips.push((
@@ -1095,12 +1117,7 @@ fn efficiency_card(agent: &Value, compact: bool, cx: &App) -> AnyElement {
     // width leaves room for the 8px gap between cells.
     let cell = if compact { 0.47 } else { 0.30 };
     for (label, value) in chips {
-        grid = grid.child(
-            div()
-                .w(relative(cell))
-                .min_w_0()
-                .child(chip(label, value)),
-        );
+        grid = grid.child(div().w(relative(cell)).min_w_0().child(chip(label, value)));
     }
     let mut card = v_flex()
         .w_full()
@@ -1128,9 +1145,7 @@ fn efficiency_card(agent: &Value, compact: bool, cx: &App) -> AnyElement {
                         .text_color(foreground)
                         // Sub-agent cards keep one ellipsized title line; the
                         // main card keeps Vue's two-line clamp.
-                        .when(compact, |text| {
-                            text.whitespace_nowrap().text_ellipsis()
-                        })
+                        .when(compact, |text| text.whitespace_nowrap().text_ellipsis())
                         .when(!compact, |text| text.line_clamp(2))
                         .child(title),
                 )
@@ -1180,16 +1195,12 @@ fn efficiency_card(agent: &Value, compact: bool, cx: &App) -> AnyElement {
                 .text_size(px(11.))
                 .text_color(muted)
                 .child(t!("status_panel_pre_edit_coverage").to_string())
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(format!(
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(format!(
                             "{:.0}%",
                             agent["metrics"]["preEditReadCoverage"]
                                 .as_f64()
                                 .unwrap_or_default()
-                        )),
-                ),
+                        ))),
         );
     }
     card.into_any_element()
@@ -1202,18 +1213,53 @@ struct OpRow {
     status: &'static str,
 }
 
-/// Vue reads the panel's recent operations from the persisted tool messages, so
-/// finished calls stay listed after the live tool registry drops them.
 fn recent_operations(observer: &crate::Observer) -> (Vec<OpRow>, usize) {
-    let tools: Vec<&crate::presentation::ToolView> = observer
-        .rows
-        .iter()
-        .filter_map(|row| match row {
-            crate::presentation::Row::Tool(tool) => Some(tool.as_ref()),
-            _ => None,
-        })
-        .filter(|tool| !matches!(tool.name.as_str(), "complete_workflow" | "answer_user"))
-        .collect();
+    operations_from_messages(&observer.transcript(), &observer.model.roots)
+}
+
+// Count calls before transcript projection folds ordinary tools into activity rows.
+fn operations_from_messages(
+    messages: &[chatspeed_gpui::types::Message],
+    roots: &[String],
+) -> (Vec<OpRow>, usize) {
+    use crate::presentation::{ToolStatus, ToolView};
+    let rank = |status| match status {
+        ToolStatus::Pending => 0,
+        ToolStatus::Running => 1,
+        ToolStatus::Rejected => 2,
+        ToolStatus::Completed | ToolStatus::Failed => 3,
+    };
+    let mut indices = std::collections::HashMap::new();
+    let mut tools: Vec<ToolView> = Vec::new();
+    for message in messages.iter().filter(|message| message.role == "tool") {
+        let tool = ToolView::new(message, roots);
+        if matches!(
+            tool.name.to_ascii_lowercase().as_str(),
+            "answer_user"
+                | "ask_user"
+                | "complete_workflow"
+                | "submit_plan"
+                | "plan_note"
+                | "sub_agent_run"
+                | "sub_agent_output"
+                | "sub_agent_stop"
+        ) {
+            continue;
+        }
+        if let Some(id) = message.metadata["tool_call_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+        {
+            let index = *indices.entry(id).or_insert(tools.len());
+            if let Some(previous) = tools.get_mut(index) {
+                if rank(tool.status) >= rank(previous.status) {
+                    *previous = tool;
+                }
+                continue;
+            }
+        }
+        tools.push(tool);
+    }
     let total = tools.len();
     let rows = tools
         .iter()
@@ -1229,10 +1275,7 @@ fn recent_operations(observer: &crate::Observer) -> (Vec<OpRow>, usize) {
             let label = if tool.name == "bash" {
                 match tool.command.as_deref().map(str::trim) {
                     Some(command) if !command.is_empty() => truncate(
-                        &format!(
-                            "Run {}",
-                            single_line(&format_display_path(command, &observer.model.roots))
-                        ),
+                        &format!("Run {}", single_line(&format_display_path(command, roots))),
                         PREVIEW_CHARS,
                     ),
                     _ => truncate(&tool.action, PREVIEW_CHARS),
@@ -1300,7 +1343,11 @@ fn workflow_tabs(
             } else {
                 background.opacity(0.)
             })
-            .bg(if active { background } else { background.opacity(0.) })
+            .bg(if active {
+                background
+            } else {
+                background.opacity(0.)
+            })
             .text_size(px(10.))
             .font_weight(FontWeight::SEMIBOLD)
             .whitespace_nowrap()
@@ -1405,12 +1452,16 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                     cx,
                 ));
             } else {
-                let mut section = v_flex().w_full().min_w_0().gap(px(8.)).child(section_header(
-                    "model",
-                    t!("status_panel_models").to_string(),
-                    None,
-                    cx,
-                ));
+                let mut section = v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(8.))
+                    .child(section_header(
+                        "model",
+                        t!("status_panel_models").to_string(),
+                        None,
+                        cx,
+                    ));
                 for row in rows {
                     let source_color = if row.source_class == "fallback" {
                         Hsla::from(warning())
@@ -1518,9 +1569,13 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                         .child(t!("status_panel_efficiency").to_string().to_uppercase()),
                 )
                 .child(div().flex_1())
-                .children(
-                    updated.map(|updated| div().flex_none().text_size(px(10.)).text_color(muted).child(updated)),
-                )
+                .children(updated.map(|updated| {
+                    div()
+                        .flex_none()
+                        .text_size(px(10.))
+                        .text_color(muted)
+                        .child(updated)
+                }))
                 .child(refresh);
             body = body.child(header);
             if observer.efficiency_loading && observer.efficiency_report.is_none() {
@@ -1576,14 +1631,17 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                             ))
                             .into_any_element();
                     };
-                    let mut main_section = v_flex().w_full().min_w_0().gap(px(8.)).child(
-                        section_header(
-                            "agent",
-                            t!("status_panel_main_agent").to_string(),
-                            None,
-                            cx,
-                        ),
-                    );
+                    let mut main_section =
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap(px(8.))
+                            .child(section_header(
+                                "agent",
+                                t!("status_panel_main_agent").to_string(),
+                                None,
+                                cx,
+                            ));
                     main_section = main_section.child(efficiency_card(main, false, cx));
                     body = body.child(main_section);
                     let mut list = v_flex()
@@ -1620,12 +1678,16 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                 .filter(|(_, max)| *max > 0)
             {
                 let percent = ((used.min(max) * 100) / max) as u32;
-                let mut section = v_flex().w_full().min_w_0().gap(px(8.)).child(section_header(
-                    "skill-piechart",
-                    t!("status_panel_context_usage").to_string(),
-                    None,
-                    cx,
-                ));
+                let mut section = v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(8.))
+                    .child(section_header(
+                        "skill-piechart",
+                        t!("status_panel_context_usage").to_string(),
+                        None,
+                        cx,
+                    ));
                 section = section.child(progress_bar(percent, context_fill(percent), cx));
                 section = section.child(
                     div()
@@ -1639,28 +1701,31 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                 body = body.child(section);
             }
             if total > 0 {
-                let mut section = v_flex().w_full().min_w_0().gap(px(8.)).child(
-                    section_header(
+                let mut section = v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(8.))
+                    .child(section_header(
                         "skill-terminal",
                         t!("status_panel_progress").to_string(),
                         None,
                         cx,
-                    ),
-                );
+                    ));
                 section = section.child(progress_bar(percent, task_fill(), cx));
                 body = body.child(section);
 
                 let expanded = observer.status_panel_todos_expanded;
-                let shown = if expanded { total } else { total.min(TODO_PREVIEW) };
-                let mut todos = v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .child(section_header(
-                        "list",
-                        t!("status_panel_todos").to_string(),
-                        None,
-                        cx,
-                    ));
+                let shown = if expanded {
+                    total
+                } else {
+                    total.min(TODO_PREVIEW)
+                };
+                let mut todos = v_flex().w_full().min_w_0().child(section_header(
+                    "list",
+                    t!("status_panel_todos").to_string(),
+                    None,
+                    cx,
+                ));
                 for (index, task) in observer.model.todo_list.iter().take(shown).enumerate() {
                     let status = todo_status(task);
                     let (icon, color) = match status {
@@ -1684,8 +1749,10 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                         .to_owned();
                     let mut icon_element = Icon::new(icon).size(14.).color(color);
                     if status == "in_progress" {
-                        icon_element = icon_element
-                            .spin(("status-todo-spin", index), crate::ui::icon::Spin::Accelerate);
+                        icon_element = icon_element.spin(
+                            ("status-todo-spin", index),
+                            crate::ui::icon::Spin::Accelerate,
+                        );
                     }
                     let row = h_flex()
                         .w_full()
@@ -1733,17 +1800,16 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                 body = body.child(todos);
             }
             if !operations.is_empty() {
-                let mut section = v_flex().w_full().min_w_0().gap(px(8.)).child(
-                    section_header(
+                let mut section = v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(8.))
+                    .child(section_header(
                         "tool",
                         t!("status_panel_recent_ops").to_string(),
-                        Some(format!(
-                            "{}: {tool_total}",
-                            t!("status_panel_total_calls")
-                        )),
+                        Some(format!("{}: {tool_total}", t!("status_panel_total_calls"))),
                         cx,
-                    ),
-                );
+                    ));
                 for (index, operation) in operations.iter().enumerate() {
                     let rail = Hsla::from(tool_class_color(operation.class));
                     let (status_icon, status_color) = match operation.status {
@@ -1787,22 +1853,18 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                                         .child(operation.label.clone()),
                                 ),
                         )
-                        .child(
-                            div()
-                                .flex_none()
-                                .child(if operation.status == "running" {
-                                    Icon::new(status_icon)
-                                        .size(12.)
-                                        .color(status_color)
-                                        .spin(
-                                            ("status-op-spin", index),
-                                            crate::ui::icon::Spin::Accelerate,
-                                        )
-                                        .into_any_element()
-                                } else {
-                                    Icon::new(status_icon).size(12.).color(status_color).into_any_element()
-                                }),
-                        );
+                        .child(div().flex_none().child(if operation.status == "running" {
+                            Icon::new(status_icon)
+                                .size(12.)
+                                .color(status_color)
+                                .spin(("status-op-spin", index), crate::ui::icon::Spin::Accelerate)
+                                .into_any_element()
+                        } else {
+                            Icon::new(status_icon)
+                                .size(12.)
+                                .color(status_color)
+                                .into_any_element()
+                        }));
                     section = section.child(row);
                 }
                 body = body.child(section);
@@ -1822,11 +1884,20 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
 }
 
 fn load_efficiency(this: &mut crate::Observer, cx: &mut Context<crate::Observer>) {
-    if this.efficiency_loading { return; }
-    let Some(session) = this.selected.clone() else { return; };
+    if this.efficiency_loading {
+        return;
+    }
+    let Some(session) = this.selected.clone() else {
+        return;
+    };
     let generation = this.model.generation;
     let (reply, response) = tokio::sync::oneshot::channel();
-    if this.worker.commands.try_send(chatspeed_gpui::types::Command::ReadEfficiency { session, reply }).is_err() {
+    if this
+        .worker
+        .commands
+        .try_send(chatspeed_gpui::types::Command::ReadEfficiency { session, reply })
+        .is_err()
+    {
         this.efficiency_report = Some(Err(t!("status_error").to_string()));
         cx.notify();
         return;
@@ -1834,15 +1905,20 @@ fn load_efficiency(this: &mut crate::Observer, cx: &mut Context<crate::Observer>
     this.efficiency_loading = true;
     cx.notify();
     cx.spawn(async move |owner, cx| {
-        let result = response.await.unwrap_or_else(|_| Err(t!("status_error").to_string()));
+        let result = response
+            .await
+            .unwrap_or_else(|_| Err(t!("status_error").to_string()));
         let _ = owner.update(cx, |this, cx| {
-            if !this.model.accepts(generation) { return; }
+            if !this.model.accepts(generation) {
+                return;
+            }
             this.efficiency_loading = false;
             this.efficiency_updated_at = result.is_ok().then(std::time::Instant::now);
             this.efficiency_report = Some(result);
             cx.notify();
         });
-    }).detach();
+    })
+    .detach();
 }
 
 fn render_status(live: Option<Live>, cx: &App) -> AnyElement {
@@ -2187,9 +2263,33 @@ fn truncate(text: &str, max: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        context_fill, live_state, preview_segment, tool_phase, truncate, Model,
-    };
+    #[test]
+    fn recent_operations_count_unique_calls_before_folding() {
+        let tool = |id, name, call, status| chatspeed_gpui::types::Message {
+            id,
+            role: "tool".into(),
+            metadata: serde_json::json!({
+                "tool_name": name,
+                "tool_call_id": call,
+                "execution_status": status,
+            }),
+            ..Default::default()
+        };
+        let messages = [
+            tool(1, "read_file", "a", "completed"),
+            tool(2, "grep", "b", "completed"),
+            tool(3, "edit_file", "c", "completed"),
+            tool(4, "bash", "d", "failed"),
+            tool(5, "bash", "d", "pending_approval"),
+            tool(6, "ask_user", "e", "completed"),
+        ];
+        let (rows, total) = super::operations_from_messages(&messages, &[]);
+        assert_eq!(total, 4);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].class, super::tool_class("bash"));
+        assert_eq!(rows[0].status, "error");
+    }
+    use super::{context_fill, live_state, preview_segment, tool_phase, truncate, Model};
 
     #[test]
     fn context_usage_ramps_opacity_within_one_hue() {

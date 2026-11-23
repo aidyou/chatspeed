@@ -23,7 +23,7 @@ pub mod panels;
 pub mod suggestions;
 
 /// Vue's expanded box tops out at 540px; this window keeps its actions visible.
-const EXPANDED_HEIGHT: f32 = 420.;
+pub(crate) const EXPANDED_HEIGHT: f32 = 420.;
 
 /// Renders the state line, the prompt box and its footer.
 pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
@@ -149,6 +149,12 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let hover = cx.theme().muted;
     let muted = cx.theme().muted_foreground;
     let expanded = observer.composer_expanded;
+    let height = if expanded {
+        Some(px(EXPANDED_HEIGHT))
+    } else {
+        observer.composer_height
+    };
+    let natural_height = observer.composer_natural_height.clone();
     let accent = cx.theme().primary;
     let foreground = cx.theme().foreground;
     let focused = observer.composer_focused;
@@ -159,7 +165,7 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .w_full();
     // A capped box keeps its own scrollbar, so typing past the visible rows
     // scrolls instead of painting over the frame.
-    let textarea = if expanded {
+    let textarea = if height.is_some() {
         textarea.h_full()
     } else {
         textarea
@@ -211,43 +217,90 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .when(!focused, |view| {
             view.hover(move |style| style.border_color(accent.opacity(0.26)))
         })
-        .when(expanded, |view| view.h(px(EXPANDED_HEIGHT)))
+        .relative()
+        .when_some(height, |view, height| view.h(height))
+        .when(height.is_none(), |view| {
+            view.child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, (), _, _| {
+                        natural_height.set(bounds.size.height.min(px(EXPANDED_HEIGHT)));
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+        })
         .child(attachment_row(observer, cx))
         .child(
             div()
-                .relative()
                 .w_full()
                 .min_h_0()
-                .when(expanded, |view| view.flex_1())
-                .child(textarea)
-                // Vue keeps the expand toggle at the box's top-right.
-                .child(
-                    div()
-                        .id("composer-expand")
-                        .absolute()
-                        // Vue pins the toggle 2px from the input's top-right;
-                        // the 8px radius keeps its hover surface inside the
-                        // composer's own rounded corner.
-                        .top(px(2.))
-                        .right(px(2.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .size(px(24.))
-                        .rounded(px(8.))
-                        .cursor_pointer()
-                        .hover(|style| style.bg(hover))
-                        .child(crate::ui::rotating_icon(
-                            "composer-expand-icon",
-                            "double-arrow-up",
-                            14.,
-                            muted,
-                            if expanded { 0. } else { 180. },
-                            if expanded { 180. } else { 0. },
-                        ))
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_composer_expanded(cx))),
-                ),
+                .when(height.is_some(), |view| view.flex_1())
+                .child(textarea),
         )
         .child(footer::footer(observer, cx))
+        .child(
+            div()
+                .id("composer-resize")
+                .absolute()
+                .top_0()
+                .left(px(12.))
+                .right(px(32.))
+                .h(px(4.))
+                .cursor(CursorStyle::ResizeUpDown)
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        let minimum = this.composer_natural_height.get().min(px(EXPANDED_HEIGHT));
+                        this.composer_resize =
+                            Some((event.position.y, height.unwrap_or(minimum), minimum));
+                        cx.stop_propagation();
+                    }),
+                ),
+        )
+        .child(
+            div()
+                .id("composer-expand")
+                .group("composer-expand")
+                .absolute()
+                .top(px(4.))
+                .right(px(4.))
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(8.))
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .size(px(12.))
+                        .rounded_tr(px(8.))
+                        .border_t_1()
+                        .border_r_1()
+                        .border_color(muted.opacity(0.6))
+                        .group_hover("composer-expand", |style| style.invisible()),
+                )
+                .child(
+                    div()
+                        .invisible()
+                        .group_hover("composer-expand", |style| style.visible())
+                        .child(
+                            Icon::new(if expanded {
+                                "fullscreen"
+                            } else {
+                                "fullscreen-off"
+                            })
+                            .size(14.)
+                            .color(muted),
+                        ),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_composer_expanded(cx))),
+        )
         .into_any_element()
 }

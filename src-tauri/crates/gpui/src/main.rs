@@ -551,6 +551,9 @@ struct Observer {
     composer_focused: bool,
     /// Vue's fullscreen toggle: the box grows instead of the transcript.
     composer_expanded: bool,
+    composer_height: Option<Pixels>,
+    composer_resize: Option<(Pixels, Pixels, Pixels)>,
+    composer_natural_height: std::rc::Rc<std::cell::Cell<Pixels>>,
     /// A new session is being created and started; further sends wait.
     start_pending: bool,
     start_draft: Option<(String, Vec<Attachment>)>,
@@ -916,6 +919,9 @@ impl Observer {
             automation_pending: false,
             composer_focused: false,
             composer_expanded: false,
+            composer_height: None,
+            composer_resize: None,
+            composer_natural_height: Default::default(),
             start_pending: false,
             start_draft: None,
             toast: None,
@@ -5678,14 +5684,28 @@ impl Render for Observer {
         );
         // Configuration dialogs float above the whole frame instead of growing
         // the composer, like Vue's appended-to-body popovers.
-        let status_overlay = self
-            .status_panel_area(window)
-            .and_then(|area| ui::status::overlay(self, area, cx));
+        let status_overlay = if self.active_child.is_none() {
+            self.status_panel_area(window)
+                .and_then(|area| ui::status::overlay(self, area, cx))
+        } else {
+            None
+        };
         let mut shell = div().id("workflow-shell").size_full().relative().child(frame)
             .capture_key_down(cx.listener(|this, event, window, cx| {
                 ui::terminal::shortcut(this, event, window, cx);
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if let Some((start, height, minimum)) = this.composer_resize {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        this.composer_expanded = false;
+                        let height = (height + start - event.position.y)
+                            .clamp(minimum, px(ui::composer::EXPANDED_HEIGHT));
+                        this.composer_height = (height > minimum).then_some(height);
+                        cx.notify();
+                    } else {
+                        this.composer_resize = None;
+                    }
+                }
                 if let Some(offset) = this.status_panel_drag {
                     if event.pressed_button == Some(MouseButton::Left) {
                         ui::status::remember_position(this, event.position - offset);
@@ -5696,6 +5716,7 @@ impl Render for Observer {
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.composer_resize = None;
                 if this.status_panel_drag.take().is_some() {
                     this.save_status_panel_positions();
                 }

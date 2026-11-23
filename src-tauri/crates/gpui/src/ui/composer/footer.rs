@@ -73,9 +73,13 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                     view.cursor_pointer().hover(|style| style.bg(hover))
                 })
                 .child(
-                    Icon::new(if observer.vision_task.is_some() { "loading" } else { "send" })
-                        .size(20.)
-                        .color(if can_send { accent } else { muted }),
+                    Icon::new(if observer.vision_task.is_some() {
+                        "loading"
+                    } else {
+                        "send"
+                    })
+                    .size(20.)
+                    .color(if can_send { accent } else { muted }),
                 )
                 .tooltip(crate::ui::tip(t!("send").to_string()))
                 .tooltip_show_delay(crate::ui::TOOLTIP_DELAY)
@@ -145,22 +149,19 @@ fn pill(
 ) -> AnyElement {
     let primary = cx.theme().primary;
     let background = cx.theme().background;
-    h_flex()
-        .id(id)
-        .flex_none()
-        .items_center()
-        .gap(px(4.))
-        .px(px(8.))
-        .py(px(4.))
-        .rounded(px(16.))
+    action_capsule(id)
+        .gap(crate::ui::tokens::SPACE_4)
         .when(enabled, |row| row.cursor_pointer())
         .when(!enabled, |row| row.cursor_default())
         // Vue's agent pill and model trigger both sit on `--cs-bg-color`; the
         // theme background is the native token closest to that surface.
         .bg(background)
         .when(bordered, |row| {
-            row.border_1()
-                .border_color(if color == primary { primary } else { cx.theme().border })
+            row.border_1().border_color(if color == primary {
+                primary
+            } else {
+                cx.theme().border
+            })
         })
         .when(enabled, |row| {
             row.hover(move |style| style.bg(hover).text_color(primary))
@@ -170,12 +171,11 @@ fn pill(
         .when(!enabled, |row| {
             row.hover(move |style| style.bg(background).text_color(color))
         })
-        // Vue's agent trigger inherits the footer's 14px size; the leading
-        // icon keeps the 18px size its `cs` component uses.
-        .text_size(px(14.))
+        .text_size(px(12.))
+        .line_height(px(16.))
         .text_color(color)
         .when_some(icon, |row, icon| {
-            row.child(Icon::new(icon).size(18.).color(color))
+            row.child(Icon::new(icon).size(14.).color(color))
         })
         .child(
             div()
@@ -283,7 +283,11 @@ fn agent_selector(
     let session = observer.selected.clone();
     let editable = observer.can_switch_agent() && session.is_some() && !agents.is_empty();
     let primary = cx.theme().primary;
-    let color = if editable { primary } else { muted.opacity(0.4) };
+    let color = if editable {
+        primary
+    } else {
+        muted.opacity(0.4)
+    };
     let trigger_el = pill(
         "composer-agent",
         Some("agent"),
@@ -324,10 +328,15 @@ fn agent_selector(
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
                         observer_entity.update(cx, |this, cx| {
                             if this.can_switch_agent() && !is_selected {
-                                this.submit_config(&session, "agent", Command::SetAgent {
-                                    session: session.clone(),
-                                    agent: target.clone(),
-                                }, cx);
+                                this.submit_config(
+                                    &session,
+                                    "agent",
+                                    Command::SetAgent {
+                                        session: session.clone(),
+                                        agent: target.clone(),
+                                    },
+                                    cx,
+                                );
                             }
                         });
                     },
@@ -495,7 +504,17 @@ fn model_selector(
     cx: &mut Context<Observer>,
 ) -> AnyElement {
     let label = observer.model_label();
-    let trigger_el = pill("composer-model", None, label, true, true, hover, muted, false, cx);
+    let trigger_el = pill(
+        "composer-model",
+        None,
+        label,
+        true,
+        true,
+        hover,
+        muted,
+        false,
+        cx,
+    );
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
@@ -543,7 +562,9 @@ fn model_selector(
                     move |_, window, cx| {
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
                         observer_entity.update(cx, |this, cx| {
-                            if this.model.accepts(generation) && this.selected.as_ref() == Some(&session) {
+                            if this.model.accepts(generation)
+                                && this.selected.as_ref() == Some(&session)
+                            {
                                 this.save_models(configs.clone(), cx);
                             }
                         });
@@ -570,14 +591,15 @@ pub(super) fn model_group_label(label: String, cx: &App) -> AnyElement {
 }
 
 fn action_capsule(id: &'static str) -> Stateful<Div> {
-    div().id(id)
+    div()
+        .id(id)
         .relative()
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
+        .h(px(24.))
         .px(crate::ui::tokens::SPACE_8)
-        .py(crate::ui::tokens::SPACE_4)
         .rounded_full()
 }
 
@@ -665,9 +687,7 @@ fn quick_actions(
                 let observer_entity = observer_entity.clone();
                 move |window: &mut Window, cx: &mut App| {
                     popover.update(cx, |state, cx| state.dismiss(window, cx));
-                    observer_entity.update(cx, |this, cx| {
-                        this.open_quick_panel(panel, window, cx)
-                    });
+                    observer_entity.update(cx, |this, cx| this.open_quick_panel(panel, window, cx));
                 }
             };
             let toggle_planning = {
@@ -868,10 +888,15 @@ fn quick_actions(
                         popover.update(cx, |state, cx| state.dismiss(window, cx));
                         observer_entity.update(cx, |this, cx| {
                             if this.approval_level() != level {
-                                this.submit_config(&session, "approval", Command::SetApprovalLevel {
-                                    session: session.clone(),
-                                    level: level.clone(),
-                                }, cx);
+                                this.submit_config(
+                                    &session,
+                                    "approval",
+                                    Command::SetApprovalLevel {
+                                        session: session.clone(),
+                                        level: level.clone(),
+                                    },
+                                    cx,
+                                );
                             }
                         });
                     },
@@ -1072,8 +1097,13 @@ fn sandbox_selector(
             let observer = observer_entity.read(cx);
             let current = observer.sandbox_mode();
             let scheme = observer.sandbox_scheme_id();
-            let pending = observer.config_pending.contains(&(session.clone(), "sandbox"));
-            let mut list = v_flex().id("composer-sandbox-list").w(px(280.)).gap(px(2.))
+            let pending = observer
+                .config_pending
+                .contains(&(session.clone(), "sandbox"));
+            let mut list = v_flex()
+                .id("composer-sandbox-list")
+                .w(px(280.))
+                .gap(px(2.))
                 .when(pending, |list| list.opacity(0.55))
                 .child(menu_section_plain(
                     t!("sandbox_execution_mode").to_string(),
@@ -1085,7 +1115,9 @@ fn sandbox_selector(
                 let next_scheme = if value == "host_only" {
                     None
                 } else {
-                    scheme.clone().filter(|id| schemes.iter().any(|(candidate, _)| candidate == id))
+                    scheme
+                        .clone()
+                        .filter(|id| schemes.iter().any(|(candidate, _)| candidate == id))
                         .or_else(|| schemes.first().map(|(id, _)| id.clone()))
                 };
                 let is_selected = current == value;
@@ -1099,11 +1131,16 @@ fn sandbox_selector(
                             return;
                         }
                         observer_entity.update(cx, |this, cx| {
-                            this.submit_config(&session, "sandbox", Command::SetSandbox {
-                                session: session.clone(),
-                                mode: value.to_owned(),
-                                scheme: next_scheme.clone(),
-                            }, cx);
+                            this.submit_config(
+                                &session,
+                                "sandbox",
+                                Command::SetSandbox {
+                                    session: session.clone(),
+                                    mode: value.to_owned(),
+                                    scheme: next_scheme.clone(),
+                                },
+                                cx,
+                            );
                         });
                     },
                     OptionColors::new(cx),
@@ -1141,11 +1178,16 @@ fn sandbox_selector(
                             move |_, _, cx| {
                                 observer_entity.update(cx, |this, cx| {
                                     if !selected {
-                                        this.submit_config(&session, "sandbox", Command::SetSandbox {
-                                            session: session.clone(),
-                                            mode: mode.clone(),
-                                            scheme: Some(refresh_id.clone()),
-                                        }, cx);
+                                        this.submit_config(
+                                            &session,
+                                            "sandbox",
+                                            Command::SetSandbox {
+                                                session: session.clone(),
+                                                mode: mode.clone(),
+                                                scheme: Some(refresh_id.clone()),
+                                            },
+                                            cx,
+                                        );
                                     }
                                 });
                             },
@@ -1180,11 +1222,16 @@ fn sandbox_selector(
                             .child(t!("sandbox_refresh").to_string())
                             .on_click(move |_, _, cx: &mut App| {
                                 observer_entity.update(cx, |this, cx| {
-                                    this.submit_config(&session, "sandbox", Command::SetSandbox {
-                                        session: session.clone(),
-                                        mode: mode.clone(),
-                                        scheme: scheme.clone(),
-                                    }, cx);
+                                    this.submit_config(
+                                        &session,
+                                        "sandbox",
+                                        Command::SetSandbox {
+                                            session: session.clone(),
+                                            mode: mode.clone(),
+                                            scheme: scheme.clone(),
+                                        },
+                                        cx,
+                                    );
                                 });
                             }),
                     );
