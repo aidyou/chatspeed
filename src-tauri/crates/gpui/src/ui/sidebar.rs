@@ -691,7 +691,10 @@ fn session_row(
         // over the title, so the row keeps its two-line height.
         .child(
             div()
-                .id(SharedString::from(format!("session-actions-{}", session.id)))
+                .id(SharedString::from(format!(
+                    "session-actions-{}",
+                    session.id
+                )))
                 .absolute()
                 .right(px(10.))
                 .top_0()
@@ -803,70 +806,190 @@ fn automation_list(observer: &Observer, cx: &mut Context<Observer>) -> AnyElemen
         Some(Err(error)) => return empty_tab(error.clone(), cx),
         Some(Ok(entries)) => entries,
     };
-    let query = observer.session_search.read(cx).value().trim().to_lowercase();
-    let mut rows = v_flex().id("automation-list").flex_1().min_h_0().overflow_y_scroll().px_4();
+    let query = observer
+        .session_search
+        .read(cx)
+        .value()
+        .trim()
+        .to_lowercase();
+    let mut rows = v_flex()
+        .id("automation-list")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .px_4();
     let mut found = false;
-    for entry in entries.iter().filter(|entry| entry.title.to_lowercase().contains(&query)) {
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.title.to_lowercase().contains(&query))
+    {
         found = true;
-        rows = rows.child(h_flex().id(entry.automation_id.clone()).gap_2().items_center().py_2()
-            .child(div().size(px(6.)).rounded_full().bg(if entry.enabled { Hsla::from(success()) } else { cx.theme().muted_foreground }))
-            .child(div().flex_1().min_w_0().text_ellipsis().child(entry.title.clone()))
-            .children([
-                ("toggle", if entry.enabled { t!("automation_disable") } else { t!("automation_enable") }, if entry.enabled { chatspeed_gpui::types::AutomationAction::Disable } else { chatspeed_gpui::types::AutomationAction::Enable }),
-                ("run", t!("automation_run"), chatspeed_gpui::types::AutomationAction::Run),
-            ].into_iter().map(|(key, label, action)| {
-                let id = entry.automation_id.clone();
-                div().id(key).cursor_pointer().text_xs().child(label.to_string())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.worker.commands.try_send(chatspeed_gpui::types::Command::ActOnAutomation { id: id.clone(), action }).is_err() {
-                            this.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
-                        }
-                    }))
-            }))
-            .child(div().id("edit-automation").cursor_pointer().text_xs().child(t!("automation_edit").to_string())
-                .on_click(cx.listener({
-                    let id = entry.automation_id.clone();
-                    move |this, _, window, cx| super::titlebar::edit_automation(this, id.clone(), window, cx)
-                })))
-            .child(div().id("automation-history").cursor_pointer().text_xs().child(t!("automation_history").to_string())
-                .on_click(cx.listener({
-                    let id = entry.automation_id.clone();
-                    move |this, _, _, cx| {
-                        if this.automation_history.as_ref().is_some_and(|(current, _)| *current == id) {
-                            this.automation_history = None;
-                        } else if this.worker.commands.try_send(chatspeed_gpui::types::Command::ListAutomationRuns(id.clone())).is_ok() {
-                            this.automation_history = Some((id.clone(), None));
-                        } else {
-                            this.show_toast(crate::ToastKind::Error, t!("automation_action_failed").to_string(), cx);
-                        }
-                        cx.notify();
-                    }
-                })))
-            .child(div().id("delete-automation").cursor_pointer().child(Icon::new("delete"))
-                .on_click(cx.listener({
-                    let id = entry.automation_id.clone();
-                    move |this, _, _, cx| {
-                        this.confirm = Some(crate::ui::confirm::ConfirmRequest {
-                            kind: crate::ui::confirm::ConfirmKind::DeleteAutomation(id.clone()),
-                            title: t!("automation_delete").to_string(),
-                            message: t!("automation_delete_confirm").to_string(),
-                            confirm_label: t!("automation_delete").to_string(),
-                            danger: true,
-                        });
-                        cx.notify();
-                    }
-                }))));
-        if let Some((_, runs)) = observer.automation_history.as_ref().filter(|(id, _)| *id == entry.automation_id) {
+        rows = rows.child(
+            h_flex()
+                .id(entry.automation_id.clone())
+                .gap_2()
+                .items_center()
+                .py_2()
+                .child(div().size(px(6.)).rounded_full().bg(if entry.enabled {
+                    Hsla::from(success())
+                } else {
+                    cx.theme().muted_foreground
+                }))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_ellipsis()
+                        .child(entry.title.clone()),
+                )
+                .children(
+                    [
+                        (
+                            "toggle",
+                            if entry.enabled {
+                                t!("automation_disable")
+                            } else {
+                                t!("automation_enable")
+                            },
+                            if entry.enabled {
+                                chatspeed_gpui::types::AutomationAction::Disable
+                            } else {
+                                chatspeed_gpui::types::AutomationAction::Enable
+                            },
+                        ),
+                        (
+                            "run",
+                            t!("automation_run"),
+                            chatspeed_gpui::types::AutomationAction::Run,
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(key, label, action)| {
+                        let id = entry.automation_id.clone();
+                        div()
+                            .id(key)
+                            .cursor_pointer()
+                            .text_xs()
+                            .child(label.to_string())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this
+                                    .worker
+                                    .commands
+                                    .try_send(chatspeed_gpui::types::Command::ActOnAutomation {
+                                        id: id.clone(),
+                                        action,
+                                    })
+                                    .is_err()
+                                {
+                                    this.show_toast(
+                                        crate::ToastKind::Error,
+                                        t!("automation_action_failed").to_string(),
+                                        cx,
+                                    );
+                                }
+                            }))
+                    }),
+                )
+                .child(
+                    div()
+                        .id("edit-automation")
+                        .cursor_pointer()
+                        .text_xs()
+                        .child(t!("automation_edit").to_string())
+                        .on_click(cx.listener({
+                            let id = entry.automation_id.clone();
+                            move |this, _, window, cx| {
+                                super::titlebar::edit_automation(this, id.clone(), window, cx)
+                            }
+                        })),
+                )
+                .child(
+                    div()
+                        .id("automation-history")
+                        .cursor_pointer()
+                        .text_xs()
+                        .child(t!("automation_history").to_string())
+                        .on_click(cx.listener({
+                            let id = entry.automation_id.clone();
+                            move |this, _, _, cx| {
+                                if this
+                                    .automation_history
+                                    .as_ref()
+                                    .is_some_and(|(current, _)| *current == id)
+                                {
+                                    this.automation_history = None;
+                                } else if this
+                                    .worker
+                                    .commands
+                                    .try_send(chatspeed_gpui::types::Command::ListAutomationRuns(
+                                        id.clone(),
+                                    ))
+                                    .is_ok()
+                                {
+                                    this.automation_history = Some((id.clone(), None));
+                                } else {
+                                    this.show_toast(
+                                        crate::ToastKind::Error,
+                                        t!("automation_action_failed").to_string(),
+                                        cx,
+                                    );
+                                }
+                                cx.notify();
+                            }
+                        })),
+                )
+                .child(
+                    div()
+                        .id("delete-automation")
+                        .cursor_pointer()
+                        .child(Icon::new("delete"))
+                        .on_click(cx.listener({
+                            let id = entry.automation_id.clone();
+                            move |this, _, _, cx| {
+                                this.confirm = Some(crate::ui::confirm::ConfirmRequest {
+                                    kind: crate::ui::confirm::ConfirmKind::DeleteAutomation(
+                                        id.clone(),
+                                    ),
+                                    title: t!("automation_delete").to_string(),
+                                    message: t!("automation_delete_confirm").to_string(),
+                                    confirm_label: t!("automation_delete").to_string(),
+                                    danger: true,
+                                });
+                                cx.notify();
+                            }
+                        })),
+                ),
+        );
+        if let Some((_, runs)) = observer
+            .automation_history
+            .as_ref()
+            .filter(|(id, _)| *id == entry.automation_id)
+        {
             let history = match runs {
                 None => vec!["…".to_string()],
                 Some(Err(error)) => vec![error.clone()],
-                Some(Ok(runs)) if runs.is_empty() => vec![t!("automation_history_empty").to_string()],
-                Some(Ok(runs)) => runs.iter().map(|run| format!("{} · {}", run.scheduled_for, status_label(&run.status))).collect(),
+                Some(Ok(runs)) if runs.is_empty() => {
+                    vec![t!("automation_history_empty").to_string()]
+                }
+                Some(Ok(runs)) => runs
+                    .iter()
+                    .map(|run| format!("{} · {}", run.scheduled_for, status_label(&run.status)))
+                    .collect(),
             };
-            rows = rows.child(v_flex().pl_4().text_xs().text_color(cx.theme().muted_foreground).children(history.into_iter().map(|line| div().child(line))));
+            rows = rows.child(
+                v_flex()
+                    .pl_4()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .children(history.into_iter().map(|line| div().child(line))),
+            );
         }
     }
-    if found { rows.into_any_element() } else { empty_tab(t!("automation_empty").to_string(), cx) }
+    if found {
+        rows.into_any_element()
+    } else {
+        empty_tab(t!("automation_empty").to_string(), cx)
+    }
 }
 
 fn empty_tab(message: String, cx: &mut Context<Observer>) -> AnyElement {
@@ -1125,11 +1248,7 @@ fn chat_hub_rail_entry(
 /// The ChatHub rail entry: a site list behind the `connected` glyph and, below
 /// it, the docked site's logo that hides or shows the page.
 #[cfg(feature = "chat-hub")]
-fn chat_hub_entry(
-    observer: &Observer,
-    skin: &Surfaces,
-    cx: &mut Context<Observer>,
-) -> AnyElement {
+fn chat_hub_entry(observer: &Observer, skin: &Surfaces, cx: &mut Context<Observer>) -> AnyElement {
     use gpui_kit::component::popover::Popover;
 
     let hover = skin.hover;
@@ -1157,11 +1276,11 @@ fn chat_hub_entry(
                 .rounded(px(8.))
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover))
-                .child(Icon::new("connected").size(18.).color(if active_id.is_some() {
-                    primary
-                } else {
-                    muted
-                }))
+                .child(
+                    Icon::new("connected")
+                        .size(18.)
+                        .color(if active_id.is_some() { primary } else { muted }),
+                )
                 .tooltip(tip(t!("chat_hub").to_string()))
                 .tooltip_show_delay(TOOLTIP_DELAY),
         ))
@@ -1217,9 +1336,8 @@ fn chat_hub_entry(
                         .on_click(move |_, window, cx: &mut App| {
                             popover.update(cx, |state, cx| state.dismiss(window, cx));
                             let site = site_for_click.clone();
-                            let _ = observer_entity.update(cx, |this, cx| {
-                                this.request_chat_hub(site, cx)
-                            });
+                            let _ = observer_entity
+                                .update(cx, |this, cx| this.request_chat_hub(site, cx));
                         }),
                 );
             }
@@ -1252,9 +1370,8 @@ fn chat_hub_entry(
                             .on_click(move |_, window, cx: &mut App| {
                                 popover.update(cx, |state, cx| state.dismiss(window, cx));
                                 let site = site.clone();
-                                let _ = observer_entity.update(cx, |this, cx| {
-                                    this.close_chat_hub_tab(site.id, cx)
-                                });
+                                let _ = observer_entity
+                                    .update(cx, |this, cx| this.close_chat_hub_tab(site.id, cx));
                             }),
                     );
             }
@@ -1289,37 +1406,7 @@ fn chat_hub_entry(
 /// A site logo with Vue's letter-avatar fallback.
 #[cfg(feature = "chat-hub")]
 fn hub_logo(site: &crate::chat_hub::Site, size: f32) -> AnyElement {
-    let letter: String = site.name.trim().chars().take(1).collect::<String>().to_uppercase();
-    let letter = if letter.is_empty() { "—".to_string() } else { letter };
-    if site.logo.is_empty() {
-        return hub_avatar(letter, size);
-    }
-    let fallback = letter.clone();
-    let loading = letter;
-    gpui_kit::img(site.logo.as_str())
-        .flex_none()
-        .size(px(size))
-        .rounded_full()
-        .object_fit(ObjectFit::Contain)
-        .with_loading(move || hub_avatar(loading.clone(), size))
-        .with_fallback(move || hub_avatar(fallback.clone(), size))
-        .into_any_element()
-}
-
-#[cfg(feature = "chat-hub")]
-fn hub_avatar(letter: String, size: f32) -> AnyElement {
-    div()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .size(px(size))
-        .rounded_full()
-        .bg(gpui_kit::rgb(0x8a8f98))
-        .text_size(px(size * 0.55))
-        .text_color(gpui_kit::white())
-        .child(letter)
-        .into_any_element()
+    crate::ui::letter_avatar::with_logo("chat-hub-logo", &site.name, &site.logo, size)
 }
 
 #[cfg(test)]

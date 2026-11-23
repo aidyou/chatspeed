@@ -130,6 +130,8 @@ pub struct Panel {
     /// Vue's fullscreen toggle; the dock keeps its header but uses most of the
     /// workflow column.
     maximized: bool,
+    height: Pixels,
+    resize_start: Option<(Pixels, Pixels)>,
 }
 
 pub struct Tab {
@@ -153,6 +155,8 @@ impl Panel {
             scroll: ScrollHandle::new(),
             follow: true,
             maximized: false,
+            height: px(PANEL_HEIGHT),
+            resize_start: None,
         }
     }
 
@@ -438,13 +442,7 @@ fn add_tab(
                 })
                 .is_err()
                 || owner
-                    .update(cx, |this, cx| {
-                        // New output must not push the prompt out of view.
-                        if this.terminal.follow {
-                            this.terminal.scroll.scroll_to_bottom();
-                        }
-                        cx.notify();
-                    })
+                    .update(cx, |_, cx| cx.notify())
                     .is_err()
             {
                 return;
@@ -600,10 +598,32 @@ fn terminal_color(
     gpui_kit::rgb(rgb).into()
 }
 
-pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement> {
+pub(crate) fn expanded(this: &Observer) -> bool {
+    this.terminal.visible && this.terminal.maximized
+}
+
+pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) -> Option<AnyElement> {
     let panel = &this.terminal;
     if !panel.visible {
         return None;
+    }
+    let max_height = (window.viewport_size().height - px(160.)).max(px(180.));
+    if let Some((start_y, height)) = panel.resize_start {
+        let owner = cx.entity().downgrade();
+        window.on_mouse_event(move |event: &MouseMoveEvent, _, _, cx: &mut App| {
+            if event.pressed_button == Some(MouseButton::Left) {
+                let _ = owner.update(cx, |this, cx| {
+                    this.terminal.height = (height + start_y - event.position.y).clamp(px(180.), max_height);
+                    cx.notify();
+                });
+            }
+        });
+        let owner = cx.entity().downgrade();
+        window.on_mouse_event(move |_: &MouseUpEvent, _, _, cx: &mut App| {
+            let _ = owner.update(cx, |this, cx| {
+                if this.terminal.resize_start.take().is_some() { cx.notify(); }
+            });
+        });
     }
     let border = cx.theme().border;
     let background = cx.theme().background;
@@ -775,31 +795,6 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
         .child(div().flex_none().w(px(1.)).h(px(16.)).bg(border))
         .child(
             div()
-                .id("terminal-fullscreen")
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .p(px(4.))
-                .rounded(px(4.))
-                .cursor_pointer()
-                .hover(move |style| style.bg(hover))
-                .child(
-                    Icon::new(if panel.maximized {
-                        "fullscreen"
-                    } else {
-                        "fullscreen-off"
-                    })
-                    .size(14.)
-                    .color(secondary),
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.terminal.maximized = !this.terminal.maximized;
-                    cx.notify();
-                })),
-        )
-        .child(
-            div()
                 .id("terminal-hide")
                 .flex_none()
                 .flex()
@@ -811,6 +806,31 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
                 .hover(move |style| style.bg(hover))
                 .child(Icon::new("minimize").size(14.).color(secondary))
                 .on_click(cx.listener(|this, _, _, cx| toggle(this, cx))),
+        )
+        .child(
+            div()
+                .id("terminal-fullscreen")
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p(px(4.))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .child(
+                    Icon::new(if panel.maximized {
+                        "fullscreen-off"
+                    } else {
+                        "fullscreen"
+                    })
+                    .size(14.)
+                    .color(secondary),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.terminal.maximized = !this.terminal.maximized;
+                    cx.notify();
+                })),
         );
 
     let header = h_flex()
@@ -953,12 +973,8 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
         // The cursor row is a direct child of the scroll view, so the scroll
         // handle can keep exactly that line in view instead of jumping to the
         // bottom of the 24-row grid (which is mostly empty at startup).
-        if panel.follow {
-            if show_cursor && cursor_row < rows {
-                panel.scroll.scroll_to_item(cursor_row);
-            } else {
-                panel.scroll.scroll_to_bottom();
-            }
+        if panel.follow && cursor_row < rows {
+            panel.scroll.scroll_to_item(cursor_row);
         }
     }
 
@@ -984,6 +1000,7 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
 
     let maximized = panel.maximized;
     let panel = v_flex()
+        .relative()
         .min_h_0()
         .w_full()
         .border_t_1()
@@ -997,9 +1014,16 @@ pub fn render(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement>
                 }),
         );
     let panel = if maximized {
-        panel.h(relative(0.9)).max_h(relative(0.9))
+        panel.flex_1()
     } else {
-        panel.h(px(PANEL_HEIGHT)).max_h(relative(0.5))
+        let height = this.terminal.height.min(max_height);
+        panel.h(height).flex_none().child(div().absolute().top_0().left_0().right_0().h(px(5.))
+            .id("terminal-resize").cursor(CursorStyle::ResizeUpDown).occlude()
+            .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.terminal.resize_start = Some((event.position.y, height));
+                cx.stop_propagation();
+                cx.notify();
+            })))
     };
     Some(panel.into_any_element())
 }

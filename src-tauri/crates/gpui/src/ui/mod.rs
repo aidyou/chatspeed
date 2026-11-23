@@ -247,7 +247,13 @@ pub fn icon_button(
     hint: Option<String>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    icon_button_element(id, Icon::new(icon).size(18.).color(color), hover, hint, on_click)
+    icon_button_element(
+        id,
+        Icon::new(icon).size(18.).color(color),
+        hover,
+        hint,
+        on_click,
+    )
 }
 
 pub(super) fn icon_button_element(
@@ -275,9 +281,7 @@ pub(super) fn icon_button_element(
             cx.stop_propagation();
         })
         .when_some(hint, |button, text| {
-            button
-                .tooltip(tip(text))
-                .tooltip_show_delay(TOOLTIP_DELAY)
+            button.tooltip(tip(text)).tooltip_show_delay(TOOLTIP_DELAY)
         })
         .on_click(on_click)
         .into_any_element()
@@ -332,6 +336,60 @@ pub(crate) mod confirm;
 pub(crate) mod file_editor;
 pub mod file_tree;
 pub mod frame;
+#[cfg(feature = "chat-hub")]
+pub(crate) mod letter_avatar {
+    use gpui_kit::{prelude::*, *};
+
+    fn initial(name: &str) -> String {
+        name.trim()
+            .chars()
+            .next()
+            .map_or_else(|| "—".into(), |c| c.to_uppercase().collect())
+    }
+
+    fn badge(letter: String, size: f32) -> AnyElement {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(size))
+            .rounded_full()
+            .bg(rgb(0x8a8f98))
+            .text_size(px(size * 0.55))
+            .line_height(px(size * 0.65))
+            .text_color(white())
+            .child(letter)
+            .into_any_element()
+    }
+
+    pub(crate) fn with_logo(id: &'static str, name: &str, logo: &str, size: f32) -> AnyElement {
+        let letter = initial(name);
+        let logo = logo.trim();
+        if !logo.starts_with("https://") && !logo.starts_with("http://") {
+            return badge(letter, size);
+        }
+        let loading = letter.clone();
+        img(logo)
+            .id(id)
+            .flex_none()
+            .size(px(size))
+            .rounded_full()
+            .object_fit(ObjectFit::Contain)
+            .with_loading(move || badge(loading.clone(), size))
+            .with_fallback(move || badge(letter.clone(), size))
+            .into_any_element()
+    }
+
+    #[cfg(test)]
+    #[::core::prelude::v1::test]
+    fn initial_handles_whitespace_and_unicode() {
+        assert_eq!(initial("  chat"), "C");
+        assert_eq!(initial("中文"), "中");
+        assert_eq!(initial("  "), "—");
+    }
+}
+
 pub mod sidebar;
 pub mod status;
 pub mod titlebar;

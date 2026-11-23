@@ -86,16 +86,24 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         input.set_value("5", window, cx);
         input
     });
-    let daily_times =
-        std::rc::Rc::new(std::cell::RefCell::new(vec![cx.new(|cx| {
-            gpui_kit::component::time_field::TimeFieldState::new(window, cx)
-        })]));
+    let daily_times = std::rc::Rc::new(std::cell::RefCell::new(vec![cx.new(|cx| {
+        let mut state = gpui_kit::component::time_field::TimeFieldState::new(window, cx);
+        if let Ok(time) = "09:00".parse() {
+            state.set_time(time, window, cx);
+        }
+        state
+    })]));
     let prompt_file = cx.new(|cx| InputState::new(window, cx));
-    let start_date =
-        cx.new(|cx| gpui_kit::component::date_picker::DatePickerState::new(window, cx));
-    let end_date = cx.new(|cx| gpui_kit::component::date_picker::DatePickerState::new(window, cx));
-    let once_date = cx.new(|cx| gpui_kit::component::date_picker::DatePickerState::new(window, cx));
-    let once_time = cx.new(|cx| gpui_kit::component::time_field::TimeFieldState::new(window, cx));
+    use gpui_kit::component::{
+        date_picker::{DatePicker, DatePickerState},
+        time_field::TimePrecision,
+    };
+    let effective_range = cx.new(|cx| DatePickerState::range(window, cx).date_format("%Y-%m-%d"));
+    let once_date = cx.new(|cx| {
+        DatePickerState::new(window, cx)
+            .time_precision(TimePrecision::Minute)
+            .date_format("%Y-%m-%d %H:%M")
+    });
     let allowed_paths = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
     let shell = cx.new(|cx| {
         TextareaState::new(window, cx)
@@ -165,13 +173,8 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         let allowed_paths_state = allowed_paths.clone();
         let (title_state, prompt_state, interval_state) =
             (title.clone(), prompt.clone(), interval.clone());
-        let (prompt_file_state, start_state, end_state, shell_state) = (
-            prompt_file.clone(),
-            start_date.clone(),
-            end_date.clone(),
-            shell.clone(),
-        );
-        let (once_date_state, once_time_state) = (once_date.clone(), once_time.clone());
+        let (prompt_file_state, shell_state) = (prompt_file.clone(), shell.clone());
+        let once_date_state = once_date.clone();
         let (agent_for_submit, owner) = (selected_agent.clone(), owner.clone());
         let (tab_state, frequency_state, weekdays_state) =
             (tab.clone(), frequency.clone(), weekdays.clone());
@@ -193,11 +196,10 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         let submit_prompt_file_state = prompt_file_state.clone();
         let submit_interval_state = interval_state.clone();
         let submit_shell_state = shell_state.clone();
-        let submit_start_state = start_state.clone();
-        let submit_end_state = end_state.clone();
+        let submit_effective_range = effective_range.clone();
         let submit_once_date_state = once_date_state.clone();
-        let submit_once_time_state = once_time_state.clone();
-        let submit = Button::new("create-automation-submit")
+        let form_button = |id: SharedString| Button::new(id).h(px(32.)).py(px(0.)).line_height(px(16.));
+        let submit = form_button("create-automation-submit".into())
             .primary()
             .label(t!("create_automation").to_string())
             .h(px(32.))
@@ -221,24 +223,13 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             .read(cx)
                             .value()
                             .trim()
-                            .parse::<u32>()
-                            .unwrap_or(5)
-                            .clamp(5, 259_200)
                     ),
-                    _ => {
-                        let date = submit_once_date_state
-                            .read(cx)
-                            .date_time()
-                            .format("%Y-%m-%d")
-                            .map(|value| value.to_string())
-                            .unwrap_or_default();
-                        let time = submit_once_time_state
-                            .read(cx)
-                            .time()
-                            .format("%H:%M")
-                            .to_string();
-                        format!("{date} {time}")
-                    }
+                    _ => submit_once_date_state
+                        .read(cx)
+                        .date_time()
+                        .format("%Y-%m-%d %H:%M")
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
                 };
                 let mut schedule = parse_automation_schedule(&schedule_value);
                 let allowed_paths: Vec<String> =
@@ -255,29 +246,21 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         let days: Vec<u32> = (1..=7)
                             .filter(|day| submit_weekdays.get() & (1 << day) != 0)
                             .collect();
+                        let range = submit_effective_range.read(cx).date_time();
+                        let (start, end) = (range.start(), range.end());
+                        if days.is_empty() || !valid_automation_date_range(start, end) {
+                            this.show_toast(crate::ToastKind::Warning, t!("automation_required_fields").to_string(), cx);
+                            return false;
+                        }
                         schedule_config["weekdays"] = serde_json::json!(days);
-                        let start = submit_start_state
-                            .read(cx)
-                            .date_time()
-                            .format("%Y-%m-%d")
-                            .map(|value| value.to_string())
-                            .unwrap_or_default();
-                        let end = submit_end_state
-                            .read(cx)
-                            .date_time()
-                            .format("%Y-%m-%d")
-                            .map(|value| value.to_string())
-                            .unwrap_or_default();
-                        schedule_config["start_date"] = if start.is_empty() {
-                            serde_json::Value::Null
-                        } else {
-                            serde_json::json!(start)
-                        };
-                        schedule_config["end_date"] = if end.is_empty() {
-                            serde_json::Value::Null
-                        } else {
-                            serde_json::json!(end)
-                        };
+                        schedule_config["start_date"] = serde_json::json!(start.map(|date| date.format("%Y-%m-%d").to_string()));
+                        schedule_config["end_date"] = serde_json::json!(end.map(|date| date.format("%Y-%m-%d").to_string()));
+                        if kind == "interval" {
+                            let anchor = submit_daily_times.borrow().first().map(|state| {
+                                state.read(cx).time().format("%H:%M").to_string()
+                            });
+                            schedule_config["anchor_time"] = serde_json::json!(anchor.as_deref().unwrap_or("09:00"));
+                        }
                     }
                     let shell_config = if shell_command.is_empty() {
                         serde_json::Value::Null
@@ -300,7 +283,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         "shell_config": shell_config,
                         "schedule_kind": kind,
                         "schedule_config": schedule_config,
-                        "continuous_context": submit_continuous.get(),
+                        "continuous_context": kind != "once" && submit_continuous.get(),
                         "self_review": submit_self_review.get(),
                         "enabled": submit_enabled.get(),
                     });
@@ -448,6 +431,8 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     format!("*{}", t!("automation_task_title")),
                     Input::new(&title)
                         .xsmall()
+                        .py(px(4.))
+                        .px(px(10.))
                         .h(px(32.))
                         .bg(crate::ui::field_bg(cx))
                         .into_any_element(),
@@ -463,7 +448,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         t!("automation_prompt")
                     ),
                     Textarea::new(&prompt)
-                        .xsmall()
+                        .small()
                         .bg(crate::ui::field_bg(cx))
                         .h(px(120.))
                         .into_any_element(),
@@ -492,6 +477,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                         Input::new(&prompt_file)
                                             .readonly(true)
                                             .xsmall()
+                                            .px(px(10.))
                                             .h(px(32.))
                                             .bg(crate::ui::field_bg(cx))
                                             .when(
@@ -533,7 +519,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                     ),
                                 )
                                 .child(
-                                    Button::new("automation-prompt-file-pick")
+                                    form_button("automation-prompt-file-pick".into())
                                         .label(t!("automation_select_file").to_string())
                                         .h(px(32.))
                                         .text_size(px(12.))
@@ -790,18 +776,22 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         .gap(px(4.))
                         .children([0usize, 1, 2].into_iter().map(|index| {
                             let frequency_state = frequency_state.clone();
+                            let continuous_state = continuous_state.clone();
                             let text = match index {
                                 0 => t!("automation_frequency_daily").to_string(),
                                 1 => t!("automation_frequency_interval").to_string(),
                                 _ => t!("automation_frequency_once").to_string(),
                             };
-                            Button::new(SharedString::from(format!(
+                            form_button(SharedString::from(format!(
                                 "automation-frequency-{index}"
                             )))
                             .label(text)
                             .when(frequency_state.get() == index, |button| button.primary())
                             .on_click(move |_, window, _| {
                                 frequency_state.set(index);
+                                if index == 2 {
+                                    continuous_state.set(false);
+                                }
                                 window.refresh();
                             })
                         }))
@@ -827,7 +817,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                             .text_size(px(12.)),
                                     )
                                     .child(
-                                        Button::new(SharedString::from(format!(
+                                        form_button(SharedString::from(format!(
                                             "automation-time-add-{index}"
                                         )))
                                         .label("+".to_string())
@@ -844,7 +834,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                         }),
                                     )
                                     .child(
-                                        Button::new(SharedString::from(format!(
+                                        form_button(SharedString::from(format!(
                                             "automation-time-remove-{index}"
                                         )))
                                         .label("−".to_string())
@@ -946,26 +936,9 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     }
                     _ => field(
                         t!("automation_execution_date").to_string(),
-                        h_flex()
-                            .w_full()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    gpui_kit::component::date_picker::DatePicker::new(
-                                        &once_date_state,
-                                    )
-                                    .placeholder("YYYY-MM-DD")
-                                    .text_size(px(12.)),
-                                ),
-                            )
-                            .child(
-                                gpui_kit::component::time_field::TimeField::new(
-                                    &once_time_state,
-                                )
-                                .w(px(110.))
-                                .text_size(px(12.)),
-                            )
+                        DatePicker::new(&once_date_state)
+                            .cleanable(true)
+                            .text_size(px(12.))
                             .into_any_element(),
                     ),
                 })
@@ -984,7 +957,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         let weekdays = weekdays.clone();
                         let selected = weekdays.get() & (1 << day) != 0;
                         picker = picker.child(
-                            Button::new(SharedString::from(format!(
+                            form_button(SharedString::from(format!(
                                 "automation-weekday-{day}"
                             )))
                             .label(t!(key).to_string())
@@ -1005,27 +978,9 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     ))
                     .child(field(
                         t!("automation_effective_range").to_string(),
-                        h_flex()
-                            .w_full()
-                            .gap(px(8.))
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    gpui_kit::component::date_picker::DatePicker::new(
-                                        &start_date,
-                                    )
-                                    .placeholder(t!("automation_start_date").to_string())
-                                    .text_size(px(12.)),
-                                ),
-                            )
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    gpui_kit::component::date_picker::DatePicker::new(
-                                        &end_date,
-                                    )
-                                    .placeholder(t!("automation_end_date").to_string())
-                                    .text_size(px(12.)),
-                                ),
-                            )
+                        DatePicker::new(&effective_range)
+                            .cleanable(true)
+                            .text_size(px(12.))
                             .into_any_element(),
                     ))
                 })
@@ -1040,7 +995,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         .gap(px(6.))
                         .child(
                             h_flex().w_full().child(
-                                Button::new("automation-directory-pick")
+                                form_button("automation-directory-pick".into())
                                     .label(t!("automation_add_directory").to_string())
                                     .on_click({
                                         let paths = allowed_paths_state.clone();
@@ -1097,7 +1052,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         .gap(px(6.))
                         .child(
                             Textarea::new(&shell)
-                                .xsmall()
+                                .small()
                                 .bg(crate::ui::field_bg(cx))
                                 .h(px(72.)),
                         )
@@ -1109,7 +1064,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         )
                         .into_any_element(),
                 ))
-                .child(field(
+                .when(frequency_state.get() != 2, |form| form.child(field(
                     t!("automation_continuous_context").to_string(),
                     v_flex()
                         .w_full()
@@ -1119,6 +1074,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             Switch::new("automation-continuous")
                                 .checked(continuous_state.get())
                                 .small()
+                                .flex().items_center().h(px(32.))
                                 .on_click(move |checked, window, _| {
                                     continuous_state.set(*checked);
                                     window.refresh();
@@ -1131,12 +1087,13 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                 .child(t!("automation_continuous_context_hint").to_string()),
                         )
                         .into_any_element(),
-                ))
+                )))
                 .child(field(
                     t!("automation_self_review").to_string(),
                     Switch::new("automation-self-review")
                         .checked(self_review_state.get())
                         .small()
+                        .flex().items_center().h(px(32.))
                         .on_click(move |checked, window, _| {
                             self_review_state.set(*checked);
                             window.refresh();
@@ -1148,6 +1105,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     Switch::new("automation-enabled")
                         .checked(enabled_state.get())
                         .small()
+                        .flex().items_center().h(px(32.))
                         .on_click(move |checked, window, _| {
                             enabled_state.set(*checked);
                             window.refresh();
@@ -1168,7 +1126,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                     .justify_end()
                     .gap_2()
                     .child(
-                        Button::new("create-automation-cancel")
+                        form_button("create-automation-cancel".into())
                             .label(t!("action_cancel").to_string())
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
@@ -1539,6 +1497,25 @@ fn automation_rename_preserves_spec_and_revision() {
     }
     assert!(automation_title_update(&view, " ").is_none());
     assert!(automation_title_update(&serde_json::json!({"revision": 4}), "New").is_none());
+}
+
+fn valid_automation_date_range<T: Ord>(start: Option<T>, end: Option<T>) -> bool {
+    match (start, end) {
+        (None, None) => true,
+        (Some(start), Some(end)) => start <= end,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+#[core::prelude::v1::test]
+fn automation_date_range_requires_ordered_endpoints_or_no_range() {
+    assert!(valid_automation_date_range::<u8>(None, None));
+    assert!(valid_automation_date_range(Some(1), Some(2)));
+    assert!(valid_automation_date_range(Some(1), Some(1)));
+    assert!(!valid_automation_date_range(Some(2), Some(1)));
+    assert!(!valid_automation_date_range(Some(1), None));
+    assert!(!valid_automation_date_range(None, Some(1)));
 }
 
 fn parse_automation_schedule(value: &str) -> Option<(&'static str, serde_json::Value)> {

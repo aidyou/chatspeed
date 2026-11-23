@@ -3271,10 +3271,7 @@ impl Observer {
         #[cfg(feature = "chat-hub")]
         {
             self.chat_hub_proxy = chat_hub::proxy_from_config(config);
-            let logo_proxy = self
-                .chat_hub_proxy
-                .as_ref()
-                .and_then(chat_hub::ProxySettings::http_url);
+            let logo_proxy = chat_hub::logo_proxy_from_config(config);
             if self.chat_hub_logo_proxy != logo_proxy {
                 self.chat_hub_logo_proxy = logo_proxy.clone();
                 cx.set_http_client(std::sync::Arc::new(
@@ -5643,7 +5640,7 @@ impl Render for Observer {
                                 .h_full()
                                 .min_w_0()
                                 .min_h_0()
-                                .child(if let Some(panel) = ui::file_editor::panel(self, cx) {
+                                .when(!ui::terminal::expanded(self), |column| column.child(if let Some(panel) = ui::file_editor::panel(self, cx) {
                                     panel
                                 } else {
                                     v_flex()
@@ -5657,8 +5654,8 @@ impl Render for Observer {
                                         )
                                         .child(ui::composer::composer(self, cx))
                                         .into_any_element()
-                                })
-                                .children(ui::terminal::render(self, cx)),
+                                }))
+                                .children(ui::terminal::render(self, window, cx)),
                         )
                         .children(hub_dock),
                 )

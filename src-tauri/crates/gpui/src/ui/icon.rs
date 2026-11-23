@@ -22,6 +22,8 @@ impl AssetSource for IconAssets {
             "icons/reasoning-lightbulb.svg" => Ok(Some(Cow::Borrowed(REASONING_BULB))),
             "icons/vue-loading.svg" => Ok(Some(Cow::Borrowed(LOADING))),
             "icons/chatspeed-pin.svg" => Ok(Some(Cow::Borrowed(PIN))),
+            "icons/disclosure.svg" => Ok(Some(Cow::Borrowed(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" fill="none" stroke="black" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"#))),
+            "icons/disclosure-double.svg" => Ok(Some(Cow::Borrowed(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4 4l4 4 4-4M4 8l4 4 4-4" fill="none" stroke="black" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"#))),
             _ => gpui_kit::assets::Assets.load(path),
         }
     }
@@ -44,7 +46,7 @@ mod tests {
 
     #[test]
     fn animated_icons_are_available_with_the_default_assets() {
-        for path in ["icons/reasoning-lightbulb.svg", "icons/vue-loading.svg"] {
+        for path in ["icons/reasoning-lightbulb.svg", "icons/vue-loading.svg", "icons/disclosure.svg", "icons/disclosure-double.svg"] {
             let svg = IconAssets.load(path).unwrap().unwrap();
             assert!(svg.starts_with(b"<svg"), "{path}");
         }
@@ -167,6 +169,8 @@ impl RenderOnce for Icon {
         let animated_path = match self.name {
             "reasoning" if self.spin.is_some() => Some("icons/reasoning-lightbulb.svg"),
             "loading" if self.spin.is_some() => Some("icons/vue-loading.svg"),
+            "caret-right" => Some("icons/disclosure.svg"),
+            "double-arrow-down" => Some("icons/disclosure-double.svg"),
             "pin" if self.turns != 0. => Some("icons/chatspeed-pin.svg"),
             _ => None,
         };

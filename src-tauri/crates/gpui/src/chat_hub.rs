@@ -3,7 +3,14 @@
 //! Vue keeps one page per chat site and shows the active one in a shared right
 //! dock; the GPUI window does the same with one wry child view per tab.
 
-use std::{cell::Cell, fs::File, fs::OpenOptions, io, path::{Path, PathBuf}, rc::Rc};
+use std::{
+    cell::Cell,
+    fs::File,
+    fs::OpenOptions,
+    io,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use gpui_kit::{canvas, div, prelude::*, AnyElement, Context, Window};
 #[cfg(target_os = "linux")]
@@ -58,20 +65,31 @@ pub(crate) struct ProxySettings {
     socks: bool,
 }
 
-impl ProxySettings {
-    /// The HTTP proxy URL the remote image loader can apply. Reqwest in this
-    /// build has no SOCKS connector, so only HTTP proxies are exposed.
-    pub(crate) fn http_url(&self) -> Option<String> {
-        if self.socks {
-            return None;
-        }
-        let host = if self.host.contains(':') {
-            format!("[{}]", self.host)
-        } else {
-            self.host.clone()
-        };
-        Some(format!("http://{host}:{}", self.port))
+/// Image requests can use authenticated proxies, unlike the native child view.
+pub(crate) fn logo_proxy_from_config(config: &serde_json::Value) -> Option<String> {
+    if config["proxy_type"].as_str()? != "http" {
+        return None;
     }
+    let server = config["proxy_server"].as_str()?.trim();
+    if server.is_empty() {
+        return None;
+    }
+    let mut url = if server.contains("://") {
+        reqwest::Url::parse(server).ok()?
+    } else {
+        reqwest::Url::parse(&format!("http://{server}")).ok()?
+    };
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return None;
+    }
+    if let Some(username) = config["proxy_username"]
+        .as_str()
+        .filter(|user| !user.is_empty())
+    {
+        url.set_username(username).ok()?;
+        url.set_password(config["proxy_password"].as_str()).ok()?;
+    }
+    Some(url.into())
 }
 
 /// Reads the network settings the runtime published for its webviews.
@@ -151,11 +169,16 @@ fn profile_root() -> io::Result<PathBuf> {
     #[cfg(target_os = "macos")]
     let base = std::env::home_dir().map(|home| home.join("Library/Application Support"));
     #[cfg(target_os = "linux")]
-    let base = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from)
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .or_else(|| std::env::home_dir().map(|home| home.join(".local/share")));
-    let base = base.filter(|path| path.is_absolute())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "ChatHub profile directory unavailable"))?;
+    let base = base.filter(|path| path.is_absolute()).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "ChatHub profile directory unavailable",
+        )
+    })?;
     Ok(chatspeed_runtime_client::production_app_data_dir(&base).join("gpui-chat-hub-v1"))
 }
 
@@ -173,7 +196,10 @@ fn lock_profile(root: &Path) -> io::Result<File> {
     dir.create(root)?;
     let lock = options.open(root.join("profile.lock"))?;
     lock.try_lock().map_err(|error| match error {
-        std::fs::TryLockError::WouldBlock => io::Error::new(io::ErrorKind::WouldBlock, "ChatHub profile is already in use"),
+        std::fs::TryLockError::WouldBlock => io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "ChatHub profile is already in use",
+        ),
         std::fs::TryLockError::Error(error) => error,
     })?;
     Ok(lock)
@@ -313,8 +339,8 @@ impl Dock {
                 // geometry: a page that was only hidden otherwise keeps whatever
                 // size the platform restored, which showed up as a tiny view.
                 page.bounds.set(None);
+                let _ = page.view.set_visible(false);
             }
-            let _ = page.view.set_visible(shown);
         }
     }
 
@@ -331,6 +357,12 @@ impl Dock {
         let builder = WebViewBuilder::new_with_web_context(&mut self.context);
         let builder = builder
             .with_visible(false)
+            // Wry briefly maps the GTK host even for hidden children. Keep that
+            // initial surface outside the parent until the dock lays it out.
+            .with_bounds(Rect {
+                position: wry::dpi::LogicalPosition::new(-1024, -1024).into(),
+                size: wry::dpi::LogicalSize::new(1, 1).into(),
+            })
             .with_url(url)
             .with_background_color(self.background)
             .with_navigation_handler(|url| web_url(&url))
@@ -352,7 +384,8 @@ impl Dock {
         #[cfg(target_os = "linux")]
         {
             use raw_window_handle::{RawWindowHandle, WindowHandle, XlibWindowHandle};
-            let handle = HasWindowHandle::window_handle(window).map_err(|error| error.to_string())?;
+            let handle =
+                HasWindowHandle::window_handle(window).map_err(|error| error.to_string())?;
             let raw = match handle.as_raw() {
                 RawWindowHandle::Xlib(xlib) => xlib,
                 RawWindowHandle::Xcb(xcb) => XlibWindowHandle::new(xcb.window.get().into()),
@@ -360,17 +393,23 @@ impl Dock {
             };
             struct Parent<'a>(WindowHandle<'a>);
             impl HasWindowHandle for Parent<'_> {
-                fn window_handle(&self) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
+                fn window_handle(
+                    &self,
+                ) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
                     Ok(self.0)
                 }
             }
             // The original borrowed handle keeps the same X11 window alive during creation.
             let parent = Parent(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Xlib(raw)) });
-            builder.build_as_child(&parent).map_err(|error| error.to_string())
+            builder
+                .build_as_child(&parent)
+                .map_err(|error| error.to_string())
         }
         #[cfg(not(target_os = "linux"))]
         {
-            builder.build_as_child(window).map_err(|error| error.to_string())
+            builder
+                .build_as_child(window)
+                .map_err(|error| error.to_string())
         }
     }
 
@@ -461,8 +500,13 @@ impl Dock {
                 let Some(view) = view.upgrade() else {
                     return;
                 };
-                let next = [bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height]
-                    .map(f32::from);
+                let next = [
+                    bounds.origin.x,
+                    bounds.origin.y,
+                    bounds.size.width,
+                    bounds.size.height,
+                ]
+                .map(f32::from);
                 #[cfg(target_os = "linux")]
                 let (next, rect) = {
                     use wry::dpi::{PhysicalPosition, PhysicalSize};
@@ -509,6 +553,24 @@ impl Dock {
     }
 }
 
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn logo_proxy_preserves_http_scheme_and_credentials() {
+    let config = serde_json::json!({
+        "proxy_type": "http",
+        "proxy_server": "https://proxy.example:8443",
+        "proxy_username": "user@example",
+        "proxy_password": "test password"
+    });
+    let proxy = logo_proxy_from_config(&config).expect("configured logo proxy");
+    assert_eq!(
+        proxy,
+        "https://user%40example:test%20password@proxy.example:8443/"
+    );
+    assert!(proxy_from_config(&config).is_none());
+    assert!(logo_proxy_from_config(&serde_json::json!({"proxy_type": "none"})).is_none());
+}
+
 fn web_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
 }
@@ -518,7 +580,10 @@ fn web_url(url: &str) -> bool {
 fn chat_hub_profile_lock_releases_on_close() {
     let dir = tempfile::tempdir().unwrap();
     let lock = lock_profile(dir.path()).unwrap();
-    assert_eq!(lock_profile(dir.path()).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+    assert_eq!(
+        lock_profile(dir.path()).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
     drop(lock);
     assert!(lock_profile(dir.path()).is_ok());
 }
@@ -528,7 +593,12 @@ fn chat_hub_profile_lock_releases_on_close() {
 fn chat_hub_rejects_non_web_navigation() {
     assert!(web_url("https://example.com/"));
     assert!(web_url("http://localhost:8080/"));
-    for url in ["file:///tmp/test", "javascript:alert(1)", "data:text/html,test", "about:blank"] {
+    for url in [
+        "file:///tmp/test",
+        "javascript:alert(1)",
+        "data:text/html,test",
+        "about:blank",
+    ] {
         assert!(!web_url(url));
     }
 }
