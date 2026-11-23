@@ -188,7 +188,7 @@ impl RenderOnce for Icon {
                 return icon
                     .with_animation(
                         id,
-                        Animation::new(Duration::from_secs(seconds)).repeat(),
+                        Animation::new(Duration::from_secs(seconds)).repeat_synced(),
                         move |icon, phase| {
                             icon.with_transformation(Transformation::rotate(percentage(
                                 curve.phase(phase),

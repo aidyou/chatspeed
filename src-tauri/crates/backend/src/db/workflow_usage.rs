@@ -529,7 +529,7 @@ mod tests {
             .expect("failed to summarize unpriced task");
         assert!(unpriced.is_partial);
         assert_eq!(unpriced.self_usage.total_tokens, 15);
-        assert_eq!(unpriced.self_usage.estimated_cost, None);
+        assert_eq!(unpriced.self_usage.estimated_cost, Some(0.0));
         assert_eq!(unpriced.self_usage.unpriced_tokens, 15);
     }
 

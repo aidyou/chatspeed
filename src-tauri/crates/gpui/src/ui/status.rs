@@ -810,8 +810,12 @@ fn child_rows(observer: &crate::Observer) -> (Vec<crate::presentation::SubAgentV
     for row in &observer.rows {
         if let Row::SubAgent(card) = row {
             if let Some(id) = card.task_id.clone() {
-                if seen.insert(id) {
-                    cards.push((**card).clone());
+                if seen.insert(id.clone()) {
+                    let mut card = (**card).clone();
+                    if let Some(progress) = observer.model.sub_agent_progress.get(&id) {
+                        crate::presentation::apply_child_context(&mut card, progress);
+                    }
+                    cards.push(card);
                 }
             }
         }

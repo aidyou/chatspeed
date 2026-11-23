@@ -4517,13 +4517,7 @@ impl Observer {
                     card.tools = format!("{count} tools");
                 }
             }
-            if card.status.is_running() || card.context == "--" {
-                if let Some((current, max)) = progress["current_context_tokens"].as_u64()
-                    .zip(progress["max_context_tokens"].as_u64().filter(|max| *max > 0))
-                {
-                    card.context = format!("{:.0}% ctx", (100.0 * current as f64 / max as f64).min(100.0));
-                }
-            }
+            presentation::apply_child_context(&mut card, progress);
         }
         let key = Self::sub_agent_expansion_key(&card);
         let open = self.expanded.contains(&key);
@@ -5284,11 +5278,15 @@ impl Render for Observer {
         // task runs after this frame, so the native view never appears mid-render.
         // Releasing the last page also gives the window its width back.
         #[cfg(feature = "chat-hub")]
-        if self.chat_hub.as_ref().is_some_and(|dock| dock.is_empty()) {
-            if let Some(dock) = self.chat_hub.take() {
-                // Resizing mid-frame would restart the layout being built.
-                window.on_next_frame(move |window, _| dock.close(window));
-            }
+        if self.chat_hub.as_ref().is_some_and(|dock| dock.needs_release()) {
+            let owner = cx.entity().downgrade();
+            window.on_next_frame(move |window, cx| {
+                let _ = owner.update(cx, |this, _| {
+                    if let Some(dock) = this.chat_hub.as_mut().filter(|dock| dock.is_empty()) {
+                        dock.release(window);
+                    }
+                });
+            });
         }
         #[cfg(feature = "chat-hub")]
         if self.pending_chat_hub.is_some() {
@@ -5522,7 +5520,10 @@ impl Render for Observer {
                         .border_1()
                         .border_color(border)
                         .bg(surface)
-                        .child(Icon::new("loading").size(14.).color(accent()))
+                        .child(Icon::new("loading").size(14.).color(accent()).spin(
+                            "compression-loading",
+                            ui::Spin::Accelerate,
+                        ))
                         .child(
                             div()
                                 .text_size(px(12.))

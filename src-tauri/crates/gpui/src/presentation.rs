@@ -1708,6 +1708,17 @@ fn collect_sub_agent_completions(messages: &[Message]) -> BTreeMap<String, Value
     completions
 }
 
+pub fn apply_child_context(card: &mut SubAgentView, progress: &Value) {
+    if card.status.is_running() || card.context == "--" {
+        let current = progress["current_context_tokens"].as_u64();
+        let max = progress["max_context_tokens"].as_u64().filter(|max| *max > 0);
+        if let Some((current, max)) = current.zip(max) {
+            let percent = (100.0 * current as f64 / max as f64).min(100.0);
+            card.context = format!("{percent:.0}% ctx");
+        }
+    }
+}
+
 pub fn live_child_card(id: &str, progress: &Value) -> Option<SubAgentView> {
     let status = progress["workflow_state"].as_str().unwrap_or("running");
     let task = progress["task"].as_str().filter(|task| !task.trim().is_empty())?;
@@ -1728,17 +1739,19 @@ pub fn live_child_card(id: &str, progress: &Value) -> Option<SubAgentView> {
     if let Some(count) = progress["tool_calls_count"].as_u64() {
         card.tools = format!("{count} tools");
     }
+    apply_child_context(&mut card, progress);
     Some(card)
 }
 
 #[cfg(test)]
 #[test]
 fn live_child_card_shows_tool_count_without_a_completion_message() {
-    let progress = serde_json::json!({"task":"Inspect files", "agent_name":"Explorer", "workflow_state":"executing", "tool_calls_count":3});
+    let progress = serde_json::json!({"task":"Inspect files", "agent_name":"Explorer", "workflow_state":"executing", "tool_calls_count":3, "current_context_tokens":50, "max_context_tokens":200});
     let card = live_child_card("child-1", &progress).expect("live card");
     assert_eq!(card.task_id.as_deref(), Some("child-1"));
     assert!(card.status.is_running());
     assert_eq!(card.tools, "3 tools");
+    assert_eq!(card.context, "25% ctx");
 }
 
 fn sub_agent_view(

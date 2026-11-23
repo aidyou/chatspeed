@@ -478,8 +478,8 @@ impl Dock {
         }
     }
 
-    pub(crate) fn close(mut self, window: &mut Window) {
-        self.release(window);
+    pub(crate) fn needs_release(&self) -> bool {
+        self.is_empty() && self.growth.is_some()
     }
 
     /// The active page's canvas; the other pages stay hidden until selected.

@@ -7594,6 +7594,22 @@ impl WorkflowExecutor {
             return Ok(());
         }
 
+        // Replayed completions can omit metrics carried by the child's terminal snapshot.
+        let mut result = result.clone();
+        if result.is_object()
+            && (result["current_context_tokens"].as_u64().is_none()
+                || result["max_context_tokens"].as_u64().unwrap_or(0) == 0)
+        {
+            if let Ok(Some(snapshot)) = self.context.main_store.get_execution_context(sub_agent_id) {
+                if let Some((current, max)) = snapshot.current_context_tokens.zip(
+                    snapshot.max_context_tokens.filter(|max| *max > 0),
+                ) {
+                    result["current_context_tokens"] = json!(current);
+                    result["max_context_tokens"] = json!(max);
+                }
+            }
+        }
+
         let summary = resolution
             .summary
             .as_deref()

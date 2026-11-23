@@ -133,16 +133,8 @@ impl UsageTotals {
             .filter(|item| item.pricing_status != "priced")
             .map(|item| item.input_tokens.max(0) + item.output_tokens.max(0))
             .sum();
-        let estimated_cost = if unpriced_tokens == 0 {
-            Some(
-                breakdowns
-                    .iter()
-                    .filter_map(|item| item.estimated_cost)
-                    .sum(),
-            )
-        } else {
-            None
-        };
+        // Missing prices contribute zero without discarding costs from priced requests.
+        let estimated_cost = Some(breakdowns.iter().filter_map(|item| item.estimated_cost).sum());
         let effective_cost_per_million = estimated_cost
             .filter(|_| total_tokens > 0)
             .map(|cost| cost / total_tokens as f64 * 1_000_000.0);
