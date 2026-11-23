@@ -820,9 +820,9 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                 .hover(move |style| style.bg(hover))
                 .child(
                     Icon::new(if panel.maximized {
-                        "fullscreen-off"
-                    } else {
                         "fullscreen"
+                    } else {
+                        "fullscreen-off"
                     })
                     .size(14.)
                     .color(secondary),

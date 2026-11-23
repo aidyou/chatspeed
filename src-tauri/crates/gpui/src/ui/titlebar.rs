@@ -158,7 +158,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
     window.open_dialog(cx, move |dialog, window, cx| {
         use crate::ui::menu_popover::MenuPopover;
         use gpui_kit::component::popover::PopoverState;
-        use gpui_kit::component::{switch::Switch, Sizable};
+        use gpui_kit::component::{switch::Switch, Disableable, Sizable};
         let agents = agents.clone();
         let selected_agent = selected_agent.clone();
         let selected_agent_label = selected_agent_label.clone();
@@ -198,7 +198,9 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         let submit_shell_state = shell_state.clone();
         let submit_effective_range = effective_range.clone();
         let submit_once_date_state = once_date_state.clone();
-        let form_button = |id: SharedString| Button::new(id).h(px(32.)).py(px(0.)).line_height(px(16.));
+        let form_button = |id: SharedString| {
+            Button::new(id).h(px(32.)).pt(px(0.)).pb(px(2.)).line_height(px(16.))
+        };
         let submit = form_button("create-automation-submit".into())
             .primary()
             .label(t!("create_automation").to_string())
@@ -430,10 +432,11 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 .child(field(
                     format!("*{}", t!("automation_task_title")),
                     Input::new(&title)
-                        .xsmall()
-                        .py(px(4.))
+                        .w_full()
+                        .h(px(36.))
+                        .min_h(px(36.))
+                        .py(px(6.))
                         .px(px(10.))
-                        .h(px(32.))
                         .bg(crate::ui::field_bg(cx))
                         .into_any_element(),
                 ))
@@ -448,7 +451,8 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         t!("automation_prompt")
                     ),
                     Textarea::new(&prompt)
-                        .small()
+                        .w_full()
+                        .min_h(px(120.))
                         .bg(crate::ui::field_bg(cx))
                         .h(px(120.))
                         .into_any_element(),
@@ -476,8 +480,10 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                     div().flex_1().min_w_0().child(
                                         Input::new(&prompt_file)
                                             .readonly(true)
-                                            .xsmall()
+                                            .w_full()
+                                            .py(px(5.))
                                             .px(px(10.))
+                                            .min_h(px(32.))
                                             .h(px(32.))
                                             .bg(crate::ui::field_bg(cx))
                                             .when(
@@ -772,30 +778,33 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                 ))
                 .child(field(
                     format!("*{}", t!("automation_frequency")),
-                    h_flex()
-                        .gap(px(4.))
-                        .children([0usize, 1, 2].into_iter().map(|index| {
+                    crate::ui::tabs::capsule_segments(
+                        "automation-frequency",
+                        vec![
+                            ("daily", t!("automation_frequency_daily").to_string()),
+                            ("interval", t!("automation_frequency_interval").to_string()),
+                            ("once", t!("automation_frequency_once").to_string()),
+                        ],
+                        ["daily", "interval", "once"][frequency_state.get()],
+                        {
                             let frequency_state = frequency_state.clone();
                             let continuous_state = continuous_state.clone();
-                            let text = match index {
-                                0 => t!("automation_frequency_daily").to_string(),
-                                1 => t!("automation_frequency_interval").to_string(),
-                                _ => t!("automation_frequency_once").to_string(),
-                            };
-                            form_button(SharedString::from(format!(
-                                "automation-frequency-{index}"
-                            )))
-                            .label(text)
-                            .when(frequency_state.get() == index, |button| button.primary())
-                            .on_click(move |_, window, _| {
+                            move |value, window, _| {
+                                let index = match value {
+                                    "daily" => 0,
+                                    "interval" => 1,
+                                    "once" => 2,
+                                    _ => return,
+                                };
                                 frequency_state.set(index);
                                 if index == 2 {
                                     continuous_state.set(false);
                                 }
                                 window.refresh();
-                            })
-                        }))
-                        .into_any_element(),
+                            }
+                        },
+                        cx,
+                    ),
                 ))
                 .child(match frequency_state.get() {
                     0 => {
@@ -837,7 +846,10 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                         form_button(SharedString::from(format!(
                                             "automation-time-remove-{index}"
                                         )))
-                                        .label("−".to_string())
+                                        .w(px(32.))
+                                        .px(px(0.))
+                                        .disabled(times.borrow().len() <= 1)
+                                        .child(Icon::new("trash").size(14.))
                                         .on_click(move |_, window, _| {
                                             let mut times = remove_times.borrow_mut();
                                             if times.len() > 1 {
@@ -1052,7 +1064,8 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                         .gap(px(6.))
                         .child(
                             Textarea::new(&shell)
-                                .small()
+                                .w_full()
+                                .min_h(px(72.))
                                 .bg(crate::ui::field_bg(cx))
                                 .h(px(72.)),
                         )

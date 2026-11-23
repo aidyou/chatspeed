@@ -257,49 +257,8 @@ pub(crate) fn param_label(label: String, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// A capsule segmented control: one active option on a rounded track.
-pub(crate) fn capsule_segments(
-    id_prefix: &str,
-    options: Vec<(&'static str, String)>,
-    selected: &str,
-    on_select: impl Fn(&'static str, &mut Window, &mut App) + 'static,
-    cx: &App,
-) -> AnyElement {
-    let primary = cx.theme().primary;
-    let muted = cx.theme().muted_foreground;
-    let foreground = cx.theme().primary_foreground;
-    let on_select = std::rc::Rc::new(on_select);
-    let mut track = h_flex()
-        .id(SharedString::from(id_prefix.to_owned()))
-        .flex_none()
-        .items_center()
-        .gap(px(2.))
-        .p(px(2.))
-        .rounded_full()
-        .bg(cx.theme().muted);
-    for (value, label) in options {
-        let active = selected == value;
-        let callback = on_select.clone();
-        track = track.child(
-            div()
-                .id(SharedString::from(format!("{id_prefix}-{value}")))
-                .flex_none()
-                .px(px(10.))
-                .py(px(2.))
-                .rounded_full()
-                .cursor_pointer()
-                .text_size(px(11.))
-                .text_color(if active { foreground } else { muted })
-                .when(active, |segment| segment.bg(primary))
-                .when(!active, |segment| {
-                    segment.hover(|style| style.bg(cx.theme().background))
-                })
-                .child(label)
-                .on_click(move |_, window, cx| callback(value, window, cx)),
-        );
-    }
-    track.into_any_element()
-}
+pub(crate) use crate::ui::tabs::capsule_segments;
+
 pub(crate) fn field_step(
     id: impl Into<SharedString>,
     label: &'static str,
@@ -657,7 +616,9 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
-        .p_3();
+        .px(px(crate::ui::tabs::SPACE_16))
+        .pt(px(crate::ui::tabs::SPACE_16))
+        .pb_3();
     match tab {
         0 => {
             if ids.is_empty() {

@@ -569,6 +569,18 @@ pub(super) fn model_group_label(label: String, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+fn action_capsule(id: &'static str) -> Stateful<Div> {
+    div().id(id)
+        .relative()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .px(px(crate::ui::tabs::SPACE_8))
+        .py(px(crate::ui::tabs::SPACE_4))
+        .rounded_full()
+}
+
 /// Vue's `+` quick actions: the compress command, the runtime switches and the
 /// approval level, grouped under the same section titles the web menu uses.
 fn quick_actions(
@@ -588,16 +600,7 @@ fn quick_actions(
         + usize::from(auto_compress);
     let accent = cx.theme().primary;
     // Vue's `icon-btn`: 2x4 padding with a hover surface, no fixed box.
-    let trigger_el = div()
-        .id("composer-quick-actions")
-        .relative()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .px(px(8.))
-        .py(px(4.))
-        .rounded_full()
+    let trigger_el = action_capsule("composer-quick-actions")
         .bg(cx.theme().background)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
@@ -1004,16 +1007,7 @@ fn sandbox_selector(
         "sandbox_only" => "S",
         _ => "H",
     };
-    let trigger_el = div()
-        .id("composer-sandbox")
-        .relative()
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .px(px(8.))
-        .py(px(4.))
-        .rounded_full()
+    let trigger_el = action_capsule("composer-sandbox")
         .bg(cx.theme().background)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
@@ -1212,15 +1206,7 @@ fn clear_context(
     let enabled = observer.can_clear_context() && !observer.clear_pending && !observer.options.demo;
     let color = if enabled { muted } else { muted.opacity(0.4) };
     let surface = cx.theme().background;
-    div()
-        .id("composer-clear-context")
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .px(px(8.))
-        .py(px(4.))
-        .rounded_full()
+    action_capsule("composer-clear-context")
         .bg(surface)
         .text_color(color)
         .when(enabled, |view| {
