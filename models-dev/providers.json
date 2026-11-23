@@ -276,7 +276,7 @@
       "documentationUrl": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
       "id": "amazon-bedrock",
       "logo": "https://models.dev/logos/amazon-bedrock.svg",
-      "modelCount": 214,
+      "modelCount": 215,
       "name": "Amazon Bedrock",
       "responses": true
     },
@@ -563,7 +563,7 @@
       "documentationUrl": "https://llm.chutes.ai/v1/models",
       "id": "chutes",
       "logo": "https://models.dev/logos/chutes.svg",
-      "modelCount": 19,
+      "modelCount": 20,
       "name": "Chutes",
       "protocol": "openai",
       "responses": false
@@ -655,6 +655,16 @@
       "logo": "https://models.dev/logos/commandcode.svg",
       "modelCount": 93,
       "name": "CommandCode",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
+      "api": "https://api.concentrate.ai/v1",
+      "documentationUrl": "https://concentrate.ai/docs",
+      "id": "concentrate",
+      "logo": "https://models.dev/logos/concentrate.svg",
+      "modelCount": 164,
+      "name": "Concentrate",
       "protocol": "openai",
       "responses": false
     },
@@ -822,7 +832,7 @@
       "documentationUrl": "https://docs.edenai.co",
       "id": "edenai",
       "logo": "https://models.dev/logos/edenai.svg",
-      "modelCount": 388,
+      "modelCount": 390,
       "name": "Eden AI",
       "protocol": "openai",
       "responses": false
@@ -1381,7 +1391,7 @@
       "documentationUrl": "https://kenari.id/docs",
       "id": "kenari",
       "logo": "https://models.dev/logos/kenari.svg",
-      "modelCount": 83,
+      "modelCount": 82,
       "name": "Kenari",
       "protocol": "openai",
       "responses": false
@@ -1391,7 +1401,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 465,
+      "modelCount": 466,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1521,7 +1531,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 507,
+      "modelCount": 508,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1753,7 +1763,7 @@
       "documentationUrl": "https://modal.com/docs/guide/endpoints",
       "id": "modal",
       "logo": "https://models.dev/logos/modal.svg",
-      "modelCount": 8,
+      "modelCount": 10,
       "name": "Modal",
       "protocol": "openai",
       "responses": false
@@ -1875,7 +1885,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 613,
+      "modelCount": 614,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -2038,7 +2048,7 @@
       "documentationUrl": "https://docs.ollama.com/cloud",
       "id": "ollama-cloud",
       "logo": "https://models.dev/logos/ollama-cloud.svg",
-      "modelCount": 27,
+      "modelCount": 28,
       "name": "Ollama Cloud",
       "protocol": "openai",
       "responses": false
@@ -2059,7 +2069,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/models/",
       "id": "opencode",
       "logo": "https://models.dev/logos/opencode.svg",
-      "modelCount": 144,
+      "modelCount": 145,
       "name": "OpenCode",
       "protocol": "openai",
       "responses": false
@@ -2069,7 +2079,7 @@
       "documentationUrl": "https://opencode.ai/v2/docs/console/go/",
       "id": "opencode-go",
       "logo": "https://models.dev/logos/opencode-go.svg",
-      "modelCount": 42,
+      "modelCount": 43,
       "name": "OpenCode Go",
       "protocol": "openai",
       "responses": false
@@ -2090,7 +2100,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 379,
+      "modelCount": 380,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2248,6 +2258,16 @@
       "responses": false
     },
     {
+      "api": "https://api.primalabs.ai/v1",
+      "documentationUrl": "https://docs.primalabs.ai/inference/models",
+      "id": "primalabs",
+      "logo": "https://models.dev/logos/primalabs.svg",
+      "modelCount": 6,
+      "name": "PrimaLabs",
+      "protocol": "openai",
+      "responses": false
+    },
+    {
       "api": "https://api.pinference.ai/api/v1",
       "documentationUrl": "https://docs.primeintellect.ai/inference/overview",
       "id": "prime",
@@ -2351,7 +2371,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 182,
+      "modelCount": 179,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -2454,12 +2474,12 @@
       "responses": false
     },
     {
-      "api": "https://api.sarvam.ai/v1",
+      "api": "https://api.sarvam.ai/v2",
       "description": "Sarvam AI builds India-centered open reasoning models, with multilingual strengths across Indian languages, coding, and enterprise use.",
-      "documentationUrl": "https://docs.sarvam.ai/api-reference-docs/getting-started/models",
+      "documentationUrl": "https://docs.sarvam.ai/api/token-factory/models",
       "id": "sarvam",
       "logo": "https://models.dev/logos/sarvam.svg",
-      "modelCount": 2,
+      "modelCount": 7,
       "name": "Sarvam AI",
       "protocol": "openai",
       "responses": false
@@ -2577,10 +2597,10 @@
     },
     {
       "api": "https://api.steadyrouter.com/v1",
-      "documentationUrl": "https://www.steadyrouter.com/site/docs.html",
+      "documentationUrl": "https://www.steadyrouter.com/site/docs.html?utm_source=models.dev",
       "id": "steadyrouter",
       "logo": "https://models.dev/logos/steadyrouter.svg",
-      "modelCount": 21,
+      "modelCount": 20,
       "name": "SteadyRouter",
       "protocol": "openai",
       "responses": false
@@ -3213,7 +3233,7 @@
       "documentationUrl": "https://docs.z.ai/devpack/overview",
       "id": "zai-coding-plan",
       "logo": "https://models.dev/logos/zai-coding-plan.svg",
-      "modelCount": 7,
+      "modelCount": 8,
       "name": "Z.AI Coding Plan",
       "protocol": "openai",
       "responses": false
@@ -3274,7 +3294,7 @@
       "documentationUrl": "https://docs.bigmodel.cn/cn/coding-plan/overview",
       "id": "zhipuai-coding-plan",
       "logo": "https://models.dev/logos/zhipuai-coding-plan.svg",
-      "modelCount": 4,
+      "modelCount": 5,
       "name": "Zhipu AI Coding Plan",
       "protocol": "openai",
       "responses": false
@@ -3291,9 +3311,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "a47f47d0bf51393d1faef452f43bccd1a7cc71bc1fa89ab4cf82023cdac58174",
-    "generatedAt": "2026-11-22T11:28:13Z",
+    "catalogSha256": "c9265b74b7440721151d3ede72f3ca6cc6d03db29768f1528cc6ac1856c3566c",
+    "generatedAt": "2026-11-23T12:48:43Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "482544f6541fd88f0506b713fb85712ea6b8e99a"
+    "revision": "ee02bac928a89c0bba4e0c2f4174f4aab2e1b025"
   }
 }
