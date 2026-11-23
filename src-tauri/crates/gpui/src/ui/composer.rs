@@ -18,6 +18,7 @@ use crate::Observer;
 
 pub(crate) mod footer;
 pub(crate) mod message_queue;
+pub(crate) mod model_config;
 pub mod panels;
 pub mod suggestions;
 

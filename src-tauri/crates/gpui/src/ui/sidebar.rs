@@ -16,7 +16,9 @@ use rust_i18n::t;
 
 use crate::ui::trigger;
 use crate::ui::Icon;
-use crate::ui::{surfaces, Surfaces, RAIL_WIDTH, SIDEBAR_COLLAPSED_WIDTH};
+use crate::ui::{
+    surfaces, tip, tip_session, Surfaces, RAIL_WIDTH, SIDEBAR_COLLAPSED_WIDTH, TOOLTIP_DELAY,
+};
 use crate::{accent, danger, info, success, violet, warning, Observer};
 use chatspeed_gpui::types::{root_name, Session};
 
@@ -182,6 +184,7 @@ fn rail(
         .child(rail_tab_button(
             "rail-tasks",
             "skill-plan3",
+            t!("tab_tasks").to_string(),
             observer.rail_tab == RailTab::Tasks,
             true,
             skin,
@@ -191,6 +194,7 @@ fn rail(
         .child(rail_tab_button(
             "rail-automation",
             "automation",
+            t!("tab_automation").to_string(),
             observer.rail_tab == RailTab::Automation,
             true,
             skin,
@@ -205,6 +209,7 @@ fn rail(
                 .child(rail_action(
                     "rail-plugin",
                     "plugin",
+                    t!("plugin_panel").to_string(),
                     skin,
                     cx,
                     |this, _, cx| this.not_implemented(t!("plugin_panel"), cx),
@@ -215,6 +220,7 @@ fn rail(
                 .child(rail_action(
                     "rail-terminal",
                     "bash",
+                    t!("terminal").to_string(),
                     skin,
                     cx,
                     |this, _, cx| super::terminal::toggle(this, cx),
@@ -228,6 +234,7 @@ fn rail(
 fn rail_tab_button(
     id: &'static str,
     icon: &'static str,
+    hint: String,
     active: bool,
     bar: bool,
     skin: &Surfaces,
@@ -269,12 +276,15 @@ fn rail_tab_button(
             )
         })
         .on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
+        .tooltip(tip(hint))
+        .tooltip_show_delay(TOOLTIP_DELAY)
         .into_any_element()
 }
 
 fn rail_action(
     id: &'static str,
     icon: &'static str,
+    hint: String,
     skin: &Surfaces,
     cx: &mut Context<Observer>,
     run: impl Fn(&mut Observer, &mut Window, &mut Context<Observer>) + 'static,
@@ -292,6 +302,8 @@ fn rail_action(
         .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(18.).color(cx.theme().muted_foreground))
         .on_click(cx.listener(move |this, _, window, cx| run(this, window, cx)))
+        .tooltip(tip(hint))
+        .tooltip_show_delay(TOOLTIP_DELAY)
         .into_any_element()
 }
 
@@ -898,6 +910,7 @@ fn compact(
                 .child(rail_tab_button(
                     "compact-tasks",
                     "skill-plan3",
+                    t!("tab_tasks").to_string(),
                     observer.rail_tab == RailTab::Tasks,
                     false,
                     skin,
@@ -907,6 +920,7 @@ fn compact(
                 .child(rail_tab_button(
                     "compact-automation",
                     "automation",
+                    t!("tab_automation").to_string(),
                     observer.rail_tab == RailTab::Automation,
                     false,
                     skin,
@@ -926,6 +940,7 @@ fn compact(
                 .child(rail_action(
                     "compact-plugin",
                     "plugin",
+                    t!("plugin_panel").to_string(),
                     skin,
                     cx,
                     |this, _, cx| this.not_implemented(t!("plugin_panel"), cx),
@@ -936,6 +951,7 @@ fn compact(
                 .child(compact_entry(
                     "compact-terminal",
                     "bash",
+                    t!("terminal").to_string(),
                     48.,
                     skin,
                     cx,
@@ -950,6 +966,7 @@ fn compact(
 fn compact_entry(
     id: &'static str,
     icon: &'static str,
+    hint: String,
     height: f32,
     skin: &Surfaces,
     cx: &mut Context<Observer>,
@@ -967,6 +984,8 @@ fn compact_entry(
         .hover(move |style| style.bg(hover))
         .child(Icon::new(icon).size(18.).color(cx.theme().muted_foreground))
         .on_click(cx.listener(move |this, _, window, cx| run(this, window, cx)))
+        .tooltip(tip(hint))
+        .tooltip_show_delay(TOOLTIP_DELAY)
         .into_any_element()
 }
 
@@ -1073,6 +1092,8 @@ fn compact_badge(
                     .bg(primary),
             )
         })
+        .tooltip(tip_session(heading(session), root_label(session)))
+        .tooltip_show_delay(TOOLTIP_DELAY)
         .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
         .into_any_element()
 }
@@ -1093,6 +1114,7 @@ fn chat_hub_rail_entry(
         rail_action(
             "rail-chathub",
             "connected",
+            t!("chat_hub").to_string(),
             skin,
             cx,
             super::titlebar::toggle_chat_hub,
@@ -1139,7 +1161,9 @@ fn chat_hub_entry(
                     primary
                 } else {
                     muted
-                })),
+                }))
+                .tooltip(tip(t!("chat_hub").to_string()))
+                .tooltip_show_delay(TOOLTIP_DELAY),
         ))
         .content(move |_, window, cx| {
             let popover = cx.entity();
@@ -1239,6 +1263,7 @@ fn chat_hub_entry(
 
     let mut entry = v_flex().flex_none().items_center().child(menu);
     if let Some(site) = active {
+        let hint = site.name.clone();
         entry = entry.child(
             div()
                 .id("chat-hub-toggle-site")
@@ -1251,6 +1276,8 @@ fn chat_hub_entry(
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover))
                 .child(hub_logo(&site, 20.))
+                .tooltip(tip(hint))
+                .tooltip_show_delay(TOOLTIP_DELAY)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.toggle_chat_hub_dock(window, cx);
                 })),
@@ -1268,11 +1295,13 @@ fn hub_logo(site: &crate::chat_hub::Site, size: f32) -> AnyElement {
         return hub_avatar(letter, size);
     }
     let fallback = letter.clone();
+    let loading = letter;
     gpui_kit::img(site.logo.as_str())
         .flex_none()
         .size(px(size))
         .rounded_full()
         .object_fit(ObjectFit::Contain)
+        .with_loading(move || hub_avatar(loading.clone(), size))
         .with_fallback(move || hub_avatar(fallback.clone(), size))
         .into_any_element()
 }

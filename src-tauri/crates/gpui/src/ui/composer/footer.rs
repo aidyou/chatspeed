@@ -137,12 +137,14 @@ fn pill(
     icon: Option<&'static str>,
     label: String,
     caret: bool,
+    enabled: bool,
     hover: Hsla,
     color: Hsla,
     bordered: bool,
     cx: &App,
 ) -> AnyElement {
     let primary = cx.theme().primary;
+    let background = cx.theme().background;
     h_flex()
         .id(id)
         .flex_none()
@@ -151,15 +153,23 @@ fn pill(
         .px(px(8.))
         .py(px(4.))
         .rounded(px(16.))
-        .cursor_pointer()
+        .when(enabled, |row| row.cursor_pointer())
+        .when(!enabled, |row| row.cursor_default())
         // Vue's agent pill and model trigger both sit on `--cs-bg-color`; the
         // theme background is the native token closest to that surface.
-        .bg(cx.theme().background)
+        .bg(background)
         .when(bordered, |row| {
             row.border_1()
                 .border_color(if color == primary { primary } else { cx.theme().border })
         })
-        .hover(move |style| style.bg(hover).text_color(primary))
+        .when(enabled, |row| {
+            row.hover(move |style| style.bg(hover).text_color(primary))
+        })
+        // A disabled pill keeps both its surface and its label color; without a
+        // hover style GPUI can retain the previous interactive hover state.
+        .when(!enabled, |row| {
+            row.hover(move |style| style.bg(background).text_color(color))
+        })
         // Vue's agent trigger inherits the footer's 14px size; the leading
         // icon keeps the 18px size its `cs` component uses.
         .text_size(px(14.))
@@ -255,26 +265,8 @@ fn agent_selector(
         .map(str::to_owned)
         .unwrap_or_else(|| t!("agent_placeholder").to_string());
     // Vue disables the selector while a session is live, or once the workflow
-    // has run without clearing its context.
-    let editable = observer.can_switch_agent();
-    let primary = cx.theme().primary;
-    let color = if editable { primary } else { muted.opacity(0.4) };
-    let trigger_el = pill(
-        "composer-agent",
-        Some("agent"),
-        label,
-        true,
-        hover,
-        color,
-        true,
-        cx,
-    );
-    let Some(session) = observer.selected.clone() else {
-        return trigger_el;
-    };
-    if !editable {
-        return trigger_el;
-    }
+    // has run without clearing its context. An empty choice list is equally
+    // non-interactive even when switching is otherwise allowed.
     let agents: Vec<(String, String, String)> = observer
         .agents
         .iter()
@@ -288,7 +280,25 @@ fn agent_selector(
             ))
         })
         .collect();
-    if agents.is_empty() {
+    let session = observer.selected.clone();
+    let editable = observer.can_switch_agent() && session.is_some() && !agents.is_empty();
+    let primary = cx.theme().primary;
+    let color = if editable { primary } else { muted.opacity(0.4) };
+    let trigger_el = pill(
+        "composer-agent",
+        Some("agent"),
+        label,
+        true,
+        editable,
+        hover,
+        color,
+        true,
+        cx,
+    );
+    let Some(session) = session else {
+        return trigger_el;
+    };
+    if !observer.can_switch_agent() || agents.is_empty() {
         return trigger_el;
     }
     let selected = current.clone();
@@ -485,7 +495,7 @@ fn model_selector(
     cx: &mut Context<Observer>,
 ) -> AnyElement {
     let label = observer.model_label();
-    let trigger_el = pill("composer-model", None, label, true, hover, muted, false, cx);
+    let trigger_el = pill("composer-model", None, label, true, true, hover, muted, false, cx);
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
@@ -1201,6 +1211,7 @@ fn clear_context(
 ) -> AnyElement {
     let enabled = observer.can_clear_context() && !observer.clear_pending && !observer.options.demo;
     let color = if enabled { muted } else { muted.opacity(0.4) };
+    let surface = cx.theme().background;
     div()
         .id("composer-clear-context")
         .flex_none()
@@ -1210,9 +1221,16 @@ fn clear_context(
         .px(px(8.))
         .py(px(4.))
         .rounded_full()
-        .bg(cx.theme().background)
+        .bg(surface)
+        .text_color(color)
         .when(enabled, |view| {
             view.cursor_pointer().hover(move |style| style.bg(hover))
+        })
+        // Keep the disabled surface and glyph color stable even if a hover was
+        // cached while the button was still enabled.
+        .when(!enabled, |view| {
+            view.cursor_default()
+                .hover(move |style| style.bg(surface).text_color(color))
         })
         .child(Icon::new("clear-context").size(13.).color(color))
         .when(enabled, |view| {

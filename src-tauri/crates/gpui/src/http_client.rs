@@ -60,12 +60,20 @@ pub struct ReqwestHttpClient {
 
 impl ReqwestHttpClient {
     pub fn new() -> Self {
+        Self::with_proxy(None)
+    }
+
+    /// Use the configured app proxy when one is available; otherwise fall back
+    /// to the environment proxy the window started with.
+    pub fn with_proxy(proxy: Option<Url>) -> Self {
         Self {
             user_agent: HeaderValue::from_static("chatspeed-gpui"),
-            proxy: std::env::var("HTTPS_PROXY")
-                .or_else(|_| std::env::var("https_proxy"))
-                .ok()
-                .and_then(|value| value.parse().ok()),
+            proxy: proxy.or_else(|| {
+                std::env::var("HTTPS_PROXY")
+                    .or_else(|_| std::env::var("https_proxy"))
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+            }),
         }
     }
 }
@@ -85,6 +93,7 @@ fn forward_request(
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     head: tokio::sync::oneshot::Sender<anyhow::Result<Response<AsyncBody>>>,
+    proxy: Option<Url>,
 ) -> anyhow::Result<()> {
     std::thread::Builder::new()
         .name("gpui-http-client".into())
@@ -105,10 +114,19 @@ fn forward_request(
                 // Tokio reactor. Build it inside this runtime: constructing it on
                 // the GPUI thread made the first web request panic with
                 // "there is no reactor running".
-                let client = match reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::limited(10))
-                    .build()
-                {
+                let mut builder =
+                    reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(10));
+                if let Some(proxy) = proxy.as_ref() {
+                    let proxy = match reqwest::Proxy::all(proxy.as_str()) {
+                        Ok(proxy) => proxy,
+                        Err(error) => {
+                            fail_head(&mut head, error.into());
+                            return;
+                        }
+                    };
+                    builder = builder.proxy(proxy);
+                }
+                let client = match builder.build() {
                     Ok(client) => client,
                     Err(error) => {
                         fail_head(&mut head, error.into());
@@ -210,6 +228,7 @@ impl HttpClient for ReqwestHttpClient {
         &self,
         request: Request<AsyncBody>,
     ) -> BoxFuture<'static, anyhow::Result<Response<AsyncBody>>> {
+        let proxy = self.proxy.clone();
         Box::pin(async move {
             use futures::AsyncReadExt;
             let (parts, mut body) = request.into_parts();
@@ -232,6 +251,7 @@ impl HttpClient for ReqwestHttpClient {
                 headers,
                 payload,
                 sender,
+                proxy,
             )?;
             receiver.await?
         })

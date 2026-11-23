@@ -37,7 +37,7 @@ const SIDE_INSET: f32 = 20.;
 const MACOS_TRAFFIC_LIGHTS_INSET: f32 = 78.;
 
 /// Same slot order as the composer model dialog, which Vue opens on "act".
-const AUTOMATION_MODEL_SLOTS: [&str; 5] = ["plan", "act", "utility", "lite", "vision"];
+const AUTOMATION_MODEL_SLOTS: [&str; 5] = crate::ui::composer::model_config::MODEL_SLOTS;
 
 fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Context<Observer>) {
     use gpui_kit::component::{
@@ -136,16 +136,16 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         }
     }
     let model_editor = std::rc::Rc::new(std::cell::RefCell::new(model_editor));
-    let model_slot = std::rc::Rc::new(std::cell::Cell::new(1usize));
-    let act_editor = model_editor.borrow()["act"].clone();
-    let model_proxy = std::rc::Rc::new(std::cell::Cell::new(
-        act_editor["id"].as_i64().unwrap_or_default() == 0
-            && act_editor["model"]
-                .as_str()
-                .is_some_and(|model| model.contains('@')),
-    ));
     let model_catalog = observer.models.clone();
     let proxy_targets = observer.proxy_targets.clone();
+    let model_config = crate::ui::composer::model_config::ModelConfigState::new(
+        model_editor.borrow().clone(),
+        "act",
+        model_catalog.clone(),
+        proxy_targets.clone(),
+        window,
+        cx,
+    );
     let owner = cx.entity().downgrade();
     window.open_dialog(cx, move |dialog, window, cx| {
         use crate::ui::menu_popover::MenuPopover;
@@ -157,8 +157,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
         let selected_model = selected_model.clone();
         let selected_model_label = selected_model_label.clone();
         let model_editor = model_editor.clone();
-        let model_slot = model_slot.clone();
-        let model_proxy = model_proxy.clone();
+        let model_config = model_config.clone();
         let model_catalog = model_catalog.clone();
         let proxy_targets = proxy_targets.clone();
         let agent_config_state = agent_config.clone();
@@ -664,9 +663,8 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             .on_click({
                                 let editor = model_editor.clone();
                                 let config = agent_config_state.clone();
-                                let slot = model_slot.clone();
-                                let proxy = model_proxy.clone();
-                                move |_, window, _| {
+                                let state = model_config.clone();
+                                move |_, window, cx| {
                                     let mut editor = editor.borrow_mut();
                                     *editor = config.borrow()["models"].clone();
                                     if !editor.is_object() {
@@ -683,15 +681,13 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                             });
                                         }
                                     }
-                                    slot.set(1);
-                                    let act = editor["act"].clone();
-                                    proxy.set(
-                                        act["id"].as_i64().unwrap_or_default() == 0
-                                            && act["model"]
-                                                .as_str()
-                                                .is_some_and(|model| model.contains('@')),
-                                    );
-                                    window.refresh();
+                                    let configs = editor.clone();
+                                    drop(editor);
+                                    state.update(cx, |this, cx| {
+                                        this.configs = configs;
+                                        this.set_slot("act", window, cx);
+                                        cx.notify();
+                                    });
                                 }
                             })
                             .child(
@@ -712,1098 +708,77 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             .child(Icon::new("caret-down").size(10.).color(muted))
                             .into_any_element(),
                         {
+                            let state = model_config.clone();
                             let editor = model_editor.clone();
-                            let slot = model_slot.clone();
-                            let proxy = model_proxy.clone();
-                            let catalog = model_catalog.clone();
-                            let targets = proxy_targets.clone();
+                            let config_state = agent_config_state.clone();
                             let selected_model = selected_model.clone();
                             let selected_model_label = selected_model_label.clone();
-                            let config_state = agent_config_state.clone();
+                            let catalog = model_catalog.clone();
+                            let targets = proxy_targets.clone();
                             move |_: &mut PopoverState,
                                   _: &mut Window,
                                   cx: &mut Context<PopoverState>| {
                                 let popover = cx.entity();
-                                let key = AUTOMATION_MODEL_SLOTS[slot.get()];
-                                let current = editor
-                                    .borrow()
-                                    .get(key)
-                                    .cloned()
-                                    .unwrap_or(serde_json::json!({
-                                        "id": 0,
-                                        "model": "",
-                                        "temperature": -0.1,
-                                        "contextSize": 128000,
-                                        "maxTokens": 0,
-                                    }));
-                                let provider_id = current["id"].as_i64().unwrap_or_default();
-                                let current_model =
-                                    current["model"].as_str().unwrap_or_default().to_owned();
-                                let proxy_mode = proxy.get();
-                                let (group_label, choices) =
-                                    crate::ui::composer::footer::model_choices_from(
-                                        &catalog, &targets, &current,
-                                    );
-                                let border = cx.theme().border;
-                                let primary = cx.theme().primary;
-                                let muted = cx.theme().muted_foreground;
-                                let foreground = cx.theme().foreground;
-                                let field_bg = crate::ui::field_bg(cx);
-
-                                let mut tabs = h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .gap(px(2.))
-                                    .border_b_1()
-                                    .border_color(border);
-                                for (index, name) in
-                                    AUTOMATION_MODEL_SLOTS.iter().enumerate()
-                                {
-                                    let active = slot.get() == index;
-                                    let slot_state = slot.clone();
-                                    let proxy_state = proxy.clone();
-                                    let editor_state = editor.clone();
-                                    tabs = tabs.child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "automation-model-slot-{name}"
-                                            )))
-                                            .flex_none()
-                                            .px(px(12.))
-                                            .py(px(8.))
-                                            .border_b_2()
-                                            .border_color(if active {
-                                                primary
-                                            } else {
-                                                primary.opacity(0.)
-                                            })
-                                            .cursor_pointer()
-                                            .text_size(px(12.))
-                                            .font_weight(if active {
-                                                FontWeight::SEMIBOLD
-                                            } else {
-                                                FontWeight::NORMAL
-                                            })
-                                            .text_color(if active { primary } else { muted })
-                                            .child(name.to_uppercase())
-                                            .on_click(move |_, window, _| {
-                                                slot_state.set(index);
-                                                let config = editor_state
-                                                    .borrow()
-                                                    .get(AUTOMATION_MODEL_SLOTS[index])
-                                                    .cloned()
-                                                    .unwrap_or(serde_json::json!({}));
-                                                proxy_state.set(
-                                                    config["id"].as_i64().unwrap_or_default()
-                                                        == 0
-                                                        && config["model"]
-                                                            .as_str()
-                                                            .is_some_and(|model| {
-                                                                model.contains('@')
-                                                            }),
-                                                );
-                                                window.refresh();
-                                            }),
-                                    );
-                                }
-
-                                let mut modes = h_flex()
-                                    .flex_none()
-                                    .gap(px(2.))
-                                    .p(px(2.))
-                                    .rounded(px(4.))
-                                    .border_1()
-                                    .border_color(border);
-                                for (show_proxy, label) in [
-                                    (false, t!("model_source_provider").to_string()),
-                                    (true, t!("model_source_proxy").to_string()),
-                                ] {
-                                    let proxy_state = proxy.clone();
-                                    let editor_state = editor.clone();
-                                    let slot_state = slot.clone();
-                                    let catalog = catalog.clone();
-                                    let targets = targets.clone();
-                                    modes = modes.child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "automation-model-source-{show_proxy}"
-                                            )))
-                                            .px(px(10.))
-                                            .py(px(3.))
-                                            .rounded(px(3.))
-                                            .cursor_pointer()
-                                            .text_size(px(11.))
-                                            .text_color(if proxy_mode == show_proxy {
-                                                primary
-                                            } else {
-                                                muted
-                                            })
-                                            .when(proxy_mode == show_proxy, |segment| {
-                                                segment.bg(primary.opacity(0.12))
-                                            })
-                                            .child(label)
-                                            .on_click(move |_, window, _| {
-                                                if proxy_state.get() == show_proxy {
-                                                    return;
-                                                }
-                                                proxy_state.set(show_proxy);
-                                                let key =
-                                                    AUTOMATION_MODEL_SLOTS[slot_state.get()];
-                                                let current = editor_state
-                                                    .borrow()
-                                                    .get(key)
-                                                    .cloned()
-                                                    .unwrap_or(serde_json::json!({}));
-                                                let choice = if show_proxy {
-                                                    targets
-                                                        .as_object()
-                                                        .and_then(|groups| {
-                                                            groups.iter().find_map(
-                                                                |(group, aliases)| {
-                                                                    if !aliases
-                                                                        .as_object()
-                                                                        .is_some_and(|aliases| {
-                                                                            !aliases.is_empty()
-                                                                        })
-                                                                    {
-                                                                        return None;
-                                                                    }
-                                                                    let probe =
-                                                                        serde_json::json!({
-                                                                            "id": 0,
-                                                                            "model": format!("{group}@")
-                                                                        });
-                                                                    crate::ui::composer::footer::model_choices_from(
-                                                                        &catalog,
-                                                                        &targets,
-                                                                        &probe,
-                                                                    )
-                                                                    .1
-                                                                    .into_iter()
-                                                                    .next()
-                                                                },
-                                                            )
-                                                        })
-                                                } else {
-                                                    catalog.iter().find_map(|provider| {
-                                                        let provider_id =
-                                                            provider["id"].as_i64()?;
-                                                        let entry = provider["models"]
-                                                            .as_array()?
-                                                            .first()?;
-                                                        Some(
-                                                            crate::ui::composer::footer::ModelChoice {
-                                                                provider_id,
-                                                                model: entry["id"]
-                                                                    .as_str()?
-                                                                    .to_owned(),
-                                                                name: entry["name"]
-                                                                    .as_str()
-                                                                    .or_else(|| {
-                                                                        entry["id"].as_str()
-                                                                    })
-                                                                    .unwrap_or_default()
-                                                                    .to_owned(),
-                                                                target: Some(entry.clone()),
-                                                            },
-                                                        )
-                                                    })
-                                                };
-                                                if let Some(choice) = choice {
-                                                    let next = crate::ui::composer::footer::apply_model_choice(
-                                                        &current, &choice,
-                                                    );
-                                                    editor_state.borrow_mut()[key] = next;
-                                                }
-                                                window.refresh();
-                                            }),
-                                    );
-                                }
-
-                                let providers: Vec<(i64, String, crate::ui::composer::footer::ModelChoice)> =
-                                    catalog
-                                        .iter()
-                                        .filter_map(|provider| {
-                                            let provider_id = provider["id"].as_i64()?;
-                                            let entry = provider["models"].as_array()?.first()?;
-                                            Some((
-                                                provider_id,
-                                                provider["name"]
-                                                    .as_str()
-                                                    .unwrap_or_default()
-                                                    .to_owned(),
-                                                crate::ui::composer::footer::ModelChoice {
-                                                    provider_id,
-                                                    model: entry["id"].as_str()?.to_owned(),
-                                                    name: entry["name"]
-                                                        .as_str()
-                                                        .or_else(|| entry["id"].as_str())
-                                                        .unwrap_or_default()
-                                                        .to_owned(),
-                                                    target: Some(entry.clone()),
-                                                },
-                                            ))
-                                        })
-                                        .collect();
-                                let proxy_groups: Vec<String> = targets
-                                    .as_object()
-                                    .map(|groups| {
-                                        groups
-                                            .iter()
-                                            .filter(|(_, aliases)| {
-                                                aliases.as_object().is_some_and(|aliases| {
-                                                    !aliases.is_empty()
-                                                })
-                                            })
-                                            .map(|(group, _)| group.clone())
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-
-                                let left_label = if proxy_mode {
-                                    group_label.clone()
-                                } else {
-                                    providers
-                                        .iter()
-                                        .find(|(id, _, _)| *id == provider_id)
-                                        .map(|(_, name, _)| name.clone())
-                                        .unwrap_or_else(|| {
-                                            t!("model_placeholder").to_string()
-                                        })
-                                };
-                                let left_trigger =
-                                    crate::ui::composer::panels::model_select_trigger(
-                                        "automation-model-provider",
-                                        left_label,
+                                let cancel_popover = popover.clone();
+                                let save_popover = popover.clone();
+                                let save_state = state.clone();
+                                let save_editor = editor.clone();
+                                let save_config_state = config_state.clone();
+                                let save_selected_model = selected_model.clone();
+                                let save_selected_model_label = selected_model_label.clone();
+                                let save_catalog = catalog.clone();
+                                let save_targets = targets.clone();
+                                let footer =
+                                    crate::ui::composer::model_config::model_config_footer(
+                                        "automation-model-config",
                                         true,
-                                        150.,
-                                        cx,
-                                    );
-                                let left_select = if proxy_mode {
-                                    let editor_state = editor.clone();
-                                    let proxy_state = proxy.clone();
-                                    let slot_state = slot.clone();
-                                    let groups = proxy_groups.clone();
-                                    let catalog = catalog.clone();
-                                    let targets = targets.clone();
-                                    MenuPopover::new(
-                                        "automation-model-group-menu",
-                                        left_trigger,
-                                        move |_, _, cx| {
-                                            let popover = cx.entity();
-                                            let mut list = v_flex()
-                                                .id("automation-model-group-list")
-                                                .w(px(220.))
-                                                .gap(px(2.));
-                                            for group in groups.clone() {
-                                                let popover = popover.clone();
-                                                let editor_state = editor_state.clone();
-                                                let proxy_state = proxy_state.clone();
-                                                let catalog = catalog.clone();
-                                                let targets = targets.clone();
-                                                let selected = group == group_label;
-                                                let probe = serde_json::json!({
-                                                    "id": 0,
-                                                    "model": format!("{group}@")
-                                                });
-                                                let choice = crate::ui::composer::footer::model_choices_from(
-                                                    &catalog,
-                                                    &targets,
-                                                    &probe,
+                                        move |_, window, cx| {
+                                            cancel_popover.update(cx, |state, cx| {
+                                                state.dismiss(window, cx)
+                                            });
+                                        },
+                                        move |_, window, cx| {
+                                            let models = save_state.read(cx).configs.clone();
+                                            *save_editor.borrow_mut() = models.clone();
+                                            save_config_state.borrow_mut()["models"] =
+                                                models.clone();
+                                            let act = models["act"].clone();
+                                            let label =
+                                                crate::ui::composer::footer::model_choices_from(
+                                                    &save_catalog, &save_targets, &act,
                                                 )
                                                 .1
                                                 .into_iter()
-                                                .next();
-                                                let group_key = group.clone();
-                                                let slot_for_click = slot_state.clone();
-                                                list = list.child(
-                                                    div()
-                                                        .id(SharedString::from(format!(
-                                                            "automation-model-group-{group}"
-                                                        )))
-                                                        .w_full()
-                                                        .px_2()
-                                                        .py_1()
-                                                        .rounded(px(4.))
-                                                        .cursor_pointer()
-                                                        .text_size(px(12.))
-                                                        .when(selected, |row| {
-                                                            row.bg(primary.opacity(0.12))
-                                                        })
-                                                        .hover(|style| style.bg(cx.theme().muted))
-                                                        .child(group_key)
-                                                        .on_click(move |_, window, cx| {
-                                                            popover.update(cx, |state, cx| {
-                                                                state.dismiss(window, cx)
-                                                            });
-                                                            if let Some(choice) = choice.clone() {
-                                                                let key = AUTOMATION_MODEL_SLOTS
-                                                                    [slot_for_click.get()];
-                                                                let current = editor_state
-                                                                    .borrow()
-                                                                    .get(key)
-                                                                    .cloned()
-                                                                    .unwrap_or(
-                                                                        serde_json::json!({}),
-                                                                    );
-                                                                editor_state.borrow_mut()[key] =
-                                                                    crate::ui::composer::footer::apply_model_choice(
-                                                                        &current,
-                                                                        &choice,
-                                                                    );
-                                                                proxy_state.set(true);
-                                                            }
-                                                            window.refresh();
-                                                        }),
-                                                );
-                                            }
-                                            list
+                                                .find(|choice| {
+                                                    choice.model
+                                                        == act["model"]
+                                                            .as_str()
+                                                            .unwrap_or_default()
+                                                })
+                                                .map(|choice| choice.name)
+                                                .or_else(|| {
+                                                    act["model"]
+                                                        .as_str()
+                                                        .filter(|model| !model.is_empty())
+                                                        .map(str::to_owned)
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    t!("model_placeholder").to_string()
+                                                });
+                                            *save_selected_model.borrow_mut() = act;
+                                            *save_selected_model_label.borrow_mut() = label;
+                                            save_popover.update(cx, |state, cx| {
+                                                state.dismiss(window, cx)
+                                            });
+                                            window.refresh();
                                         },
-                                    )
-                                    .into_any_element()
-                                } else {
-                                    let editor_state = editor.clone();
-                                    let proxy_state = proxy.clone();
-                                    let slot_state = slot.clone();
-                                    let providers = providers.clone();
-                                    MenuPopover::new(
-                                        "automation-model-provider-menu",
-                                        left_trigger,
-                                        move |_, _, cx| {
-                                            let popover = cx.entity();
-                                            let mut list = v_flex()
-                                                .id("automation-model-provider-list")
-                                                .w(px(220.))
-                                                .gap(px(2.));
-                                            for (id, name, choice) in providers.clone() {
-                                                let popover = popover.clone();
-                                                let editor_state = editor_state.clone();
-                                                let proxy_state = proxy_state.clone();
-                                                let selected = id == provider_id;
-                                                let slot_for_click = slot_state.clone();
-                                                list = list.child(
-                                                    div()
-                                                        .id(SharedString::from(format!(
-                                                            "automation-model-provider-{id}"
-                                                        )))
-                                                        .w_full()
-                                                        .px_2()
-                                                        .py_1()
-                                                        .rounded(px(4.))
-                                                        .cursor_pointer()
-                                                        .text_size(px(12.))
-                                                        .when(selected, |row| {
-                                                            row.bg(primary.opacity(0.12))
-                                                        })
-                                                        .hover(|style| style.bg(cx.theme().muted))
-                                                        .child(name)
-                                                        .on_click(move |_, window, cx| {
-                                                            popover.update(cx, |state, cx| {
-                                                                state.dismiss(window, cx)
-                                                            });
-                                                            let key = AUTOMATION_MODEL_SLOTS
-                                                                [slot_for_click.get()];
-                                                            let current = editor_state
-                                                                .borrow()
-                                                                .get(key)
-                                                                .cloned()
-                                                                .unwrap_or(
-                                                                    serde_json::json!({}),
-                                                                );
-                                                            editor_state.borrow_mut()[key] =
-                                                                crate::ui::composer::footer::apply_model_choice(
-                                                                    &current,
-                                                                    &choice,
-                                                                );
-                                                            proxy_state.set(false);
-                                                            window.refresh();
-                                                        }),
-                                                );
-                                            }
-                                            list
-                                        },
-                                    )
-                                    .into_any_element()
-                                };
-
-                                let right_label = choices
-                                    .iter()
-                                    .find(|choice| choice.model == current_model)
-                                    .map(|choice| choice.name.clone())
-                                    .unwrap_or_else(|| {
-                                        if current_model.is_empty() {
-                                            t!("model_placeholder").to_string()
-                                        } else {
-                                            current_model.clone()
-                                        }
-                                    });
-                                let right_trigger =
-                                    crate::ui::composer::panels::model_select_trigger(
-                                        "automation-model-choice",
-                                        right_label,
-                                        true,
-                                        0.,
                                         cx,
                                     );
-                                let editor_state = editor.clone();
-                                let proxy_state = proxy.clone();
-                                let slot_state = slot.clone();
-                                let all_choices = choices.clone();
-                                let right_select = MenuPopover::new(
-                                    "automation-model-choice-menu",
-                                    right_trigger,
-                                    move |_, _, cx| {
-                                        let popover = cx.entity();
-                                        let mut list = v_flex()
-                                            .id("automation-model-choice-list")
-                                            .w(px(240.))
-                                            .max_h(px(260.))
-                                            .overflow_y_scroll()
-                                            .gap(px(2.));
-                                        if all_choices.is_empty() {
-                                            list = list.child(
-                                                div()
-                                                    .px_2()
-                                                    .py_1()
-                                                    .text_size(px(12.))
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(
-                                                        t!("model_placeholder").to_string(),
-                                                    ),
-                                            );
-                                        }
-                                        for choice in all_choices.clone() {
-                                            let popover = popover.clone();
-                                            let editor_state = editor_state.clone();
-                                            let proxy_state = proxy_state.clone();
-                                            let selected = choice.model == current_model;
-                                            let choice_model = choice.model.clone();
-                                            let choice_name = choice.name.clone();
-                                            let slot_for_click = slot_state.clone();
-                                            list = list.child(
-                                                div()
-                                                    .id(SharedString::from(format!(
-                                                        "automation-model-choice-{}-{}",
-                                                        choice.provider_id, choice.model
-                                                    )))
-                                                    .w_full()
-                                                    .px_2()
-                                                    .py_1()
-                                                    .rounded(px(4.))
-                                                    .cursor_pointer()
-                                                    .text_size(px(12.))
-                                                    .when(selected, |row| {
-                                                        row.bg(primary.opacity(0.12))
-                                                    })
-                                                    .hover(|style| style.bg(cx.theme().muted))
-                                                    .child(choice_name)
-                                                    .on_click(move |_, window, cx| {
-                                                        popover.update(cx, |state, cx| {
-                                                            state.dismiss(window, cx)
-                                                        });
-                                                        let key = AUTOMATION_MODEL_SLOTS
-                                                            [slot_for_click.get()];
-                                                        let current = editor_state
-                                                            .borrow()
-                                                            .get(key)
-                                                            .cloned()
-                                                            .unwrap_or(
-                                                                serde_json::json!({}),
-                                                            );
-                                                        editor_state.borrow_mut()[key] =
-                                                            crate::ui::composer::footer::apply_model_choice(
-                                                                &current,
-                                                                &choice,
-                                                            );
-                                                        proxy_state.set(choice_model.contains('@'));
-                                                        window.refresh();
-                                                    }),
-                                            );
-                                        }
-                                        list
-                                    },
+                                div().id("automation-model-config-panel").w(px(480.)).min_w_0().child(
+                                    crate::ui::composer::model_config::model_config_panel(
+                                        &state, footer, cx,
+                                    ),
                                 )
-                                .into_any_element();
-
-                                let temperature =
-                                    current["temperature"].as_f64().unwrap_or(-0.1);
-                                let temperature_label = if temperature < 0. {
-                                    t!("param_off").to_string()
-                                } else {
-                                    format!("{temperature:.1}")
-                                };
-                                let reasoning_enabled = current["thinking"]["type"]
-                                    .as_str()
-                                    .is_some_and(|kind| kind.eq_ignore_ascii_case("enabled"));
-                                let reasoning_budget = current["thinking"]["budgetTokens"]
-                                    .as_u64()
-                                    .unwrap_or(1024);
-                                let reasoning_level = if reasoning_budget > 4096 {
-                                    "max"
-                                } else if reasoning_budget > 2048 {
-                                    "high"
-                                } else if reasoning_budget > 1024 {
-                                    "medium"
-                                } else {
-                                    "low"
-                                };
-
-                                v_flex()
-                                    .id("automation-model-config")
-                                    .w(px(480.))
-                                    .min_w_0()
-                                    .gap(px(12.))
-                                    .child(tabs)
-                                    .child(
-                                        v_flex()
-                                            .w_full()
-                                            .min_w_0()
-                                            .gap(px(10.))
-                                            .p(px(12.))
-                                            .rounded(px(8.))
-                                            .border_1()
-                                            .border_color(border)
-                                            .bg(cx.theme().muted.opacity(0.55))
-                                            .child(
-                                                h_flex()
-                                                    .w_full()
-                                                    .items_center()
-                                                    .justify_between()
-                                                    .gap(px(8.))
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(13.))
-                                                            .font_weight(FontWeight::SEMIBOLD)
-                                                            .text_color(foreground)
-                                                            .child(format!(
-                                                                "{} {}",
-                                                                key.to_uppercase(),
-                                                                t!("status_panel_models")
-                                                            )),
-                                                    )
-                                                    .child(modes),
-                                            )
-                                            .child(
-                                                h_flex()
-                                                    .w_full()
-                                                    .min_w_0()
-                                                    .gap(px(8.))
-                                                    .child(left_select)
-                                                    .child(right_select),
-                                            )
-                                            .child(
-                                                h_flex()
-                                                    .w_full()
-                                                    .items_center()
-                                                    .gap(px(8.))
-                                                    .child(
-                                                        div()
-                                                            .w(px(96.))
-                                                            .flex_none()
-                                                            .text_size(px(11.))
-                                                            .text_color(muted)
-                                                            .child(
-                                                                t!("model_temperature")
-                                                                    .to_string(),
-                                                            ),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("automation-model-temp-minus")
-                                                            .size(px(20.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .cursor_pointer()
-                                                            .text_size(px(11.))
-                                                            .child("−")
-                                                            .on_click({
-                                                                let editor = editor.clone();
-                                                                let slot = slot.clone();
-                                                                move |_, window, _| {
-                                                                    let key =
-                                                                        AUTOMATION_MODEL_SLOTS
-                                                                            [slot.get()];
-                                                                    let mut draft =
-                                                                        editor.borrow_mut();
-                                                                    let config = &mut draft[key];
-                                                                    let value = config
-                                                                        ["temperature"]
-                                                                        .as_f64()
-                                                                        .unwrap_or(-0.1);
-                                                                    config["temperature"] =
-                                                                        serde_json::json!(
-                                                                            (value - 0.1)
-                                                                                .clamp(-0.1, 2.0)
-                                                                        );
-                                                                    window.refresh();
-                                                                }
-                                                            }),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .h(px(26.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .bg(field_bg)
-                                                            .text_size(px(12.))
-                                                            .child(temperature_label),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("automation-model-temp-plus")
-                                                            .size(px(20.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .cursor_pointer()
-                                                            .text_size(px(11.))
-                                                            .child("+")
-                                                            .on_click({
-                                                                let editor = editor.clone();
-                                                                let slot = slot.clone();
-                                                                move |_, window, _| {
-                                                                    let key =
-                                                                        AUTOMATION_MODEL_SLOTS
-                                                                            [slot.get()];
-                                                                    let mut draft =
-                                                                        editor.borrow_mut();
-                                                                    let config = &mut draft[key];
-                                                                    let value = config
-                                                                        ["temperature"]
-                                                                        .as_f64()
-                                                                        .unwrap_or(-0.1);
-                                                                    config["temperature"] =
-                                                                        serde_json::json!(
-                                                                            (value + 0.1)
-                                                                                .clamp(-0.1, 2.0)
-                                                                        );
-                                                                    window.refresh();
-                                                                }
-                                                            }),
-                                                    ),
-                                            )
-                                            .child(
-                                                h_flex()
-                                                    .w_full()
-                                                    .items_center()
-                                                    .gap(px(8.))
-                                                    .child(
-                                                        div()
-                                                            .w(px(96.))
-                                                            .flex_none()
-                                                            .text_size(px(11.))
-                                                            .text_color(muted)
-                                                            .child(
-                                                                t!("model_context_size")
-                                                                    .to_string(),
-                                                            ),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("automation-model-context-minus")
-                                                            .size(px(20.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .cursor_pointer()
-                                                            .text_size(px(11.))
-                                                            .child("−")
-                                                            .on_click({
-                                                                let editor = editor.clone();
-                                                                let slot = slot.clone();
-                                                                move |_, window, _| {
-                                                                    let key =
-                                                                        AUTOMATION_MODEL_SLOTS
-                                                                            [slot.get()];
-                                                                    let mut draft =
-                                                                        editor.borrow_mut();
-                                                                    let config = &mut draft[key];
-                                                                    let value = config
-                                                                        ["contextSize"]
-                                                                        .as_f64()
-                                                                        .unwrap_or(128000.);
-                                                                    config["contextSize"] =
-                                                                        serde_json::json!(
-                                                                            (value - 1024.)
-                                                                                .max(0.)
-                                                                        );
-                                                                    window.refresh();
-                                                                }
-                                                            }),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .h(px(26.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .bg(field_bg)
-                                                            .text_size(px(12.))
-                                                            .child(format!(
-                                                                "{:.0}",
-                                                                current["contextSize"]
-                                                                    .as_f64()
-                                                                    .unwrap_or(128000.)
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("automation-model-context-plus")
-                                                            .size(px(20.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .cursor_pointer()
-                                                            .text_size(px(11.))
-                                                            .child("+")
-                                                            .on_click({
-                                                                let editor = editor.clone();
-                                                                let slot = slot.clone();
-                                                                move |_, window, _| {
-                                                                    let key =
-                                                                        AUTOMATION_MODEL_SLOTS
-                                                                            [slot.get()];
-                                                                    let mut draft =
-                                                                        editor.borrow_mut();
-                                                                    let config = &mut draft[key];
-                                                                    let value = config
-                                                                        ["contextSize"]
-                                                                        .as_f64()
-                                                                        .unwrap_or(128000.);
-                                                                    config["contextSize"] =
-                                                                        serde_json::json!(
-                                                                            value + 1024.
-                                                                        );
-                                                                    window.refresh();
-                                                                }
-                                                            }),
-                                                    ),
-                                            )
-                                            .child(
-                                                h_flex()
-                                                    .w_full()
-                                                    .items_center()
-                                                    .gap(px(8.))
-                                                    .child(
-                                                        div()
-                                                            .w(px(96.))
-                                                            .flex_none()
-                                                            .text_size(px(11.))
-                                                            .text_color(muted)
-                                                            .child(
-                                                                t!("model_max_tokens")
-                                                                    .to_string(),
-                                                            ),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("automation-model-max-minus")
-                                                            .size(px(20.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .cursor_pointer()
-                                                            .text_size(px(11.))
-                                                            .child("−")
-                                                            .on_click({
-                                                                let editor = editor.clone();
-                                                                let slot = slot.clone();
-                                                                move |_, window, _| {
-                                                                    let key =
-                                                                        AUTOMATION_MODEL_SLOTS
-                                                                            [slot.get()];
-                                                                    let mut draft =
-                                                                        editor.borrow_mut();
-                                                                    let config = &mut draft[key];
-                                                                    let value = config
-                                                                        ["maxTokens"]
-                                                                        .as_f64()
-                                                                        .unwrap_or(0.);
-                                                                    config["maxTokens"] =
-                                                                        serde_json::json!(
-                                                                            (value - 1024.)
-                                                                                .max(0.)
-                                                                        );
-                                                                    window.refresh();
-                                                                }
-                                                            }),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .h(px(26.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .bg(field_bg)
-                                                            .text_size(px(12.))
-                                                            .child(format!(
-                                                                "{:.0}",
-                                                                current["maxTokens"]
-                                                                    .as_f64()
-                                                                    .unwrap_or(0.)
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("automation-model-max-plus")
-                                                            .size(px(20.))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .rounded(px(4.))
-                                                            .border_1()
-                                                            .border_color(border)
-                                                            .cursor_pointer()
-                                                            .text_size(px(11.))
-                                                            .child("+")
-                                                            .on_click({
-                                                                let editor = editor.clone();
-                                                                let slot = slot.clone();
-                                                                move |_, window, _| {
-                                                                    let key =
-                                                                        AUTOMATION_MODEL_SLOTS
-                                                                            [slot.get()];
-                                                                    let mut draft =
-                                                                        editor.borrow_mut();
-                                                                    let config = &mut draft[key];
-                                                                    let value = config
-                                                                        ["maxTokens"]
-                                                                        .as_f64()
-                                                                        .unwrap_or(0.);
-                                                                    config["maxTokens"] =
-                                                                        serde_json::json!(
-                                                                            (value + 1024.)
-                                                                                .min(128000.)
-                                                                        );
-                                                                    window.refresh();
-                                                                }
-                                                            }),
-                                                    ),
-                                            )
-                                            .child(
-                                                h_flex()
-                                                    .w_full()
-                                                    .items_center()
-                                                    .gap(px(8.))
-                                                    .child(
-                                                        div()
-                                                            .w(px(96.))
-                                                            .flex_none()
-                                                            .text_size(px(11.))
-                                                            .text_color(muted)
-                                                            .child(
-                                                                t!("model_reasoning")
-                                                                    .to_string(),
-                                                            ),
-                                                    )
-                                                    .child({
-                                                        let editor = editor.clone();
-                                                        let slot = slot.clone();
-                                                        Switch::new(
-                                                            "automation-model-thinking",
-                                                        )
-                                                        .checked(reasoning_enabled)
-                                                        .small()
-                                                        .on_click(move |checked, window, _| {
-                                                            let key = AUTOMATION_MODEL_SLOTS
-                                                                [slot.get()];
-                                                            let mut draft = editor.borrow_mut();
-                                                            let config = &mut draft[key];
-                                                            config["thinking"] = if *checked {
-                                                                serde_json::json!({
-                                                                    "type": "enabled",
-                                                                    "budgetTokens": 1024,
-                                                                })
-                                                            } else {
-                                                                serde_json::json!({
-                                                                    "type": "disabled"
-                                                                })
-                                                            };
-                                                            window.refresh();
-                                                        })
-                                                    }),
-                                            )
-                                            .when(reasoning_enabled, |panel| {
-                                                let editor = editor.clone();
-                                                let slot = slot.clone();
-                                                panel.child(
-                                                    h_flex()
-                                                        .w_full()
-                                                        .items_center()
-                                                        .gap(px(8.))
-                                                        .child(
-                                                            div()
-                                                                .w(px(96.))
-                                                                .flex_none()
-                                                                .text_size(px(11.))
-                                                                .text_color(muted)
-                                                                .child(
-                                                                    t!("model_reasoning_level")
-                                                                        .to_string(),
-                                                                ),
-                                                        )
-                                                        .child(
-                                                            crate::ui::composer::panels::capsule_segments(
-                                                                "automation-model-reasoning-level",
-                                                                vec![
-                                                                    ("low", "LOW".to_string()),
-                                                                    ("medium", "MEDIUM".to_string()),
-                                                                    ("high", "HIGH".to_string()),
-                                                                    ("max", "MAX".to_string()),
-                                                                ],
-                                                                reasoning_level,
-                                                                move |level, window, _| {
-                                                                    let key = AUTOMATION_MODEL_SLOTS
-                                                                        [slot.get()];
-                                                                    let tokens = match level {
-                                                                        "max" => 8192,
-                                                                        "high" => 4096,
-                                                                        "medium" => 2048,
-                                                                        _ => 1024,
-                                                                    };
-                                                                    let mut draft = editor.borrow_mut();
-                                                                    draft[key]["thinking"] = serde_json::json!({
-                                                                        "type": "enabled",
-                                                                        "budgetTokens": tokens,
-                                                                    });
-                                                                    window.refresh();
-                                                                },
-                                                                cx,
-                                                            ),
-                                                        ),
-                                                )
-                                            })
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .items_center()
-                                            .justify_end()
-                                            .gap(px(10.))
-                                            .child(
-                                                Button::new("automation-model-cancel")
-                                                    .label(t!("action_cancel").to_string())
-                                                    .h(px(30.))
-                                                    .text_size(px(12.))
-                                                    .on_click({
-                                                        let editor = editor.clone();
-                                                        let config = config_state.clone();
-                                                        let slot = slot.clone();
-                                                        let proxy = proxy.clone();
-                                                        let popover = popover.clone();
-                                                        move |_, window, cx| {
-                                                            popover.update(cx, |state, cx| {
-                                                                state.dismiss(window, cx)
-                                                            });
-                                                            *editor.borrow_mut() =
-                                                                config.borrow()["models"].clone();
-                                                            slot.set(1);
-                                                            let act = editor.borrow()["act"].clone();
-                                                            proxy.set(
-                                                                act["id"]
-                                                                    .as_i64()
-                                                                    .unwrap_or_default()
-                                                                    == 0
-                                                                    && act["model"]
-                                                                        .as_str()
-                                                                        .is_some_and(|model| {
-                                                                            model.contains('@')
-                                                                        }),
-                                                            );
-                                                            window.refresh();
-                                                        }
-                                                    }),
-                                            )
-                                            .child(
-                                                Button::new("automation-model-save")
-                                                    .primary()
-                                                    .label(t!("session_save").to_string())
-                                                    .h(px(30.))
-                                                    .text_size(px(12.))
-                                                    .on_click({
-                                                        let editor = editor.clone();
-                                                        let config = config_state.clone();
-                                                        let popover = popover.clone();
-                                                        let selected_model =
-                                                            selected_model.clone();
-                                                        let selected_model_label =
-                                                            selected_model_label.clone();
-                                                        let slot = slot.clone();
-                                                        let proxy = proxy.clone();
-                                                        let catalog = catalog.clone();
-                                                        let targets = targets.clone();
-                                                        move |_, window, cx| {
-                                                            let models =
-                                                                editor.borrow().clone();
-                                                            config.borrow_mut()["models"] =
-                                                                models.clone();
-                                                            let act = models["act"].clone();
-                                                            let label = crate::ui::composer::footer::model_choices_from(
-                                                                &catalog, &targets, &act,
-                                                            )
-                                                            .1
-                                                            .into_iter()
-                                                            .find(|choice| {
-                                                                choice.model
-                                                                    == act["model"]
-                                                                        .as_str()
-                                                                        .unwrap_or_default()
-                                                            })
-                                                            .map(|choice| choice.name)
-                                                            .or_else(|| {
-                                                                act["model"]
-                                                                    .as_str()
-                                                                    .filter(|model| {
-                                                                        !model.is_empty()
-                                                                    })
-                                                                    .map(str::to_owned)
-                                                            })
-                                                            .unwrap_or_else(|| {
-                                                                t!("model_placeholder")
-                                                                    .to_string()
-                                                            });
-                                                            *selected_model.borrow_mut() = act;
-                                                            *selected_model_label.borrow_mut() =
-                                                                label;
-                                                            slot.set(1);
-                                                            proxy.set(false);
-                                                            popover.update(cx, |state, cx| {
-                                                                state.dismiss(window, cx)
-                                                            });
-                                                            window.refresh();
-                                                        }
-                                                    }),
-                                            ),
-                                    )
                             }
                         },
                     )

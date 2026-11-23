@@ -31,7 +31,6 @@ use gpui_kit::{
         input::{InputEvent, InputState, Textarea, TextareaState},
         text::{TextView, TextViewState},
         theme::{Theme, ThemeMode},
-        slider::{SliderEvent, SliderState, SliderValue},
         v_flex, ActiveTheme,
     },
     *,
@@ -498,6 +497,9 @@ struct Observer {
     /// Network proxy the docked pages have to use, read from the runtime settings.
     #[cfg(feature = "chat-hub")]
     chat_hub_proxy: Option<chat_hub::ProxySettings>,
+    /// HTTP proxy currently installed for remote ChatHub logos.
+    #[cfg(feature = "chat-hub")]
+    chat_hub_logo_proxy: Option<String>,
     sidebar_collapsed: bool,
     sidebar_changed: bool,
     pending_settings: BTreeMap<(String, &'static str), (bool, Option<Instant>)>,
@@ -595,18 +597,8 @@ struct Observer {
     ask_user_answered: BTreeMap<String, Vec<LocalAskUserAnswer>>,
     /// Which configuration dialog the quick actions opened, if any.
     quick_panel: Option<QuickPanel>,
-    /// Slot being edited in the model configuration dialog.
-    model_config_slot: String,
-    /// Whether the model dialog lists proxy aliases instead of providers.
-    model_config_proxy: bool,
-    /// Pending edits for the model dialog; Save writes them as one slot map.
-    model_config_draft: Option<Value>,
-    /// Temperature slider shared by the model dialog's active slot.
-    model_temperature_slider: Entity<SliderState>,
-    _model_slider_subscription: Subscription,
-    model_context_input: Entity<InputState>,
-    model_max_tokens_input: Entity<InputState>,
-    _model_numeric_subscriptions: Vec<Subscription>,
+    /// Draft and controls shared by both model configuration entry points.
+    model_config: Option<Entity<ui::composer::model_config::ModelConfigState>>,
     /// Active tab of the tool configuration dialog.
     tool_panel_tab: usize,
     /// Optimistic shell-rule decisions, so the segmented control repaints before
@@ -818,78 +810,6 @@ impl Observer {
         // The IME needs an entity it can commit composed text into.
         let terminal_owner = cx.entity().downgrade();
         terminal.set_input(cx.new(|_| ui::terminal::TerminalInput::new(terminal_owner)));
-        let model_temperature_slider = cx.new(|_| {
-            SliderState::new()
-                .min(-0.1)
-                .max(2.0)
-                .step(0.1)
-                .default_value(-0.1)
-        });
-        let model_slider_subscription = cx.subscribe_in(
-            &model_temperature_slider,
-            window,
-            |this, _, event: &SliderEvent, _, cx| {
-                let (
-                    SliderEvent::Change(SliderValue::Single(value))
-                    | SliderEvent::Release(SliderValue::Single(value))
-                ) = event
-                else {
-                    return;
-                };
-                if this.quick_panel != Some(QuickPanel::Models) {
-                    return;
-                }
-                let slot = this.model_config_slot.clone();
-                if let Some(draft) = this.model_config_draft.as_mut() {
-                    if !draft[slot.as_str()].is_object() {
-                        draft[slot.as_str()] = serde_json::json!({"id": 0, "model": ""});
-                    }
-                    draft[slot.as_str()]["temperature"] = serde_json::json!(*value);
-                }
-                cx.notify();
-            },
-        );
-        let model_context_input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("128000".to_string())
-        });
-        let model_max_tokens_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("0".to_string()));
-        let model_numeric_subscriptions = vec![
-            cx.subscribe_in(
-                &model_context_input,
-                window,
-                |this, state, event: &InputEvent, _, cx| {
-                    if !matches!(event, InputEvent::Change) {
-                        return;
-                    }
-                    let Ok(value) = state.read(cx).value().trim().parse::<u64>() else {
-                        return;
-                    };
-                    let slot = this.model_config_slot.clone();
-                    if let Some(draft) = this.model_config_draft.as_mut() {
-                        draft[slot.as_str()]["contextSize"] = serde_json::json!(value);
-                    }
-                    cx.notify();
-                },
-            ),
-            cx.subscribe_in(
-                &model_max_tokens_input,
-                window,
-                |this, state, event: &InputEvent, _, cx| {
-                    if !matches!(event, InputEvent::Change) {
-                        return;
-                    }
-                    let Ok(value) = state.read(cx).value().trim().parse::<u64>() else {
-                        return;
-                    };
-                    let slot = this.model_config_slot.clone();
-                    if let Some(draft) = this.model_config_draft.as_mut() {
-                        draft[slot.as_str()]["maxTokens"] = serde_json::json!(value);
-                    }
-                    cx.notify();
-                },
-            ),
-        ];
         let mut observer = Self {
             worker,
             options,
@@ -956,6 +876,8 @@ impl Observer {
             pending_chat_hub: None,
             #[cfg(feature = "chat-hub")]
             chat_hub_proxy: None,
+            #[cfg(feature = "chat-hub")]
+            chat_hub_logo_proxy: None,
             sidebar_collapsed: false,
             sidebar_changed: false,
             pending_settings: BTreeMap::new(),
@@ -1024,14 +946,7 @@ impl Observer {
             config_acks: BTreeMap::new(),
             ask_user_answered: BTreeMap::new(),
             quick_panel: None,
-            model_config_slot: "act".into(),
-            model_config_proxy: false,
-            model_config_draft: None,
-            model_temperature_slider,
-            _model_slider_subscription: model_slider_subscription,
-            model_context_input,
-            model_max_tokens_input,
-            _model_numeric_subscriptions: model_numeric_subscriptions,
+            model_config: None,
             tool_panel_tab: 0,
             shell_rule_decisions: BTreeMap::new(),
             new_task_inherit: None,
@@ -2471,16 +2386,15 @@ impl Observer {
                 let _ = self.worker.commands.try_send(Command::Tools);
             }
             QuickPanel::Models => {
-                self.model_config_slot = if self.planning_mode { "plan" } else { "act" }.into();
-                let configs = self.model_configs();
-                self.model_config_draft = Some(configs.clone());
-                let slot = configs[self.model_config_slot.as_str()].clone();
-                self.model_config_proxy = slot["id"].as_i64().unwrap_or_default() == 0
-                    && slot["model"].as_str().is_some_and(|model| model.contains('@'));
-                let temperature = slot["temperature"].as_f64().unwrap_or(-0.1) as f32;
-                self.model_temperature_slider
-                    .update(cx, |state, cx| state.set_value(temperature, window, cx));
-                self.sync_model_inputs(&slot, window, cx);
+                let slot = if self.planning_mode { "plan" } else { "act" };
+                self.model_config = Some(ui::composer::model_config::ModelConfigState::new(
+                    self.model_configs(),
+                    slot,
+                    self.models.clone(),
+                    self.proxy_targets.clone(),
+                    window,
+                    cx,
+                ));
             }
             QuickPanel::Personality => {}
         }
@@ -2531,10 +2445,11 @@ impl Observer {
         }
     }
 
-    fn close_quick_panel(&mut self, cx: &mut Context<Self>) {        self.quick_panel = None;
+    fn close_quick_panel(&mut self, cx: &mut Context<Self>) {
+        self.quick_panel = None;
         self.skills_draft = None;
         self.tool_draft = None;
-        self.model_config_draft = None;
+        self.model_config = None;
         cx.notify();
     }
 
@@ -3329,16 +3244,6 @@ impl Observer {
         }
     }
 
-    /// Keeps the dialog's numeric fields aligned with the active slot config.
-    fn sync_model_inputs(&mut self, config: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        let context = config["contextSize"].as_u64().unwrap_or(128000);
-        let max = config["maxTokens"].as_u64().unwrap_or(0);
-        self.model_context_input
-            .update(cx, |state, cx| state.set_value(context.to_string(), window, cx));
-        self.model_max_tokens_input
-            .update(cx, |state, cx| state.set_value(max.to_string(), window, cx));
-    }
-
     /// Persists both panel positions as one global preference.
     fn save_status_panel_positions(&self) {
         let position = |value: Option<Point<Pixels>>| {
@@ -3366,6 +3271,18 @@ impl Observer {
         #[cfg(feature = "chat-hub")]
         {
             self.chat_hub_proxy = chat_hub::proxy_from_config(config);
+            let logo_proxy = self
+                .chat_hub_proxy
+                .as_ref()
+                .and_then(chat_hub::ProxySettings::http_url);
+            if self.chat_hub_logo_proxy != logo_proxy {
+                self.chat_hub_logo_proxy = logo_proxy.clone();
+                cx.set_http_client(std::sync::Arc::new(
+                    http_client::ReqwestHttpClient::with_proxy(
+                        logo_proxy.and_then(|url| url.parse().ok()),
+                    ),
+                ));
+            }
         }
         self.send_with_shift = config["send_message_key"].as_str() == Some("Shift+Enter");
         self.show_menu_button = config["show_menu_button"].as_bool().unwrap_or(true);

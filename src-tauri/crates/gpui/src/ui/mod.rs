@@ -1,8 +1,9 @@
 //! Native workflow window rendering and reusable controls.
 
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::*;
+use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 pub(crate) mod history_scrollbar;
 mod icon;
@@ -82,6 +83,51 @@ pub(crate) fn tip(
             .bg(rgb(0x303133))
             .text_color(gpui_kit::white())
             .build(window, cx)
+    }
+}
+
+/// Vue's sidebar tooltip: the conversation title with the primary authorized
+/// folder underneath, so a collapsed badge still identifies both.
+pub(crate) fn tip_session(
+    title: String,
+    root: Option<String>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let title = SharedString::from(title);
+    let root = root.map(SharedString::from);
+    move |window, cx| {
+        let title = title.clone();
+        let root = root.clone();
+        gpui_kit::component::tooltip::Tooltip::element(move |_, cx| {
+            let mut content = v_flex().gap(px(2.)).child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title.clone()),
+            );
+            if let Some(root) = root.clone() {
+                content = content.child(
+                    h_flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .child(
+                            Icon::new("ext-folder")
+                                .size(11.)
+                                .color(cx.theme().muted_foreground),
+                        )
+                        .child(div().text_size(px(11.)).child(root)),
+                );
+            }
+            content
+        })
+        .text_size(px(12.))
+        .line_height(px(18.))
+        .px(px(8.))
+        .py(px(4.))
+        .rounded(px(4.))
+        .border_color(rgb(0x303133))
+        .bg(rgb(0x303133))
+        .text_color(gpui_kit::white())
+        .build(window, cx)
     }
 }
 

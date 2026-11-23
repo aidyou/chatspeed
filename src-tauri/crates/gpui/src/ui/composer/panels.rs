@@ -11,13 +11,9 @@ use gpui_kit::*;
 use rust_i18n::t;
 use serde_json::{json, Value};
 
-use super::footer::{apply_model_choice, model_choices, ModelChoice};
-use crate::ui::menu_popover::MenuPopover;
 use crate::ui::Icon;
 use crate::{Observer, QuickPanel, ToolDraft};
 use chatspeed_gpui::types::Command;
-
-const MODEL_SLOTS: [&str; 5] = ["plan", "act", "utility", "lite", "vision"];
 
 /// The centered modal for the active configuration panel.
 pub fn overlay(observer: &Observer, window: &mut Window, cx: &mut Context<Observer>) -> AnyElement {
@@ -118,7 +114,7 @@ pub fn overlay(observer: &Observer, window: &mut Window, cx: &mut Context<Observ
         .into_any_element()
 }
 
-fn empty_note(text: String, cx: &App) -> AnyElement {
+pub(crate) fn empty_note(text: String, cx: &App) -> AnyElement {
     div()
         .w_full()
         .py_6()
@@ -129,7 +125,7 @@ fn empty_note(text: String, cx: &App) -> AnyElement {
 }
 
 /// A check row used for the read-only lists and the multi-select panels.
-fn check_row(
+pub(crate) fn check_row(
     id: String,
     label: String,
     detail: String,
@@ -188,360 +184,31 @@ fn check_row(
         .into_any_element()
 }
 
-/// Switches between the model slots on the left and the grouped sources on the
-/// right, the way Vue's model configuration dialog separates them. Choosing a
-/// model edits a draft; the footer commits the whole slot map at once so
-/// temperature and reasoning edits stay attached to the right model.
+/// Opens the shared model configuration card for the composer's draft.
 fn model_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
-    let configs = observer
-        .model_config_draft
-        .clone()
-        .unwrap_or_else(|| observer.model_configs());
-    let slot = observer.model_config_slot.clone();
-    let mut slot_config = configs.get(slot.as_str()).cloned().unwrap_or(Value::Null);
-    if !slot_config.is_object() {
-        slot_config = json!({"id": 0, "model": ""});
-    }
-    let current_model = slot_config["model"].as_str().unwrap_or_default().to_owned();
-    let current_provider = slot_config["id"].as_i64().unwrap_or_default();
-    let proxy = observer.model_config_proxy;
-    let border = cx.theme().border;
-    let primary = cx.theme().primary;
-    let muted = cx.theme().muted_foreground;
-    let foreground = cx.theme().foreground;
+    let Some(state) = observer.model_config.clone() else {
+        return div().into_any_element();
+    };
     let observer_entity = cx.entity();
-
-    // Vue's PLAN/ACT/UTILITY/LITE/VISION tabs sit across the top of the dialog.
-    let mut tabs = h_flex()
-        .w_full()
-        .min_w_0()
-        .gap(px(2.))
-        .border_b_1()
-        .border_color(border);
-    for value in MODEL_SLOTS {
-        let selected = slot == value;
-        let target = value.to_owned();
-        let snapshot = configs.clone();
-        tabs = tabs.child(
-            h_flex()
-                .id(SharedString::from(format!("model-slot-{value}")))
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .px(px(12.))
-                .py(px(8.))
-                .border_b_2()
-                .border_color(if selected {
-                    primary
-                } else {
-                    primary.opacity(0.)
-                })
-                .cursor_pointer()
-                .text_size(px(12.))
-                .font_weight(if selected {
-                    FontWeight::SEMIBOLD
-                } else {
-                    FontWeight::NORMAL
-                })
-                .text_color(if selected { primary } else { muted })
-                .child(value.to_uppercase())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.model_config_slot = target.clone();
-                    let config = snapshot
-                        .get(target.as_str())
-                        .cloned()
-                        .unwrap_or(Value::Null);
-                    this.model_config_proxy = config["id"].as_i64().unwrap_or_default() == 0
-                        && config["model"]
-                            .as_str()
-                            .is_some_and(|model| model.contains('@'));
-                    let temperature = config["temperature"].as_f64().unwrap_or(-0.1) as f32;
-                    this.model_temperature_slider
-                        .update(cx, |state, cx| state.set_value(temperature, window, cx));
-                    this.sync_model_inputs(&config, window, cx);
-                    cx.notify();
-                })),
-        );
-    }
-
-    // Provider vs proxy mode, Vue's `el-radio-group` in the card header.
-    let mut modes = h_flex()
-        .flex_none()
-        .gap(px(2.))
-        .p(px(2.))
-        .rounded(px(4.))
-        .border_1()
-        .border_color(border);
-    for (show_proxy, key) in [
-        (false, "model_source_provider"),
-        (true, "model_source_proxy"),
-    ] {
-        modes = modes.child(
-            div()
-                .id(("model-source", usize::from(show_proxy)))
-                .flex_none()
-                .px(px(10.))
-                .py(px(3.))
-                .rounded(px(3.))
-                .cursor_pointer()
-                .text_size(px(11.))
-                .text_color(if proxy == show_proxy { primary } else { muted })
-                .when(proxy == show_proxy, |tab| tab.bg(primary.opacity(0.12)))
-                .hover(|style| style.bg(cx.theme().muted))
-                .child(t!(key).to_string())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if this.model_config_proxy == show_proxy {
-                        return;
-                    }
-                    this.model_config_proxy = show_proxy;
-                    // Vue switches the selected source immediately: provider
-                    // mode picks the first provider, proxy mode the first alias.
-                    let first = if show_proxy {
-                        let group = this
-                            .proxy_targets
-                            .as_object()
-                            .and_then(|groups| {
-                                groups.iter().find_map(|(group, aliases)| {
-                                    aliases
-                                        .as_object()
-                                        .is_some_and(|aliases| !aliases.is_empty())
-                                        .then(|| group.clone())
-                                })
-                            });
-                        group.and_then(|group| {
-                            let config = json!({"id": 0, "model": format!("{group}@")});
-                            model_choices(this, &config).1.into_iter().next()
-                        })
-                    } else {
-                        this.models.iter().find_map(|provider| {
-                            let provider_id = provider["id"].as_i64()?;
-                            let entry = provider["models"].as_array()?.first()?;
-                            let model = entry["id"].as_str()?.to_owned();
-                            Some(ModelChoice {
-                                provider_id,
-                                model,
-                                name: entry["name"].as_str().unwrap_or_default().to_owned(),
-                                target: Some(entry.clone()),
-                            })
-                        })
-                    };
-                    if let Some(choice) = first {
-                        let slot = this.model_config_slot.clone();
-                        apply_model_draft(this, &slot, &choice, window, cx);
-                    }
-                    cx.notify();
-                })),
-        );
-    }
-
-    let (group_label, choices) = model_choices(observer, &slot_config);
-    let providers: Vec<(i64, String, ModelChoice)> = observer
-        .models
-        .iter()
-        .filter_map(|provider| {
-            let provider_id = provider["id"].as_i64()?;
-            let entry = provider["models"].as_array()?.first()?;
-            let model = entry["id"].as_str()?.to_owned();
-            Some((
-                provider_id,
-                provider["name"].as_str().unwrap_or_default().to_owned(),
-                ModelChoice {
-                    provider_id,
-                    model,
-                    name: entry["name"].as_str().unwrap_or_default().to_owned(),
-                    target: Some(entry.clone()),
-                },
-            ))
-        })
-        .collect();
-    let proxy_groups: Vec<String> = observer
-        .proxy_targets
-        .as_object()
-        .map(|groups| {
-            groups
-                .iter()
-                .filter(|(_, aliases)| {
-                    aliases.as_object().is_some_and(|aliases| !aliases.is_empty())
-                })
-                .map(|(group, _)| group.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Left select: provider or proxy group. Right select: model or alias.
-    let left_label = if proxy {
-        group_label.clone()
-    } else {
-        providers
-            .iter()
-            .find(|(id, _, _)| *id == current_provider)
-            .map(|(_, name, _)| name.clone())
-            .unwrap_or_else(|| t!("model_placeholder").to_string())
-    };
-    let left_trigger = model_select_trigger("model-left-select", left_label, true, 120., cx);
-    let left_select = if proxy {
-        let observer_entity = observer_entity.clone();
-        let slot_key = slot.clone();
-        let groups = proxy_groups.clone();
-        MenuPopover::new("model-group-popover", left_trigger, move |_, _, cx| {
-            let popover = cx.entity();
-            let mut list = v_flex().id("model-group-list").w(px(220.)).gap(px(2.));
-            for group in groups.clone() {
-                let popover = popover.clone();
-                let observer_entity = observer_entity.clone();
-                let slot_key = slot_key.clone();
-                let selected = group == group_label;
-                list = list.child(check_row(
-                    format!("model-group-{group}"),
-                    group.clone(),
-                    String::new(),
-                    selected,
-                    move |_, window, cx| {
-                        popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        observer_entity.update(cx, |this, cx| {
-                            let config = json!({"id": 0, "model": format!("{group}@")});
-                            if let Some(choice) = model_choices(this, &config).1.into_iter().next() {
-                                apply_model_draft(this, &slot_key, &choice, window, cx);
-                            }
-                            cx.notify();
-                        });
-                    },
-                    cx,
-                ));
-            }
-            list
-        })
-        .into_any_element()
-    } else {
-        let observer_entity = observer_entity.clone();
-        let slot_key = slot.clone();
-        let providers = providers.clone();
-        MenuPopover::new("model-provider-popover", left_trigger, move |_, _, cx| {
-            let popover = cx.entity();
-            let mut list = v_flex().id("model-provider-list").w(px(220.)).gap(px(2.));
-            for (provider_id, name, choice) in providers.clone() {
-                let popover = popover.clone();
-                let observer_entity = observer_entity.clone();
-                let slot_key = slot_key.clone();
-                let selected = provider_id == current_provider;
-                list = list.child(check_row(
-                    format!("model-provider-{provider_id}"),
-                    name,
-                    String::new(),
-                    selected,
-                    move |_, window, cx| {
-                        popover.update(cx, |state, cx| state.dismiss(window, cx));
-                        observer_entity.update(cx, |this, cx| {
-                            apply_model_draft(this, &slot_key, &choice, window, cx);
-                            cx.notify();
-                        });
-                    },
-                    cx,
-                ));
-            }
-            list
-        })
-        .into_any_element()
-    };
-
-    let right_label = choices
-        .iter()
-        .find(|choice| choice.model == current_model)
-        .map(|choice| choice.name.clone())
-        .unwrap_or_else(|| {
-            if current_model.is_empty() {
-                t!("model_placeholder").to_string()
-            } else {
-                current_model.clone()
-            }
-        });
-    let right_trigger = model_select_trigger("model-right-select", right_label, true, 0., cx);
-    let observer_entity = observer_entity.clone();
-    let slot_key = slot.clone();
-    let all_choices = choices.clone();
-    let right_select = MenuPopover::new("model-choice-popover", right_trigger, move |_, _, cx| {
-        let popover = cx.entity();
-        let mut list = v_flex()
-            .id("model-choice-list")
-            .w(px(240.))
-            .max_h(px(280.))
-            .overflow_y_scroll()
-            .gap(px(2.));
-        if all_choices.is_empty() {
-            list = list.child(empty_note(t!("model_placeholder").to_string(), cx));
-        }
-        for choice in all_choices.clone() {
-            let popover = popover.clone();
-            let observer_entity = observer_entity.clone();
-            let slot_key = slot_key.clone();
-            let selected = choice.model == current_model;
-            list = list.child(check_row(
-                format!("model-choice-{}-{}", choice.provider_id, choice.model),
-                choice.name.clone(),
-                String::new(),
-                selected,
-                move |_, window, cx| {
-                    popover.update(cx, |state, cx| state.dismiss(window, cx));
-                    observer_entity.update(cx, |this, cx| {
-                        apply_model_draft(this, &slot_key, &choice, window, cx);
-                        cx.notify();
-                    });
-                },
-                cx,
-            ));
-        }
-        list
-    })
-    .into_any_element();
-
-    v_flex()
-        .w_full()
-        .min_w_0()
-        .gap(px(16.))
-        .px(px(16.))
-        .pt(px(16.))
-        .child(tabs)
-        .child(
-            v_flex()
-                .w_full()
-                .min_w_0()
-                .gap(px(12.))
-                .p(px(12.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(border)
-                .bg(cx.theme().muted.opacity(0.55))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(8.))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(foreground)
-                                .child(format!(
-                                    "{} {}",
-                                    slot.to_uppercase(),
-                                    t!("status_panel_models")
-                                )),
-                        )
-                        .child(modes),
-                )
-                .child(
-                    h_flex()
-                        .w_full()
-                        .min_w_0()
-                        .gap(px(8.))
-                        .child(left_select)
-                        .child(right_select),
-                )
-                .child(model_params(observer, &slot, &slot_config, cx)),
-        )
-        .child(model_footer(observer, cx))
-        .into_any_element()
+    let save_state = state.clone();
+    let save_observer = observer_entity.clone();
+    let cancel_observer = observer_entity;
+    let footer = super::model_config::model_config_footer(
+        "model-config",
+        observer.models_pending.is_none(),
+        move |_, _, cx| {
+            cancel_observer.update(cx, |this, cx| this.close_quick_panel(cx));
+        },
+        move |_, _, cx| {
+            let configs = save_state.read(cx).configs.clone();
+            save_observer.update(cx, |this, cx| {
+                this.save_models(configs, cx);
+                this.close_quick_panel(cx);
+            });
+        },
+        cx,
+    );
+    super::model_config::model_config_panel(&state, footer, cx)
 }
 
 pub(crate) fn model_select_trigger(
@@ -581,48 +248,7 @@ pub(crate) fn model_select_trigger(
         .into_any_element()
 }
 
-/// Applies a selected model to the dialog draft and syncs the temperature slider.
-fn apply_model_draft(
-    observer: &mut Observer,
-    slot: &str,
-    choice: &ModelChoice,
-    window: &mut Window,
-    cx: &mut Context<Observer>,
-) {
-    let base = observer
-        .model_config_draft
-        .as_ref()
-        .and_then(|draft| draft.get(slot).cloned())
-        .unwrap_or_else(|| json!({"id": 0, "model": ""}));
-    let next = apply_model_choice(&base, choice);
-    if let Some(draft) = observer.model_config_draft.as_mut() {
-        draft[slot] = next.clone();
-    }
-    let temperature = next["temperature"].as_f64().unwrap_or(-0.1) as f32;
-    observer
-        .model_temperature_slider
-        .update(cx, |state, cx| state.set_value(temperature, window, cx));
-    observer.sync_model_inputs(&next, window, cx);
-}
-
-/// Writes one edit into the model dialog draft, creating a missing slot.
-fn edit_slot(observer: &mut Observer, slot: &str, edit: impl FnOnce(&mut Value)) {
-    let Some(draft) = observer.model_config_draft.as_mut() else {
-        return;
-    };
-    if !draft[slot].is_object() {
-        draft[slot] = json!({
-            "id": 0,
-            "model": "",
-            "temperature": -0.1,
-            "contextSize": 128000,
-            "maxTokens": 0,
-        });
-    }
-    edit(&mut draft[slot]);
-}
-
-fn param_label(label: String, cx: &App) -> AnyElement {
+pub(crate) fn param_label(label: String, cx: &App) -> AnyElement {
     div()
         .flex_none()
         .text_size(px(11.))
@@ -674,7 +300,7 @@ pub(crate) fn capsule_segments(
     }
     track.into_any_element()
 }
-fn field_step(
+pub(crate) fn field_step(
     id: impl Into<SharedString>,
     label: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -694,304 +320,6 @@ fn field_step(
         .hover(|style| style.bg(cx.theme().muted))
         .child(label)
         .on_click(on_click)
-        .into_any_element()
-}
-
-fn model_params(
-    observer: &Observer,
-    slot: &str,
-    slot_config: &Value,
-    cx: &mut Context<Observer>,
-) -> AnyElement {
-    let foreground = cx.theme().foreground;
-    let observer_entity = cx.entity();
-
-    let temperature = slot_config["temperature"]
-        .as_f64()
-        .unwrap_or(-0.1)
-        .clamp(-0.1, 2.0);
-    let temperature_text = if temperature < 0.0 {
-        t!("param_off").to_string()
-    } else {
-        format!("{temperature:.1}")
-    };
-    let temperature_row = h_flex()
-        .w_full()
-        .items_center()
-        .gap(px(8.))
-        .child(param_label(t!("model_temperature").to_string(), cx))
-        .child(
-            gpui_kit::component::slider::Slider::new(&observer.model_temperature_slider)
-                .flex_1()
-                .min_w(px(0.)),
-        )
-        .child(
-            div()
-                .flex_none()
-                .min_w(px(38.))
-                .text_align(TextAlign::Right)
-                .text_size(px(11.))
-                .text_color(foreground)
-                .child(temperature_text),
-        );
-
-    let context_minus_slot = slot.to_owned();
-    let context_minus = cx.listener(move |this, _, window, cx| {
-        edit_slot(this, &context_minus_slot, |config| {
-            let value = config["contextSize"].as_f64().unwrap_or(128000.);
-            config["contextSize"] = json!((value - 1024.).max(0.));
-        });
-        let config = this
-            .model_config_draft
-            .as_ref()
-            .and_then(|draft| draft.get(context_minus_slot.as_str()))
-            .cloned()
-            .unwrap_or(Value::Null);
-        this.sync_model_inputs(&config, window, cx);
-        cx.notify();
-    });
-    let context_plus_slot = slot.to_owned();
-    let context_plus = cx.listener(move |this, _, window, cx| {
-        edit_slot(this, &context_plus_slot, |config| {
-            let value = config["contextSize"].as_f64().unwrap_or(128000.);
-            config["contextSize"] = json!(value + 1024.);
-        });
-        let config = this
-            .model_config_draft
-            .as_ref()
-            .and_then(|draft| draft.get(context_plus_slot.as_str()))
-            .cloned()
-            .unwrap_or(Value::Null);
-        this.sync_model_inputs(&config, window, cx);
-        cx.notify();
-    });
-    let max_minus_slot = slot.to_owned();
-    let max_minus = cx.listener(move |this, _, window, cx| {
-        edit_slot(this, &max_minus_slot, |config| {
-            let value = config["maxTokens"].as_f64().unwrap_or(0.);
-            config["maxTokens"] = json!((value - 1024.).max(0.));
-        });
-        let config = this
-            .model_config_draft
-            .as_ref()
-            .and_then(|draft| draft.get(max_minus_slot.as_str()))
-            .cloned()
-            .unwrap_or(Value::Null);
-        this.sync_model_inputs(&config, window, cx);
-        cx.notify();
-    });
-    let max_plus_slot = slot.to_owned();
-    let max_plus = cx.listener(move |this, _, window, cx| {
-        edit_slot(this, &max_plus_slot, |config| {
-            let value = config["maxTokens"].as_f64().unwrap_or(0.);
-            config["maxTokens"] = json!((value + 1024.).min(128000.));
-        });
-        let config = this
-            .model_config_draft
-            .as_ref()
-            .and_then(|draft| draft.get(max_plus_slot.as_str()))
-            .cloned()
-            .unwrap_or(Value::Null);
-        this.sync_model_inputs(&config, window, cx);
-        cx.notify();
-    });
-
-    let reasoning_enabled = slot_config["thinking"]["type"]
-        .as_str()
-        .is_some_and(|kind| kind.eq_ignore_ascii_case("enabled"));
-    let budget = slot_config["thinking"]["budgetTokens"]
-        .as_u64()
-        .unwrap_or(1024);
-    let level = if budget > 4096 {
-        "max"
-    } else if budget > 2048 {
-        "high"
-    } else if budget > 1024 {
-        "medium"
-    } else {
-        "low"
-    };
-    let thinking_slot = slot.to_owned();
-    let thinking_switch = Switch::new("model-thinking")
-        .checked(reasoning_enabled)
-        .small()
-        .on_click(cx.listener(move |this, checked, _, cx| {
-            edit_slot(this, &thinking_slot, |config| {
-                config["thinking"] = if *checked {
-                    json!({"type": "enabled", "budgetTokens": 1024})
-                } else {
-                    json!({"type": "disabled"})
-                };
-            });
-            cx.notify();
-        }));
-
-    let mut reasoning = v_flex().w_full().min_w_0().gap(px(6.)).child(
-        h_flex()
-            .w_full()
-            .items_center()
-            .gap(px(4.))
-            .child(param_label(t!("model_reasoning").to_string(), cx))
-            .child(thinking_switch),
-    );
-    if reasoning_enabled {
-        let level_slot = slot.to_owned();
-        let levels = capsule_segments(
-            "model-level",
-            vec![
-                ("low", t!("reasoning_low").to_string()),
-                ("medium", t!("reasoning_medium").to_string()),
-                ("high", t!("reasoning_high").to_string()),
-                ("max", t!("reasoning_max").to_string()),
-            ],
-            level,
-            move |value, _, cx| {
-                let tokens = match value {
-                    "medium" => 2048,
-                    "high" => 4096,
-                    "max" => 8192,
-                    _ => 1024,
-                };
-                let slot = level_slot.clone();
-                let _ = observer_entity.update(cx, |this, cx| {
-                    edit_slot(this, &slot, |config| {
-                        config["thinking"] = json!({
-                            "type": "enabled",
-                            "budgetTokens": tokens,
-                        });
-                    });
-                    cx.notify();
-                });
-            },
-            cx,
-        );
-        reasoning = reasoning.child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap(px(8.))
-                .child(param_label(t!("model_reasoning_level").to_string(), cx))
-                .child(levels),
-        );
-    }
-
-    let context_field = gpui_kit::component::input::Input::new(&observer.model_context_input)
-        .bg(crate::ui::field_bg(cx))
-        .suffix(
-            h_flex()
-                .flex_none()
-                .items_center()
-                .gap(px(2.))
-                .child(field_step(
-                    "model-context-minus",
-                    "−",
-                    context_minus,
-                    cx,
-                ))
-                .child(field_step("model-context-plus", "+", context_plus, cx)),
-        );
-    let max_field = gpui_kit::component::input::Input::new(&observer.model_max_tokens_input)
-        .bg(crate::ui::field_bg(cx))
-        .suffix(
-            h_flex()
-                .flex_none()
-                .items_center()
-                .gap(px(2.))
-                .child(field_step("model-max-minus", "−", max_minus, cx))
-                .child(field_step("model-max-plus", "+", max_plus, cx)),
-        );
-
-    v_flex()
-        .id("model-params")
-        .w_full()
-        .min_w_0()
-        .gap(px(8.))
-        .p_3()
-        .child(temperature_row)
-        .child(
-            h_flex()
-                .w_full()
-                .gap(px(16.))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(px(4.))
-                        .child(param_label(t!("model_context_size").to_string(), cx))
-                        .child(context_field),
-                )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(px(4.))
-                        .child(param_label(t!("model_max_tokens").to_string(), cx))
-                        .child(max_field),
-                ),
-        )
-        .child(reasoning)
-        .into_any_element()
-}
-
-fn model_footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
-    let border = cx.theme().border;
-    let primary = cx.theme().primary;
-    let foreground = cx.theme().foreground;
-    let save_enabled = observer.model_config_draft.is_some() && observer.models_pending.is_none();
-    div()
-        .w_full()
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .justify_end()
-                .gap(px(10.))
-                .px_3()
-                .py_2()
-                .child(
-                    div()
-                        .id("model-config-cancel")
-                        .flex_none()
-                        .px(px(14.))
-                        .py(px(5.))
-                        .rounded(px(6.))
-                        .border_1()
-                        .border_color(border)
-                        .cursor_pointer()
-                        .text_size(px(13.))
-                        .text_color(foreground)
-                        .hover(|style| style.bg(cx.theme().muted))
-                        .child(t!("action_cancel").to_string())
-                        .on_click(cx.listener(|this, _, _, cx| this.close_quick_panel(cx))),
-                )
-                .child(
-                    div()
-                        .id("model-config-save")
-                        .flex_none()
-                        .px(px(14.))
-                        .py(px(5.))
-                        .rounded(px(6.))
-                        .bg(if save_enabled {
-                            primary
-                        } else {
-                            primary.opacity(0.5)
-                        })
-                        .text_size(px(13.))
-                        .text_color(cx.theme().primary_foreground)
-                        .when(save_enabled, |button| {
-                            button
-                                .cursor_pointer()
-                                .hover(|style| style.opacity(0.9))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(draft) = this.model_config_draft.take() {
-                                        this.save_models(draft, cx);
-                                        this.close_quick_panel(cx);
-                                    }
-                                }))
-                        })
-                        .child(t!("session_save").to_string()),
-                ),
-        )
         .into_any_element()
 }
 

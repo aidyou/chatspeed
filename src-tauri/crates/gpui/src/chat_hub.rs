@@ -58,6 +58,22 @@ pub(crate) struct ProxySettings {
     socks: bool,
 }
 
+impl ProxySettings {
+    /// The HTTP proxy URL the remote image loader can apply. Reqwest in this
+    /// build has no SOCKS connector, so only HTTP proxies are exposed.
+    pub(crate) fn http_url(&self) -> Option<String> {
+        if self.socks {
+            return None;
+        }
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        Some(format!("http://{host}:{}", self.port))
+    }
+}
+
 /// Reads the network settings the runtime published for its webviews.
 pub(crate) fn proxy_from_config(config: &serde_json::Value) -> Option<ProxySettings> {
     let proxy_type = config["proxy_type"].as_str().unwrap_or("none");
