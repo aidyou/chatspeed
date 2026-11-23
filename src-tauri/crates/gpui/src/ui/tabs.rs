@@ -9,7 +9,7 @@ use gpui_kit::*;
 use super::tokens::{SPACE_4, SPACE_8, SPACE_24};
 
 /// A single-selection capsule shared by configuration forms.
-pub(crate) fn capsule_segments(
+pub fn capsule_segments(
     id_prefix: &str,
     options: Vec<(&'static str, String)>,
     selected: &str,
@@ -49,7 +49,7 @@ pub(crate) fn capsule_segments(
 /// Renders Vue's default `el-tabs` header: bottom hairline, primary-colored
 /// active label, and a 2px primary underline. The caller owns the active index
 /// and the body below the header.
-pub(crate) fn underline_tabs(
+pub fn underline_tabs(
     id_prefix: &'static str,
     labels: Vec<String>,
     active: usize,

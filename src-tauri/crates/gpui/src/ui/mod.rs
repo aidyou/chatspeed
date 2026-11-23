@@ -7,14 +7,12 @@ use gpui_kit::*;
 
 pub(crate) mod history_scrollbar;
 mod icon;
-mod menu_popover;
-pub(crate) mod tabs;
+pub(crate) use chatspeed_gpui::components::{select as menu_popover, tabs, tokens};
 pub(crate) mod terminal;
 
 pub use icon::Icon;
 pub(crate) use icon::{IconAssets, Spin};
 
-pub(crate) mod tokens;
 pub(crate) use tokens::{field_bg, surfaces, Surfaces};
 
 /// Hover hints appear faster than the library's 500ms default.
@@ -242,48 +240,7 @@ pub(super) fn icon_button_element(
         .into_any_element()
 }
 
-/// Wraps a control so `Popover` can own its open state.
-///
-/// `Popover::trigger` needs `Selectable`, which only the component library's own
-/// controls implement; the chrome uses flat hand-drawn buttons instead.
-pub struct Trigger {
-    element: AnyElement,
-    open: bool,
-}
-
-impl Trigger {
-    pub fn new(element: impl IntoElement) -> Self {
-        Self {
-            element: element.into_any_element(),
-            open: false,
-        }
-    }
-}
-
-impl gpui_kit::component::Selectable for Trigger {
-    fn selected(mut self, selected: bool) -> Self {
-        self.open = selected;
-        self
-    }
-
-    fn is_selected(&self) -> bool {
-        self.open
-    }
-}
-
-impl IntoElement for Trigger {
-    type Element = AnyElement;
-
-    fn into_element(self) -> Self::Element {
-        self.element
-    }
-}
-
-/// A flat popover trigger: the inner element stays a plain, unstyled surface so
-/// `Popover` receives the press and the titlebar drag area keeps the rest.
-pub fn trigger(element: impl IntoElement) -> Trigger {
-    Trigger::new(element)
-}
+pub use chatspeed_gpui::components::trigger;
 
 pub mod approval;
 pub mod composer;

@@ -4,9 +4,12 @@
 //! so they render one component. Callers only differ in where the saved map
 //! goes and whether a catalog refresh is still pending.
 
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
-use gpui_kit::component::{h_flex, switch::Switch, v_flex, ActiveTheme, Sizable};
+use chatspeed_gpui::components::{
+    input::{Input, InputEvent, InputState},
+    slider::{Slider, SliderEvent, SliderState, SliderValue},
+    switch::Switch,
+};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
@@ -709,8 +712,7 @@ fn model_params(
         let state = state.read(cx);
         (state.context_input.clone(), state.max_tokens_input.clone())
     };
-    let context_field = Input::new(&context_input)
-        .bg(crate::ui::field_bg(cx))
+    let context_field = chatspeed_gpui::components::input::field(&context_input, cx)
         .suffix(
             h_flex()
                 .flex_none()

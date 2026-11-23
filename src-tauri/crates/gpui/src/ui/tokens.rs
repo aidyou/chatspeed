@@ -2,16 +2,16 @@
 
 use gpui_kit::{component::ActiveTheme, px, rgb, white, App, Hsla, Pixels};
 
-pub(crate) const SPACE_4: Pixels = px(4.);
-pub(crate) const SPACE_8: Pixels = px(8.);
-pub(crate) const SPACE_12: Pixels = px(12.);
-pub(crate) const SPACE_16: Pixels = px(16.);
-pub(crate) const SPACE_24: Pixels = px(24.);
-pub(crate) const RADIUS_SMALL: Pixels = px(4.);
-pub(crate) const RADIUS_MEDIUM: Pixels = px(8.);
+pub const SPACE_4: Pixels = px(4.);
+pub const SPACE_8: Pixels = px(8.);
+pub const SPACE_12: Pixels = px(12.);
+pub const SPACE_16: Pixels = px(16.);
+pub const SPACE_24: Pixels = px(24.);
+pub const RADIUS_SMALL: Pixels = px(4.);
+pub const RADIUS_MEDIUM: Pixels = px(8.);
 
 /// Native fields stay white in light mode; dark mode follows the web input token.
-pub(crate) fn field_bg(cx: &App) -> Hsla {
+pub fn field_bg(cx: &App) -> Hsla {
     if cx.theme().is_dark() {
         rgb(0x282b2d).into()
     } else {

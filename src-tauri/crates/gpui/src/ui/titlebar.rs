@@ -40,11 +40,11 @@ const MACOS_TRAFFIC_LIGHTS_INSET: f32 = 78.;
 const AUTOMATION_MODEL_SLOTS: [&str; 5] = crate::ui::composer::model_config::MODEL_SLOTS;
 
 fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Context<Observer>) {
-    use gpui_kit::component::{
+    use chatspeed_gpui::components::{
         button::{Button, ButtonVariants},
         input::{Input, InputState, Textarea, TextareaState},
-        WindowExt,
     };
+    use gpui_kit::component::WindowExt;
     if observer.automation_pending || window.has_active_dialog(cx) {
         return;
     }

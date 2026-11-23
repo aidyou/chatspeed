@@ -20,7 +20,7 @@ fn list_height(top: Pixels, inset: Pixels, rem: Pixels) -> Pixels {
 }
 
 #[derive(IntoElement)]
-pub(super) struct MenuPopover {
+pub struct MenuPopover {
     id: &'static str,
     button: AnyElement,
     content: Box<MenuContent>,
@@ -30,7 +30,7 @@ type MenuContent =
     dyn Fn(&mut PopoverState, &mut Window, &mut Context<PopoverState>) -> Stateful<Div>;
 
 impl MenuPopover {
-    pub(super) fn new(
+    pub fn new(
         id: &'static str,
         button: AnyElement,
         content: impl Fn(&mut PopoverState, &mut Window, &mut Context<PopoverState>) -> Stateful<Div>

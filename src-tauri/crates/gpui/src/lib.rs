@@ -3,6 +3,8 @@
 //! Reads snapshots and live events and carries the user's actions — messages,
 //! approvals and stops — back to the runtime.
 pub mod chimes;
+#[cfg(feature = "gui")]
+pub mod components;
 pub mod icons;
 pub mod metrics;
 pub mod model;
