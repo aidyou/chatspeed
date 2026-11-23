@@ -1424,6 +1424,7 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                 }
                 let mut reconcile = tokio::time::interval(Duration::from_secs(5));
                 reconcile.tick().await;
+                let mut last_question_sync: Option<Instant> = None;
                 loop {
                     tokio::select! {
                         next = stream.next_event() => {
@@ -1434,7 +1435,17 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                                         .is_some_and(|(instance, sequence)| instance == envelope.server_instance_id
                                             && sequence.parse::<u64>().is_ok_and(|last| envelope.sequence <= last)) { continue; }
                                     cursor = Some(next_cursor);
-                                    if !send(&tx, generation, UpdateKind::Event(envelope.payload)).await { return; }
+                                    let event = envelope.payload;
+                                    let needs_question_id = event["type"] == "state"
+                                        && event["wait_reason"] == "user_input"
+                                        && event.get("awaiting_user_tool_call_id").is_none();
+                                    if !send(&tx, generation, UpdateKind::Event(event)).await { return; }
+                                    // Older streams omit the question ID. Read it from the
+                                    // authoritative snapshot instead of guessing from history.
+                                    if needs_question_id && last_question_sync.is_none_or(|last| last.elapsed() >= Duration::from_secs(1)) {
+                                        last_question_sync = Some(Instant::now());
+                                        let _ = snapshot(&client, &id, &tx, generation).await;
+                                    }
                                 }
                                 Ok(None) => break,
                                 Err(error) => {

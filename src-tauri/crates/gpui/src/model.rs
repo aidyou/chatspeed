@@ -566,10 +566,14 @@ impl Model {
             "state" => {
                 self.state = event["state"].as_str().unwrap_or_default().to_owned();
                 self.wait_reason = event["wait_reason"].as_str().unwrap_or_default().to_owned();
-                self.awaiting_user_tool_call_id = event["awaiting_user_tool_call_id"]
-                    .as_str()
-                    .filter(|id| !id.is_empty())
-                    .map(str::to_owned);
+                let call_id = event.get("awaiting_user_tool_call_id");
+                if self.wait_reason != "user_input" || call_id.is_some() {
+                    self.awaiting_user_tool_call_id = call_id
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .filter(|_| self.wait_reason == "user_input")
+                        .map(str::to_owned);
+                }
             }
             "compression_status" => {
                 self.compressing = event["is_compressing"].as_bool().unwrap_or(false);
@@ -838,8 +842,20 @@ mod tests {
             Some("call-ask")
         );
 
+        // Live events from runtimes that omit the ID must not discard the
+        // active question already identified by the snapshot.
+        model.event(json!({"type":"state","state":"awaiting_user","wait_reason":"user_input"}));
+        assert_eq!(model.awaiting_user_tool_call_id.as_deref(), Some("call-ask"));
+
         model.event(json!({"type":"state","state":"executing","wait_reason":"approval"}));
         assert_eq!(model.wait_reason, "approval");
+        assert_eq!(model.awaiting_user_tool_call_id, None);
+
+        model.event(json!({"type":"state","state":"awaiting_user","wait_reason":"user_input"}));
+        assert_eq!(model.awaiting_user_tool_call_id, None);
+        model.event(json!({"type":"state","state":"awaiting_user","wait_reason":"user_input",
+            "awaiting_user_tool_call_id":"next-question"}));
+        assert_eq!(model.awaiting_user_tool_call_id.as_deref(), Some("next-question"));
     }
 
     #[test]

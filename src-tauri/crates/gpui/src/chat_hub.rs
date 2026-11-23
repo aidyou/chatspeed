@@ -145,8 +145,10 @@ pub(crate) fn proxy_from_config(config: &serde_json::Value) -> Option<ProxySetti
 
 struct Page {
     site: Site,
-    view: Rc<WebView>,
-    bounds: Rc<Cell<Option<[f32; 4]>>>,
+    view: Option<Rc<WebView>>,
+    bounds: Rc<Cell<Option<Rect>>>,
+    #[cfg(target_os = "linux")]
+    applied_bounds: Option<Rect>,
 }
 
 /// The docked column: one native page per chat site, at most one visible.
@@ -289,11 +291,27 @@ impl Dock {
         site: Site,
     ) -> Result<(), String> {
         if !self.pages.iter().any(|page| page.site.id == site.id) {
-            let view = self.build(window, &site.url)?;
+            if !web_url(&site.url) {
+                return Err("Expected an HTTP(S) address".into());
+            }
+            #[cfg(not(target_os = "linux"))]
+            let view = Some(Rc::new(self.build(
+                window,
+                &site.url,
+                Rect {
+                    position: wry::dpi::LogicalPosition::new(-1024, -1024).into(),
+                    size: wry::dpi::LogicalSize::new(1, 1).into(),
+                },
+            )?));
             self.pages.push(Page {
                 site: site.clone(),
-                view: Rc::new(view),
+                #[cfg(not(target_os = "linux"))]
+                view,
+                #[cfg(target_os = "linux")]
+                view: None,
                 bounds: Rc::new(Cell::new(None)),
+                #[cfg(target_os = "linux")]
+                applied_bounds: None,
             });
         }
         self.active = Some(site.id);
@@ -331,23 +349,27 @@ impl Dock {
         self.sync_visibility();
     }
 
-    fn sync_visibility(&self) {
-        for page in &self.pages {
+    fn sync_visibility(&mut self) {
+        for page in &mut self.pages {
             let shown = self.visible && self.active == Some(page.site.id);
             if !shown {
-                // Forgetting the last rectangle makes the next frame re-apply the
-                // geometry: a page that was only hidden otherwise keeps whatever
-                // size the platform restored, which showed up as a tiny view.
-                page.bounds.set(None);
-                let _ = page.view.set_visible(false);
+                // A remapped native view needs the current dock geometry, even
+                // when GPUI measures the same rectangle as before it was hidden.
+                #[cfg(not(target_os = "linux"))]
+                let was_shown = page.bounds.take().is_some();
+                #[cfg(target_os = "linux")]
+                let was_shown = {
+                    page.bounds.set(None);
+                    page.applied_bounds.take().is_some()
+                };
+                if let (true, Some(view)) = (was_shown, &page.view) {
+                    let _ = view.set_visible(false);
+                }
             }
         }
     }
 
-    fn build(&mut self, window: &mut Window, url: &str) -> Result<WebView, String> {
-        if !web_url(url) {
-            return Err("Expected an HTTP(S) address".into());
-        }
+    fn build(&mut self, window: &mut Window, url: &str, rect: Rect) -> Result<WebView, String> {
         #[cfg(target_os = "macos")]
         let builder = {
             use wry::WebViewBuilderExtDarwin;
@@ -356,13 +378,8 @@ impl Dock {
         #[cfg(not(target_os = "macos"))]
         let builder = WebViewBuilder::new_with_web_context(&mut self.context);
         let builder = builder
-            .with_visible(false)
-            // Wry briefly maps the GTK host even for hidden children. Keep that
-            // initial surface outside the parent until the dock lays it out.
-            .with_bounds(Rect {
-                position: wry::dpi::LogicalPosition::new(-1024, -1024).into(),
-                size: wry::dpi::LogicalSize::new(1, 1).into(),
-            })
+            .with_visible(cfg!(target_os = "linux"))
+            .with_bounds(rect)
             .with_url(url)
             .with_background_color(self.background)
             .with_navigation_handler(|url| web_url(&url))
@@ -482,67 +499,127 @@ impl Dock {
         self.is_empty() && self.growth.is_some()
     }
 
+    #[cfg(target_os = "linux")]
+    fn apply_layout(
+        &mut self,
+        window: &mut Window,
+        id: i64,
+        bounds: &Rc<Cell<Option<Rect>>>,
+        rect: Option<Rect>,
+    ) -> Result<(), String> {
+        if !self.visible || self.active != Some(id) || bounds.get() != rect {
+            return Ok(());
+        }
+        let Some(index) = self
+            .pages
+            .iter()
+            .position(|page| page.site.id == id && Rc::ptr_eq(&page.bounds, bounds))
+        else {
+            return Ok(());
+        };
+        let applied = self.pages[index].applied_bounds;
+        if applied == rect {
+            return Ok(());
+        }
+        let result = match (rect, &self.pages[index].view) {
+            (Some(rect), None) => {
+                let url = self.pages[index].site.url.clone();
+                self.build(window, &url, rect).and_then(|view| {
+                    resize_x11_child(&view, rect, false)?;
+                    self.pages[index].view = Some(Rc::new(view));
+                    Ok(())
+                })
+            }
+            (Some(rect), Some(view)) => resize_x11_child(view, rect, applied.is_none()),
+            (None, Some(view)) => view.set_visible(false).map_err(|error| error.to_string()),
+            (None, None) => Ok(()),
+        };
+        if result.is_ok() {
+            self.pages[index].applied_bounds = rect;
+        } else {
+            self.close_tab(id);
+        }
+        result
+    }
+
     /// The active page's canvas; the other pages stay hidden until selected.
-    pub(crate) fn dock(&self) -> AnyElement {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn dock(&self, cx: &Context<crate::Observer>) -> AnyElement {
+        let Some(page) = self
+            .pages
+            .iter()
+            .find(|page| Some(page.site.id) == self.active)
+        else {
+            return div().flex_1().min_h_0().w_full().into_any_element();
+        };
+        let id = page.site.id;
+        let bounds_cell = Rc::downgrade(&page.bounds);
+        let owner = cx.entity().downgrade();
+        canvas(
+            |_, _, _| (),
+            move |bounds, (), window, cx| {
+                let Some(bounds_cell) = bounds_cell.upgrade() else {
+                    return;
+                };
+                let rect = x11_dock_rect(bounds, window.viewport_size(), window.scale_factor());
+                if bounds_cell.replace(rect) == rect {
+                    return;
+                }
+                // Creating a GTK child also maps it. Defer until after layout so
+                // its first visible rectangle is the dock, not the window origin.
+                window.defer(cx, move |window, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        if let Some(dock) = &mut this.chat_hub {
+                            if let Err(error) = dock.apply_layout(window, id, &bounds_cell, rect) {
+                                this.show_toast(crate::ToastKind::Error, error, cx);
+                            }
+                        }
+                    });
+                });
+            },
+        )
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .into_any_element()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn dock(&self, _: &Context<crate::Observer>) -> AnyElement {
         let active = self.active.and_then(|id| {
-            self.pages
-                .iter()
-                .find(|page| page.site.id == id)
-                .map(|page| (page.view.clone(), page.bounds.clone()))
+            let page = self.pages.iter().find(|page| page.site.id == id)?;
+            Some((Rc::downgrade(page.view.as_ref()?), page.bounds.clone()))
         });
         let Some((view, last)) = active else {
             return div().flex_1().min_h_0().w_full().into_any_element();
         };
-        let view = Rc::downgrade(&view);
         canvas(
             |_, _, _| (),
-            move |bounds, (), window, _| {
+            move |bounds, (), _, _| {
                 let Some(view) = view.upgrade() else {
                     return;
                 };
-                let next = [
-                    bounds.origin.x,
-                    bounds.origin.y,
-                    bounds.size.width,
-                    bounds.size.height,
-                ]
-                .map(f32::from);
-                #[cfg(target_os = "linux")]
-                let (next, rect) = {
-                    use wry::dpi::{PhysicalPosition, PhysicalSize};
-                    let scale = window.scale_factor();
-                    let [x, y, w, h] = next;
-                    let left = (x * scale).round();
-                    let top = (y * scale).round();
-                    let width = ((x + w) * scale).round() - left;
-                    let height = ((y + h) * scale).round() - top;
-                    (
-                        [left, top, width, height],
-                        Rect {
-                            position: PhysicalPosition::new(left as i32, top as i32).into(),
-                            size: PhysicalSize::new(width as u32, height as u32).into(),
-                        },
-                    )
-                };
-                #[cfg(not(target_os = "linux"))]
-                let rect = {
-                    let _ = window;
-                    use wry::dpi::{LogicalPosition, LogicalSize};
-                    Rect {
-                        position: LogicalPosition::new(next[0], next[1]).into(),
-                        size: LogicalSize::new(next[2], next[3]).into(),
-                    }
-                };
-                if next[2] <= 0. || next[3] <= 0. {
+                let w = f32::from(bounds.size.width);
+                let h = f32::from(bounds.size.height);
+                if w <= 0. || h <= 0. {
                     let _ = view.set_visible(false);
                     last.set(None);
                     return;
                 }
-                if last.get() != Some(next)
+                use wry::dpi::{LogicalPosition, LogicalSize};
+                let rect = Rect {
+                    position: LogicalPosition::new(
+                        f32::from(bounds.origin.x),
+                        f32::from(bounds.origin.y),
+                    )
+                    .into(),
+                    size: LogicalSize::new(w, h).into(),
+                };
+                if last.get() != Some(rect)
                     && view.set_bounds(rect).is_ok()
                     && view.set_visible(true).is_ok()
                 {
-                    last.set(Some(next));
+                    last.set(Some(rect));
                 }
             },
         )
@@ -550,6 +627,95 @@ impl Dock {
         .min_h_0()
         .w_full()
         .into_any_element()
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn x11_dock_rect(
+    bounds: gpui_kit::Bounds<gpui_kit::Pixels>,
+    viewport: gpui_kit::Size<gpui_kit::Pixels>,
+    scale: f32,
+) -> Option<Rect> {
+    use gpui_kit::px;
+    use wry::dpi::{PhysicalPosition, PhysicalSize};
+    let to_pixel = |value| (f32::from(value) * scale).round() as i32;
+    let left = to_pixel(bounds.origin.x.max(px(0.)));
+    let top = to_pixel(bounds.origin.y.max(px(0.)));
+    let right = to_pixel((bounds.origin.x + bounds.size.width).min(viewport.width));
+    let bottom = to_pixel((bounds.origin.y + bounds.size.height).min(viewport.height));
+    (right > left && bottom > top).then(|| Rect {
+        position: PhysicalPosition::new(left, top).into(),
+        size: PhysicalSize::new((right - left) as u32, (bottom - top) as u32).into(),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn resize_x11_child(view: &WebView, rect: Rect, show: bool) -> Result<(), String> {
+    use gtk::prelude::*;
+    use wry::WebViewExtUnix;
+    let widget = view.webview();
+    let host = widget
+        .toplevel()
+        .and_then(|widget| widget.downcast::<gtk::Window>().ok())
+        .ok_or_else(|| wry::Error::UnsupportedWindowHandle.to_string())?;
+    let scale = f64::from(widget.scale_factor());
+    let size = rect.size.to_logical::<i32>(scale);
+    let width = size.width.max(1);
+    let height = size.height.max(1);
+    // Wry's immediate allocation alone leaves GTK free to restore the old
+    // toplevel size on its next layout or after a hide/show cycle.
+    host.set_default_size(width, height);
+    host.resize(width, height);
+    view.set_bounds(rect).map_err(|error| error.to_string())?;
+    if show {
+        // gtk_window_move only queues a move on an unmapped host. Also move
+        // the native child while hidden so XMapWindow cannot show stale bounds.
+        if let Some(native) = host.window() {
+            let position = rect.position.to_logical::<i32>(scale);
+            native.move_resize(position.x, position.y, width, height);
+        }
+        view.set_visible(true).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[::core::prelude::v1::test]
+fn x11_dock_rect_keeps_the_panel_offset_and_rounds_edges() {
+    use gpui_kit::{point, px, size, Bounds};
+    use wry::dpi::{PhysicalPosition, PhysicalSize};
+
+    let bounds = Bounds {
+        origin: point(px(620.4), px(66.4)),
+        size: size(px(506.4), px(610.4)),
+    };
+    assert_eq!(
+        x11_dock_rect(bounds, size(px(1126.), px(677.)), 1.25),
+        Some(Rect {
+            position: PhysicalPosition::new(776, 83).into(),
+            size: PhysicalSize::new(632, 763).into(),
+        }),
+    );
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[::core::prelude::v1::test]
+fn x11_dock_rect_rejects_empty_and_offscreen_layouts() {
+    use gpui_kit::{point, px, size, Bounds};
+
+    let viewport = size(px(1126.), px(677.));
+    for (x, width) in [(620., 0.), (1200., 100.), (-1024., 1.)] {
+        assert_eq!(
+            x11_dock_rect(
+                Bounds {
+                    origin: point(px(x), px(68.)),
+                    size: size(px(width), px(600.)),
+                },
+                viewport,
+                1.,
+            ),
+            None,
+        );
     }
 }
 

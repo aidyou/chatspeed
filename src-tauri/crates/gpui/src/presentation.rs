@@ -1912,6 +1912,14 @@ pub struct AskUserDraft<'a> {
     pub supplement: &'a str,
 }
 
+impl AskUserDraft<'_> {
+    /// Typed text supplies an Other answer only in the absence of an explicit choice.
+    pub fn effective_choice(self, option_count: usize) -> Option<usize> {
+        self.choice
+            .or_else(|| (!self.supplement.trim().is_empty()).then_some(option_count))
+    }
+}
+
 /// Why a draft cannot be submitted yet, so the window can name the gap.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AskUserDraftError {
@@ -1934,7 +1942,9 @@ pub fn ask_user_response(
     }
     let mut selections = Vec::new();
     for (group, draft) in groups.iter().zip(drafts) {
-        let index = draft.choice.ok_or(AskUserDraftError::Required)?;
+        let index = draft
+            .effective_choice(group.options.len())
+            .ok_or(AskUserDraftError::Required)?;
         if index == group.options.len() {
             let supplement = draft.supplement.trim();
             if supplement.is_empty() {
@@ -3205,6 +3215,34 @@ mod tests {
         assert_eq!(user_message_lines("a\nb\nc\nd\ne"), 5);
         assert!(user_message_lines(&"a".repeat(400)) > 4);
         assert!(user_message_lines(&"中".repeat(200)) > 4);
+    }
+
+    #[test]
+    fn ask_user_typed_text_selects_other_only_without_an_explicit_choice() {
+        let groups = [
+            ChoiceGroupView {
+                title: "Scope".into(),
+                options: vec!["Narrow".into(), "Wide".into()],
+                ..ChoiceGroupView::default()
+            },
+            ChoiceGroupView {
+                title: "Style".into(),
+                options: vec!["Concise".into()],
+                ..ChoiceGroupView::default()
+            },
+        ];
+        let drafts = [
+            AskUserDraft { choice: None, supplement: " Custom scope " },
+            AskUserDraft { choice: Some(0), supplement: " Extra detail " },
+        ];
+        let payload = ask_user_response(&groups, &drafts).expect("complete draft");
+        let answers = parse_ask_user_answers(&payload).expect("answers");
+        assert_eq!(answers[0].choice_index, 3);
+        assert_eq!(answers[0].choice, "Custom scope");
+        assert_eq!(answers[0].source, "other");
+        assert_eq!(answers[1].choice, "Concise\nExtra detail");
+        assert_eq!(answers[1].source, "option");
+        assert_eq!(AskUserDraft { choice: None, supplement: " \n " }.effective_choice(2), None);
     }
 
     #[test]

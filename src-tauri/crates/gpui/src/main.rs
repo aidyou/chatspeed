@@ -166,6 +166,19 @@ fn code_key(code: &str) -> u64 {
     hasher.finish()
 }
 
+const ASK_USER_OPTION_LINE: Pixels = px(20.);
+
+fn choice_marker(icon: &'static str, color: Hsla) -> impl IntoElement {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(16.))
+        .h(ASK_USER_OPTION_LINE)
+        .child(Icon::new(icon).size(14.).color(color))
+}
+
 /// One numbered `ask_user` option with its read-only selection marker.
 fn choice_option(label: String, selected: bool, cx: &mut App) -> AnyElement {
     let (icon, color) = if selected {
@@ -179,11 +192,13 @@ fn choice_option(label: String, selected: bool, cx: &mut App) -> AnyElement {
         .items_start()
         .gap_2()
         .py(px(1.))
-        .child(Icon::new(icon).size(14.).color(color))
+        .child(choice_marker(icon, color))
         .child(
             div()
+                .flex_1()
                 .min_w_0()
                 .text_size(px(13.))
+                .line_height(ASK_USER_OPTION_LINE)
                 .text_color(if selected {
                     cx.theme().primary
                 } else {
@@ -219,11 +234,13 @@ fn choice_option_live(
         .rounded(px(4.))
         .cursor_pointer()
         .hover(|style| style.bg(cx.theme().muted))
-        .child(Icon::new(icon).size(14.).color(color))
+        .child(choice_marker(icon, color))
         .child(
             div()
+                .flex_1()
                 .min_w_0()
                 .text_size(px(13.))
+                .line_height(ASK_USER_OPTION_LINE)
                 .text_color(if selected {
                     cx.theme().primary
                 } else {
@@ -2576,21 +2593,8 @@ impl Observer {
                     .auto_grow(1, 6)
                     .placeholder(t!("ask_user_other_placeholder").to_string())
             });
-            let event_key = key.clone();
-            cx.subscribe_in(&state, window, move |this, _, event: &InputEvent, _, cx| {
-                // Vue focuses the text area as soon as "Other" is picked and
-                // picks "Other" as soon as the field gains focus.
-                if !matches!(event, InputEvent::Focus | InputEvent::Change) {
-                    return;
-                }
-                let Some((_, index)) = event_key.rsplit_once(':') else {
-                    return;
-                };
-                let Ok(index) = index.parse::<usize>() else {
-                    return;
-                };
-                if !this.ask_user_choice.contains_key(&event_key) {
-                    this.ask_user_choice.insert(event_key.clone(), index);
+            cx.subscribe_in(&state, window, |_, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
             })
@@ -2637,15 +2641,14 @@ impl Observer {
                 .unwrap_or_default();
             let supplement = supplement.trim().to_owned();
             let other_index = group.options.len();
-            // A filled text area without a radio choice is Vue's "Other" path.
-            let (choice, other) = match choice {
-                Some(choice) => (Some(choice), choice == other_index),
-                None if !supplement.is_empty() => (Some(other_index), true),
-                None => (None, false),
-            };
+            let effective = presentation::AskUserDraft {
+                choice,
+                supplement: &supplement,
+            }
+            .effective_choice(other_index);
             answers.push(LocalAskUserAnswer {
-                selected: choice.filter(|choice| *choice < other_index),
-                other,
+                selected: effective.filter(|choice| *choice < other_index),
+                other: effective == Some(other_index),
                 supplement: supplement.clone(),
             });
             choices.push(choice);
@@ -2706,15 +2709,31 @@ impl Observer {
             self.child_question_choices.clear();
         }
         let Some(id) = id else { return; };
-        let count = self.child_rows.values().flatten().find_map(|row| match row {
-            Row::Tool(tool) if tool.tool_call_id == id => Some(tool.choices.len()),
-            _ => None,
-        }).unwrap_or_default();
+        let count = self
+            .active_child
+            .as_ref()
+            .and_then(|(session, _)| self.child_rows.get(session))
+            .and_then(|rows| rows.iter().find_map(|row| match row {
+                Row::Tool(tool) if tool.tool_call_id == id && !tool.choices.is_empty() => Some(tool.choices.len()),
+                _ => None,
+            }))
+            .unwrap_or_default();
         for index in 0..count {
-            self.child_question_text.entry(index).or_insert_with(|| cx.new(|cx| {
-                TextareaState::new(window, cx).auto_grow(1, 6)
+            if self.child_question_text.contains_key(&index) {
+                continue;
+            }
+            let state = cx.new(|cx| {
+                TextareaState::new(window, cx)
+                    .auto_grow(1, 6)
                     .placeholder(t!("ask_user_other_placeholder").to_string())
-            }));
+            });
+            cx.subscribe_in(&state, window, |_, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            })
+            .detach();
+            self.child_question_text.insert(index, state);
         }
     }
 
@@ -3514,8 +3533,7 @@ impl Observer {
         cx.notify();
     }
 
-    /// Creates the dock and the pending page. Runs inside `render`, where the
-    /// window is available for the native child view.
+    /// Selects the pending page after render, with the native window available.
     #[cfg(feature = "chat-hub")]
     fn apply_pending_chat_hub(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(site) = self.pending_chat_hub.take() else {
@@ -3537,12 +3555,14 @@ impl Observer {
                 }
             }
         }
-        let result = self
+        match self
             .chat_hub
             .as_mut()
-            .map(|dock| dock.open(window, cx, site));
-        if let Some(Err(error)) = result {
-            self.show_toast(ToastKind::Error, error, cx);
+            .map(|dock| dock.open(window, cx, site))
+        {
+            Some(Ok(())) => cx.notify(),
+            Some(Err(error)) => self.show_toast(ToastKind::Error, error, cx),
+            None => {}
         }
         self.ensure_chat_hub_sites(cx);
     }
@@ -4217,12 +4237,7 @@ impl Observer {
             }
             MsgScope::Child => Self::ask_user_projected_answer(tool),
         };
-        let answering = match scope {
-            MsgScope::Main => self.ask_user_active(tool),
-            MsgScope::Child => {
-                self.child_question_id.as_deref() == Some(tool.tool_call_id.as_str())
-            }
-        } && !answered;
+        let answering = matches!(scope, MsgScope::Main) && self.ask_user_active(tool) && !answered;
         if !tool.choices.is_empty() {
             // Vue wraps the ask_user groups in a padded card and gives each
             // question its own surface.
@@ -4235,7 +4250,7 @@ impl Observer {
                 .rounded(px(8.))
                 .bg(cx.theme().muted);
             for (index, group) in tool.choices.iter().enumerate() {
-                choices = choices.child(self.choice_group(tool, group, index, answering, cx));
+                choices = choices.child(self.choice_group(tool, group, index, answering, scope, cx));
             }
             if answering {
                 let submit = tool.clone();
@@ -4666,30 +4681,50 @@ impl Observer {
     }
 
     fn child_question(&self, session: &str, tool: &ToolView, cx: &mut Context<Self>) -> Option<AnyElement> {
-        use gpui_kit::component::{button::Button, input::Textarea};
-        if self.child_connected != Some(true) || self.child_question_id.as_ref() != Some(&tool.tool_call_id)
-            || tool.choices.is_empty() || Self::ask_user_projected_answer(tool)
+        use gpui_kit::component::button::Button;
+        if self.child_connected != Some(true)
+            || self.child_question_id.as_ref() != Some(&tool.tool_call_id)
+            || tool.choices.is_empty()
+            || Self::ask_user_projected_answer(tool)
         {
             return None;
         }
         let epoch = self.child_epoch;
-        let mut panel = v_flex().gap_2();
+        let mut panel = v_flex().w_full().min_w_0().gap_2();
         for (index, group) in tool.choices.iter().enumerate() {
+            let input = self.child_question_text.get(&index);
+            let other = group.options.len();
+            let selected = presentation::AskUserDraft {
+                choice: self.child_question_choices.get(&index).copied(),
+                supplement: input.map(|state| state.read(cx).value()).as_deref().unwrap_or_default(),
+            }
+            .effective_choice(other);
             panel = panel.child(div().font_weight(FontWeight::SEMIBOLD).child(group.title.clone()));
             for (option, label) in group.options.iter().cloned().chain(std::iter::once(t!("ask_user_other").to_string())).enumerate() {
                 let session = session.to_owned();
                 let id = tool.tool_call_id.clone();
-                panel = panel.child(Button::new(format!("child-choice-{index}-{option}"))
-                    .label(if self.child_question_choices.get(&index) == Some(&option) { format!("✓ {label}") } else { label })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.current_child_matches(epoch, &session) && this.child_question_id.as_ref() == Some(&id) {
-                            this.child_question_choices.insert(index, option);
-                            cx.notify();
+                panel = panel.child(choice_option_live(
+                    format!("{}. {label}", option + 1),
+                    selected == Some(option),
+                    SharedString::from(format!("child-choice:{session}:{id}:{index}:{option}")),
+                    cx.listener(move |this, _, window, cx| {
+                        if !this.current_child_matches(epoch, &session)
+                            || this.child_connected != Some(true)
+                            || this.child_model.awaiting_user_tool_call_id.as_ref() != Some(&id)
+                        {
+                            return;
                         }
-                    })));
+                        this.child_question_choices.insert(index, option);
+                        if let (true, Some(state)) = (option == other, this.child_question_text.get(&index)) {
+                            state.update(cx, |state, cx| state.focus_handle(cx).focus(window, cx));
+                        }
+                        cx.notify();
+                    }),
+                    cx,
+                ));
             }
-            if let Some(input) = self.child_question_text.get(&index) {
-                panel = panel.child(Textarea::new(input).bg(ui::field_bg(cx)));
+            if let Some(input) = input {
+                panel = panel.child(Textarea::new(input).w_full().bg(ui::field_bg(cx)));
             }
         }
         let session = session.to_owned();
@@ -4703,7 +4738,7 @@ impl Observer {
                 let notes: Vec<_> = (0..tool.choices.len()).map(|index| this.child_question_text.get(&index)
                     .map(|input| input.read(cx).value().trim().to_owned()).unwrap_or_default()).collect();
                 let drafts: Vec<_> = notes.iter().enumerate().map(|(index, note)| presentation::AskUserDraft {
-                    choice: this.child_question_choices.get(&index).copied().or_else(|| (!note.is_empty()).then_some(tool.choices[index].options.len())),
+                    choice: this.child_question_choices.get(&index).copied(),
                     supplement: note,
                 }).collect();
                 let content = match presentation::ask_user_response(&tool.choices, &drafts) {
@@ -4873,14 +4908,16 @@ impl Observer {
         group: &ChoiceGroupView,
         index: usize,
         active: bool,
+        scope: MsgScope,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut options = v_flex().w_full().min_w_0().gap_1();
         let base = format!("{}:{}", tool.tool_call_id, index);
         let other_index = group.options.len();
-        let local = self
-            .ask_user_answered(tool)
-            .and_then(|answers| answers.get(index));
+        let local = match scope {
+            MsgScope::Main => self.ask_user_answered(tool).and_then(|answers| answers.get(index)),
+            MsgScope::Child => None,
+        };
         let read_only = !active || local.is_some();
         if read_only {
             // Vue's answered group keeps every option visible with the chosen
@@ -4926,13 +4963,23 @@ impl Observer {
                 );
             }
         } else {
+            let selected = presentation::AskUserDraft {
+                choice: self.ask_user_choice.get(&base).copied(),
+                supplement: self
+                    .ask_user_text
+                    .get(&base)
+                    .map(|state| state.read(cx).value())
+                    .as_deref()
+                    .unwrap_or_default(),
+            }
+            .effective_choice(other_index);
             for (option_index, option) in group.options.iter().enumerate() {
                 let label = format!("{}. {option}", option_index + 1);
                 let key = base.clone();
                 options = options.child(choice_option_live(
                     label,
-                    self.ask_user_choice.get(&key).copied() == Some(option_index),
-                    SharedString::from(format!("{key}:{option_index}")),
+                    selected == Some(option_index),
+                    SharedString::from(format!("ask-user:{key}:{option_index}")),
                     cx.listener(move |this, _, _, cx| {
                         this.set_ask_user_choice(key.clone(), option_index, cx)
                     }),
@@ -4943,18 +4990,17 @@ impl Observer {
             let key = base.clone();
             options = options.child(choice_option_live(
                 other_label,
-                self.ask_user_choice.get(&base).copied() == Some(other_index),
-                SharedString::from(format!("{base}:other")),
+                selected == Some(other_index),
+                SharedString::from(format!("ask-user:{base}:other")),
                 cx.listener(move |this, _, window, cx| {
                     this.ask_user_supplement(key.clone(), other_index, window, cx)
                 }),
                 cx,
             ));
-            // Vue always keeps the text area under the options while it waits;
-            // focusing it selects "Other" for the user.
+            // Keep the draft available as either a custom answer or a note.
             if let Some(state) = self.ask_user_text.get(&base) {
                 options = options.child(
-                    div().w_full().pl(px(22.)).pt_1().child(
+                    div().w_full().pl(px(28.)).pt_1().child(
                         div()
                             .w_full()
                             .rounded(px(4.))
@@ -5615,7 +5661,7 @@ impl Render for Observer {
                     .border_color(border)
                     .bg(background)
                     .child(strip)
-                    .child(dock.dock())
+                    .child(dock.dock(cx))
                     .into_any_element()
             });
         #[cfg(not(feature = "chat-hub"))]
