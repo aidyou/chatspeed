@@ -152,7 +152,7 @@ pub(crate) fn child_loading(cx: &App) -> AnyElement {
             Icon::new("loading")
                 .size(12.)
                 .color(muted)
-                .spin("child-loading", crate::ui::icon::Spin::Eased),
+                .spin("child-loading", crate::ui::icon::Spin::Accelerate),
         )
         .child(t!("sub_agent_loading").to_string())
         .into_any_element()

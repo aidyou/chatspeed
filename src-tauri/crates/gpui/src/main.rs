@@ -5687,7 +5687,6 @@ impl Render for Observer {
                 chatspeed_gpui::components::skeleton::block(width, max_width, height, radius, cx)
             };
             content = content.child(chatspeed_gpui::components::skeleton::pulse(
-                "session-switch-skeleton",
                 v_flex()
                     .w_full()
                     .gap_5()
@@ -5707,7 +5706,7 @@ impl Render for Observer {
                             .child(block(0.64, 416., 12., 4.))
                             .child(block(0.36, 240., 12., 4.)),
                     ),
-                cx,
+                window,
             ));
         }
         let active_group = ui::transcript::latest_active_group(&self.rows, self.workflow_running());

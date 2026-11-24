@@ -133,7 +133,10 @@ fn bezier_phase(phase: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
 static SPIN_EPOCH: OnceLock<Instant> = OnceLock::new();
 
 /// Normalized progress through one `period`-long turn.
-fn spin_phase(period: Duration) -> f32 {
+///
+/// Shared with the skeleton pulse so every looping indicator in the window
+/// advances off one clock.
+pub fn spin_phase(period: Duration) -> f32 {
     let origin = SPIN_EPOCH.get_or_init(Instant::now);
     let period = period.as_nanos().max(1);
     (origin.elapsed().as_nanos() % period) as f32 / period as f32

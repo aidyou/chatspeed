@@ -50,8 +50,8 @@ pub(crate) fn chrome_label(text: impl Into<SharedString>) -> ChromeLabel {
     ChromeLabel(text.into())
 }
 
-/// Vue's sidebar tooltip: the conversation title with the primary authorized
-/// folder underneath, so a collapsed badge still identifies both.
+/// Vue's sidebar tooltip: the conversation title with the status and primary
+/// authorized folder underneath, so a collapsed badge still identifies both.
 pub(crate) fn tip_session(
     title: String,
     root: Option<String>,
@@ -65,7 +65,9 @@ pub(crate) fn tip_session(
         let root = root.clone();
         let status = status.clone();
         let tooltip = chatspeed_gpui::components::tooltip::Tooltip::element(move |_, cx| {
-            let muted = cx.theme().muted_foreground;
+            // On the tooltip's own surface, not the theme's: the panel is
+            // inverted against the page, so `muted_foreground` would vanish.
+            let muted = chatspeed_gpui::components::tooltip::dim(cx.theme().is_dark());
             let mut content = v_flex()
                 .max_w(px(320.))
                 .min_w_0()
@@ -123,9 +125,9 @@ pub(crate) fn tip_session(
                 }
                 content = content.child(meta);
             }
-            content
+            content.into_any_element()
         });
-        chatspeed_gpui::components::tooltip::compact(tooltip).build(window, cx)
+        chatspeed_gpui::components::tooltip::compact(tooltip, cx).build(window, cx)
     }
 }
 

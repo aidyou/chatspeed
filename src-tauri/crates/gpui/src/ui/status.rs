@@ -1543,7 +1543,10 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
             });
             let refresh_color = Hsla::from(accent());
             let refresh_icon = if observer.efficiency_loading {
-                Icon::new("loading").spin("status-efficiency-spin", crate::ui::icon::Spin::Linear)
+                Icon::new("loading").spin(
+                    "status-efficiency-spin",
+                    crate::ui::icon::Spin::Accelerate,
+                )
             } else {
                 Icon::new("refresh")
             }
@@ -1597,7 +1600,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                     .child(empty_state_with_icon(
                         Icon::new("loading").spin(
                             "status-efficiency-initial-spin",
-                            crate::ui::icon::Spin::Linear,
+                            crate::ui::icon::Spin::Accelerate,
                         ),
                         t!("status_panel_loading").to_string(),
                         false,
