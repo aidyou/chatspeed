@@ -2462,14 +2462,14 @@ impl Observer {
         cx.notify();
     }
 
-    fn remove_queued_message(&mut self, generation: u64, id: &str, cx: &mut Context<Self>) {
+    fn remove_queued_message(&mut self, generation: u64, id: &str, cx: &mut Context<Self>) -> bool {
         if !self.model.accepts(generation)
             || !self.model.queued_messages.iter().any(|item| item.id == id)
         {
-            return;
+            return false;
         }
         let Some(session) = self.selected.clone() else {
-            return;
+            return false;
         };
         // Leave the row visible until the runtime confirms removal or applies it.
         if self.worker.commands.try_send(Command::Signal {
@@ -2477,7 +2477,79 @@ impl Observer {
             signal: serde_json::json!({"type": "remove_queued_user_message", "queued_user_message_id": id}),
         }).is_err() {
             self.show_toast(ToastKind::Error, t!("queued_message_remove_failed").to_string(), cx);
+            return false;
         }
+        // Keep the row visible with its pending label until the runtime drops
+        // it, so a slow acknowledgement never reads as a lost click.
+        self.model.mark_queue_removal(id);
+        cx.notify();
+        true
+    }
+
+    /// Reopens a queued message in the composer so the user can revise it.
+    ///
+    /// The queue is the only pending send, so the row is removed through the
+    /// same runtime signal as the delete action, and the composer is filled
+    /// only when that signal is accepted: a transport failure must not leave
+    /// the text in the composer while the message is still queued.
+    fn edit_queued_message(
+        &mut self,
+        generation: u64,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.model.accepts(generation) {
+            return;
+        }
+        let Some(item) = self
+            .model
+            .queued_messages
+            .iter()
+            .find(|item| item.id == id)
+        else {
+            return;
+        };
+        let content = item.content.clone();
+        // A queued row keeps only the local image paths it was sent with, the
+        // same subset the row itself renders; remote metadata stays behind.
+        let attachments = item.metadata["attachments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|attachment| {
+                let path = PathBuf::from(attachment["path"].as_str()?);
+                if !path.is_absolute() || !crate::is_image_path(&path) {
+                    return None;
+                }
+                let name = attachment["name"]
+                    .as_str()
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        path.file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                    })?;
+                Some(Attachment { path, name })
+            })
+            .collect::<Vec<_>>();
+        if !self.remove_queued_message(generation, id, cx) {
+            return;
+        }
+        // The pending draft wins over the composer on the next render, so clear
+        // it before the queued text replaces whatever the composer held.
+        self.restore_composer = None;
+        self.attachments = attachments;
+        self.composer
+            .update(cx, |state, cx| state.set_value(content, window, cx));
+        self.suggestions.file_request = None;
+        self.file_results.clear();
+        self.composer.update(cx, |state, cx| {
+            let focus = state.focus_handle(cx);
+            focus.focus(window, cx);
+        });
+        self.schedule_draft_save(cx);
+        cx.notify();
     }
 
     fn remove_attachment(&mut self, index: usize, cx: &mut Context<Self>) {

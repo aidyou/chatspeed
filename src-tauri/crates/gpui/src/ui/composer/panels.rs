@@ -788,7 +788,6 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                             persist_shell_rules(this, updated, cx);
                         });
                     },
-                    cx,
                 );
                 rules_body = rules_body.child(
                     h_flex()

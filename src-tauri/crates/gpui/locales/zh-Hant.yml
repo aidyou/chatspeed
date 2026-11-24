@@ -255,6 +255,7 @@ planning_mode_hint: "規劃模式：在執行前進行 AI 調研和方案設計"
 plugin_panel: 外掛
 queued_message_empty: "無正文的訊息"
 queued_message_remove_failed: "無法刪除排隊中的訊息"
+queued_message_removing: "正在傳送請求…"
 queued_message_send_failed: "無法傳送排隊訊息"
 queued_message_sending: "等待入隊確認…"
 queued_messages: "排隊中的訊息"

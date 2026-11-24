@@ -800,7 +800,6 @@ fn model_params(
                     cx.notify();
                 });
             },
-            cx,
         );
         reasoning = reasoning.child(
             h_flex()

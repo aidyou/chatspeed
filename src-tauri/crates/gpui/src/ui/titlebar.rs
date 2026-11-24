@@ -803,8 +803,8 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                                 window.refresh();
                             }
                         },
-                        cx,
-                    ),
+                    )
+                    .into_any_element(),
                 ))
                 .child(match frequency_state.get() {
                     0 => {

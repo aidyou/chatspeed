@@ -52,6 +52,8 @@ pub struct Model {
     /// reconciliation must not replace them with the persisted, lagging copy.
     context_usage_from_event: bool,
     pub queued_messages: Vec<QueuedMessage>,
+    /// Queue rows whose removal signal is in flight to the runtime.
+    removing_queue_ids: BTreeSet<String>,
     finished_queue_ids: BTreeSet<String>,
     snapshot_queue_ids: BTreeSet<String>,
 }
@@ -244,11 +246,30 @@ impl Model {
         let before = self.queued_messages.len();
         self.queued_messages
             .retain(|item| item.id != id || !item.provisional);
+        if !self.queued_messages.iter().any(|item| item.id == id) {
+            self.removing_queue_ids.remove(id);
+        }
         self.queued_messages.len() != before
+    }
+
+    /// Marks a queued row as awaiting the runtime's removal acknowledgement.
+    ///
+    /// The row stays in the list so the panel can report that the removal was
+    /// sent; [`Self::reconcile_queue`] clears the mark when the runtime drops
+    /// the row.
+    pub fn mark_queue_removal(&mut self, id: &str) {
+        if self.queued_messages.iter().any(|item| item.id == id) {
+            self.removing_queue_ids.insert(id.to_owned());
+        }
+    }
+
+    pub fn queue_removal_pending(&self, id: &str) -> bool {
+        self.removing_queue_ids.contains(id)
     }
 
     fn finish_queued_message(&mut self, id: &str) {
         self.finished_queue_ids.insert(id.to_owned());
+        self.removing_queue_ids.remove(id);
         self.queued_messages.retain(|item| item.id != id);
     }
 
@@ -306,6 +327,9 @@ impl Model {
         );
         self.snapshot_queue_ids = ids;
         self.queued_messages = queue;
+        // A confirmed removal also ends the row's pending acknowledgement.
+        self.removing_queue_ids
+            .retain(|id| self.queued_messages.iter().any(|item| &item.id == id));
     }
 
     /// Drops the local echo only when the backend supplies a durable user row.

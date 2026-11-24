@@ -20,11 +20,17 @@ use gpui_kit::{
 };
 use rust_i18n::t;
 
-use crate::ui::{trigger, Icon};
+use crate::ui::{icon::spin_phase, trigger, Icon};
 
 /// Vue's terminal opens at 13px with a blinking cursor.
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 18.;
+/// The caret's amber and the ink that stays readable on it: the ayu skin's
+/// cursor pair in `src/constants/terminalThemes.js`. The amber reads on both the
+/// light and dark terminal surfaces, and the dark accent keeps a glyph visible
+/// when the block sits on a character.
+const CURSOR_COLOR: u32 = 0xe6b450;
+const CURSOR_ACCENT: u32 = 0x0b0e14;
 const HEADER_HEIGHT: f32 = 38.;
 const PANEL_HEIGHT: f32 = 260.;
 const FALLBACK_CELL_WIDTH: f32 = 8.;
@@ -922,6 +928,22 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
         let rows = state.size.screen_lines();
         let has_input = state.input.is_some();
         let cursor = content.cursor;
+        let cursor_row = usize::try_from(cursor.point.line.0).unwrap_or(0);
+        let cursor_column = usize::from(cursor.point.column.0);
+        let show_cursor = has_input
+            && cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden
+            && cursor_row < rows;
+        // Sample the 1s blink from the shared clock instead of using
+        // `with_animation`: a repeating animation is pinned to phase zero under
+        // the desktop's reduced-motion preference, which left the caret on
+        // forever. Requesting the frame also keeps gpui-fast's cached scroll
+        // layers repainting.
+        let cursor_on = show_cursor && spin_phase(Duration::from_millis(1000)) < 0.5;
+        if show_cursor {
+            window.request_animation_frame();
+        }
+        let cursor_color: Hsla = rgb(CURSOR_COLOR).into();
+        let cursor_accent: Hsla = rgb(CURSOR_ACCENT).into();
         let mut lines: Vec<Vec<AnyElement>> = (0..rows).map(|_| Vec::new()).collect();
         for cell in content.display_iter {
             if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
@@ -945,6 +967,16 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                 bg = cx.theme().primary;
                 fg = cx.theme().primary_foreground;
             }
+            // Invert the cursor cell the way xterm does: the block is the
+            // cell's background, so the glyph stays readable in the accent ink
+            // instead of being painted over.
+            if cursor_on
+                && line == cursor_row
+                && usize::from(cell.point.column.0) == cursor_column
+            {
+                bg = cursor_color;
+                fg = cursor_accent;
+            }
             let width = if cell.flags.contains(Flags::WIDE_CHAR) {
                 cell_width * 2.
             } else {
@@ -961,11 +993,6 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                     .into_any_element(),
             );
         }
-        let cursor_row = usize::try_from(cursor.point.line.0).unwrap_or(0);
-        let cursor_column = usize::from(cursor.point.column.0);
-        let show_cursor = has_input
-            && cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden
-            && cursor_row < rows;
         let mut rows_view = v_flex()
             .id("terminal-rows")
             .w_full()
@@ -1020,31 +1047,13 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                     cx.notify();
                 }
             }));
-        for (line, cells) in lines.into_iter().enumerate() {
-            let mut row = h_flex()
-                .relative()
+        for cells in lines {
+            let row = h_flex()
                 .w_full()
                 .min_w_0()
                 .h(px(LINE_HEIGHT))
                 .whitespace_nowrap()
                 .children(cells);
-            if show_cursor && line == cursor_row {
-                // The caret is as tall as the glyph it sits on, not the row.
-                row = row.child(
-                    div()
-                        .absolute()
-                        .left(cell_width * cursor_column as f32)
-                        .top(px(2.))
-                        .w(px(1.))
-                        .h(px(FONT_SIZE))
-                        .bg(foreground)
-                        .with_animation(
-                            ("terminal-caret", line),
-                            Animation::new(Duration::from_millis(1000)).repeat_synced(),
-                            |caret, phase| caret.opacity(if phase < 0.5 { 1. } else { 0. }),
-                        ),
-                );
-            }
             rows_view = rows_view.child(row);
         }
         body = body

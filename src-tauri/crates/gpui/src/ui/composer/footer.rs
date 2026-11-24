@@ -591,7 +591,6 @@ fn model_effort_row(
         // capsule's smallest step and keep the row as compact as the model names.
         20_f32,
         move |level, window, cx| on_select(reasoning_budget(level), window, cx),
-        cx,
     );
     h_flex()
         .w_full()

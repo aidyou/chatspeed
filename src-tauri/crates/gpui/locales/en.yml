@@ -255,6 +255,7 @@ planning_mode_hint: "Research and design before execution"
 plugin_panel: Plugins
 queued_message_empty: "Message without text"
 queued_message_remove_failed: "Could not remove the queued message"
+queued_message_removing: "Sending request…"
 queued_message_send_failed: "Could not send the queued message"
 queued_message_sending: "Waiting for confirmation…"
 queued_messages: "Queued messages"
