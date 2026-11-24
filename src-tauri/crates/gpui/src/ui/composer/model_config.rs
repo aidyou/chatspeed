@@ -261,12 +261,7 @@ impl ModelConfigState {
     }
 
     pub(crate) fn set_reasoning_level(&mut self, level: &str) {
-        let tokens = match level {
-            "max" => 8192,
-            "high" => 4096,
-            "medium" => 2048,
-            _ => 1024,
-        };
+        let tokens = reasoning_budget(level);
         let slot = self.slot.clone();
         self.edit_slot(&slot, |config| {
             config["thinking"] = json!({
@@ -334,6 +329,29 @@ fn is_proxy(config: &Value) -> bool {
             .is_some_and(|model| model.contains('@'))
 }
 
+/// Token budget behind a reasoning capsule level.
+///
+/// The model card and the composer's quick selector both offer these levels, so
+/// the mapping lives here instead of being repeated at each capsule.
+pub(crate) fn reasoning_budget(level: &str) -> u32 {
+    match level {
+        "max" => 8192,
+        "high" => 4096,
+        "medium" => 2048,
+        _ => 1024,
+    }
+}
+
+/// The capsule level a stored budget rounds up to.
+pub(crate) fn reasoning_level(budget: u64) -> &'static str {
+    match budget {
+        4097.. => "max",
+        2049.. => "high",
+        1025.. => "medium",
+        _ => "low",
+    }
+}
+
 /// The full card body, excluding the footer so each caller can commit the draft
 /// to its own owner.
 pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut App) -> AnyElement {
@@ -355,6 +373,7 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
     let primary = cx.theme().primary;
     let muted = cx.theme().muted_foreground;
     let foreground = cx.theme().foreground;
+    let surface = crate::ui::layers(cx.theme().is_dark());
 
     let mut tabs = h_flex()
         .w_full()
@@ -404,7 +423,10 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
         .p(px(2.))
         .rounded(px(4.))
         .border_1()
-        .border_color(border);
+        // The provider/proxy switch is a well inside the card, like the
+        // reasoning capsule below it.
+        .bg(surface.track)
+        .border_color(surface.hairline);
     for (show_proxy, key) in [
         (false, "model_source_provider"),
         (true, "model_source_proxy"),
@@ -612,8 +634,11 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
                 .p(px(12.))
                 .rounded(px(8.))
                 .border_1()
-                .border_color(border)
-                .bg(cx.theme().muted.opacity(0.55))
+                // Level 2 of the dialog ladder: the popover around this card is
+                // level 1, and the segmented controls inside are level 3, so the
+                // three steps stay distinguishable in both themes.
+                .border_color(surface.hairline)
+                .bg(surface.card)
                 .child(
                     h_flex()
                         .w_full()
@@ -738,15 +763,7 @@ fn model_params(
     let budget = slot_config["thinking"]["budgetTokens"]
         .as_u64()
         .unwrap_or(1024);
-    let level = if budget > 4096 {
-        "max"
-    } else if budget > 2048 {
-        "high"
-    } else if budget > 1024 {
-        "medium"
-    } else {
-        "low"
-    };
+    let level = reasoning_level(budget);
     let state_for_thinking = state.clone();
     let thinking_switch = Switch::new("model-thinking")
         .checked(reasoning_enabled)
@@ -904,8 +921,20 @@ pub(crate) fn model_config_panel(
 
 #[cfg(test)]
 mod tests {
-    use super::{step_token_field, step_tokens};
+    use super::{reasoning_budget, reasoning_level, step_token_field, step_tokens};
     use serde_json::json;
+
+    #[::core::prelude::v1::test]
+    fn reasoning_levels_round_trip_through_their_budgets() {
+        for level in ["low", "medium", "high", "max"] {
+            assert_eq!(reasoning_level(u64::from(reasoning_budget(level))), level);
+        }
+        assert_eq!(reasoning_level(0), "low");
+        assert_eq!(reasoning_level(1025), "medium");
+        assert_eq!(reasoning_level(2049), "high");
+        assert_eq!(reasoning_level(4097), "max");
+        assert_eq!(reasoning_level(8192), "max");
+    }
 
     #[::core::prelude::v1::test]
     fn token_steps_are_one_thousand_with_no_upper_bound() {

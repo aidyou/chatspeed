@@ -253,6 +253,11 @@ pub enum Command {
     Stop {
         id: String,
     },
+    /// Resumes a stopped but continuable workflow, the way Vue's Continue
+    /// button starts the session before falling back to a `continue` signal.
+    Resume {
+        session: String,
+    },
     /// Creates a session and starts it with the first prompt.
     StartNew {
         agent_id: Option<String>,

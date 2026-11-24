@@ -2,13 +2,13 @@ action_cancel: 取消
 add_attachment: "添加附件"
 agent_placeholder: "选择代理"
 approval_default: "默认"
-approval_default_hint: "每次写入和命令都先询问"
+approval_default_hint: "沿用智能体配置或当前任务的审批方式"
 approval_full: "完全放行"
-approval_full_hint: "执行工具时不再询问"
+approval_full_hint: "完全不审批，直接执行"
 approval_level: "审批级别"
 approval_rejection_reason: 拒绝说明（可选）
 approval_smart: "智能"
-approval_smart_hint: "只对高风险操作询问"
+approval_smart_hint: "只读操作自动执行，写操作交给 AI 判断"
 approve: 批准
 approve_all: 全部批准
 approve_whitelist: 批准并加到白名单
@@ -89,6 +89,7 @@ automation_weekday_tue: 周二
 automation_weekday_wed: 周三
 automation_weekdays: 周几执行
 awaiting_approval: 等待用户审批
+cancel: "取消"
 chat_hub: ChatHub
 chat_hub_close: 关闭
 chat_hub_empty: 暂无聊天站点
@@ -104,6 +105,7 @@ collapse: 收起
 collapse_sidebar: 折叠侧栏
 completed: 已完成
 composer_placeholder: 输入下一步指令，Enter 发送
+composer_placeholder_shift: 输入下一步指令，Shift+Enter 发送
 confirm: "确认"
 connected: 已连接
 connecting: 未连接 — 正在重试发现

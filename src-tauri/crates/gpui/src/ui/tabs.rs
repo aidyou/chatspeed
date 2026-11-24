@@ -6,7 +6,7 @@ use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use super::tokens::{SPACE_4, SPACE_8, SPACE_24};
+use super::tokens::{layers, SPACE_4, SPACE_8, SPACE_24};
 
 /// A single-selection capsule shared by configuration forms.
 pub fn capsule_segments(
@@ -16,10 +16,27 @@ pub fn capsule_segments(
     on_select: impl Fn(&'static str, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
+    capsule_segments_sized(id_prefix, options, selected, 24_f32, on_select, cx)
+}
+
+/// The same capsule at a caller-chosen height, for dense popovers.
+///
+/// The label follows the height, so a shorter capsule reads as smaller text
+/// instead of keeping the form-sized type crammed inside the track.
+pub fn capsule_segments_sized(
+    id_prefix: &str,
+    options: Vec<(&'static str, String)>,
+    selected: &str,
+    height: f32,
+    on_select: impl Fn(&'static str, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
     use gpui_kit::component::button::{Button, ButtonRounded, ButtonVariants};
     let on_select = Rc::new(on_select);
-    let height = 24_f32;
     let font_size = (height / 2.).clamp(11., 16.);
+    // A segmented control is a well: level 3 of the dialog ladder, with a
+    // hairline so its edge survives a weak fill step in either theme.
+    let surface = layers(cx.theme().is_dark());
     let track = h_flex()
         .id(SharedString::from(id_prefix.to_owned()))
         .min_w_0()
@@ -28,7 +45,9 @@ pub fn capsule_segments(
         .gap(SPACE_4)
         .p(SPACE_4)
         .rounded_full()
-        .bg(cx.theme().muted)
+        .border_1()
+        .border_color(surface.hairline)
+        .bg(surface.track)
         .children(options.into_iter().map(|(value, label)| {
             let callback = on_select.clone();
             Button::new(SharedString::from(value))

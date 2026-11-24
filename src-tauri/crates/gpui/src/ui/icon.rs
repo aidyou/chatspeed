@@ -4,7 +4,11 @@
 //! with a single private-use character. This module is the native equivalent so
 //! call sites pick a size and color instead of rebuilding the same div.
 
-use std::{borrow::Cow, time::Duration};
+use std::{
+    borrow::Cow,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use gpui_kit::*;
 
@@ -77,7 +81,7 @@ pub struct Icon {
     name: &'static str,
     size: Option<f32>,
     color: Option<Hsla>,
-    spin: Option<(ElementId, Spin)>,
+    spin: Option<Spin>,
     turns: f32,
 }
 
@@ -121,6 +125,20 @@ fn bezier_phase(phase: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
     sample((low + high) / 2., y1, y2)
 }
 
+/// When the first active indicator started turning.
+///
+/// Every indicator samples this one origin, so the spinners in a transcript
+/// and the status line stay in step the way Vue's shared CSS animation does.
+/// `Instant` is monotonic, so a system clock change cannot make them jump.
+static SPIN_EPOCH: OnceLock<Instant> = OnceLock::new();
+
+/// Normalized progress through one `period`-long turn.
+fn spin_phase(period: Duration) -> f32 {
+    let origin = SPIN_EPOCH.get_or_init(Instant::now);
+    let period = period.as_nanos().max(1);
+    (origin.elapsed().as_nanos() % period) as f32 / period as f32
+}
+
 impl Icon {
     pub fn new(name: &'static str) -> Self {
         Self {
@@ -150,9 +168,13 @@ impl Icon {
         self
     }
 
-    /// Animate an active indicator using its caller's stable element ID.
-    pub fn spin(mut self, id: impl Into<ElementId>, curve: Spin) -> Self {
-        self.spin = Some((id.into(), curve));
+    /// Animate an active indicator.
+    ///
+    /// `_id` still names the indicator at each call site, but the motion no
+    /// longer keys off per-element animation state: every indicator samples
+    /// one shared clock, so they turn in step.
+    pub fn spin(mut self, _id: impl Into<ElementId>, curve: Spin) -> Self {
+        self.spin = Some(curve);
         self
     }
 }
@@ -180,25 +202,40 @@ impl RenderOnce for Icon {
                 .size(px(size))
                 .flex_none()
                 .text_color(color);
-            if let Some((id, curve)) = self.spin {
-                let seconds = match curve {
+            if let Some(curve) = self.spin {
+                let period = Duration::from_secs(match curve {
                     Spin::Linear => 2,
                     Spin::Accelerate | Spin::Eased => 1,
-                };
+                });
+                // Do not fold this back into `Animation::new(..).repeat_synced()`
+                // / `.with_max_fps(..)` behind `with_animation`. That is the
+                // obvious shape, and it is wrong here:
+                //
+                // * `gpui_kit::init` -> `gpui_component::init` ->
+                //   `gpui_base::init` -> `reduce_motion::init` reads the
+                //   desktop's reduced-motion preference (on Linux the XDG
+                //   settings portal, on macOS the accessibility display
+                //   setting, on Windows the client-area animation switch) and
+                //   stores it in `App::reduce_motion`.
+                // * gpui's `AnimationElement` answers that flag by rendering
+                //   every repeating animation at phase zero with `done = true`
+                //   and scheduling no further frames, so every spinner and the
+                //   thinking bulb sit still and look finished. Changing the
+                //   curve, the duration or `max_fps` cannot fix that — this is
+                //   why the earlier attempts did nothing.
+                //
+                // An indeterminate indicator is progress feedback rather than
+                // decoration, so it keeps turning: the phase is sampled from
+                // the shared monotonic clock below, and the next frame is
+                // requested by hand. That request is also load-bearing for
+                // gpui-fast's scroll layers — its layering only knows content
+                // is changing through `note_animation_frame`, so without it the
+                // transcript's cached tiles would keep replaying a frozen icon.
+                window.request_animation_frame();
                 return icon
-                    .with_animation(
-                        id,
-                        // Use view-local timer invalidation so a busy indicator
-                        // can advance even when the desktop window is idle.
-                        Animation::new(Duration::from_secs(seconds))
-                            .repeat_synced()
-                            .with_max_fps(30.),
-                        move |icon, phase| {
-                            icon.with_transformation(Transformation::rotate(percentage(
-                                curve.phase(phase),
-                            )))
-                        },
-                    )
+                    .with_transformation(Transformation::rotate(percentage(
+                        curve.phase(spin_phase(period)),
+                    )))
                     .into_any_element();
             }
             return icon

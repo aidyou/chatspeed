@@ -159,17 +159,16 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let foreground = cx.theme().foreground;
     let focused = observer.composer_focused;
 
+    // Vue sizes the textarea with `flex-grow: 1` beside the footer instead of
+    // giving it a percentage height: a `h_full` here resolved against the whole
+    // box, so the textarea (and its scrollbar) ran under the footer row and the
+    // lines that passed it were hidden behind the buttons.
     let textarea = Textarea::new(&observer.composer)
         .appearance(false)
         .bordered(false)
-        .w_full();
-    // A capped box keeps its own scrollbar, so typing past the visible rows
-    // scrolls instead of painting over the frame.
-    let textarea = if height.is_some() {
-        textarea.h_full()
-    } else {
-        textarea
-    };
+        .w_full()
+        .flex_1()
+        .min_h(px(0.));
 
     // Vue's `.input`: a flat input surface with a hairline border and a soft
     // drop shadow, turning into the accent edge plus a 3px halo on focus. The
@@ -233,10 +232,16 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         })
         .child(attachment_row(observer, cx))
         .child(
+            // The footer below owns its own row, so this area only has to clip
+            // what does not fit and keep a hair of breathing room above it.
             div()
                 .w_full()
+                .flex()
+                .flex_col()
+                .flex_1()
                 .min_h_0()
-                .when(height.is_some(), |view| view.flex_1())
+                .overflow_hidden()
+                .pb(px(2.))
                 .child(textarea),
         )
         .child(footer::footer(observer, cx))

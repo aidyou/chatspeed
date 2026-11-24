@@ -13,7 +13,7 @@ pub use chatspeed_gpui::components::icon::Icon;
 pub(crate) use chatspeed_gpui::components::icon::{self, IconAssets, Spin};
 pub(crate) use chatspeed_gpui::components::tooltip::{tip, TOOLTIP_DELAY};
 
-pub(crate) use tokens::{field_bg, surfaces, Surfaces};
+pub(crate) use tokens::{field_bg, layers, surfaces, Surfaces};
 
 /// Rotates an icon between two angles when a disclosure state flips.
 ///
@@ -55,31 +55,73 @@ pub(crate) fn chrome_label(text: impl Into<SharedString>) -> ChromeLabel {
 pub(crate) fn tip_session(
     title: String,
     root: Option<String>,
+    status: Option<(String, Hsla)>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     let title = SharedString::from(title);
     let root = root.map(SharedString::from);
+    let status = status.map(|(label, color)| (SharedString::from(label), color));
     move |window, cx| {
         let title = title.clone();
         let root = root.clone();
+        let status = status.clone();
         let tooltip = chatspeed_gpui::components::tooltip::Tooltip::element(move |_, cx| {
-            let mut content = v_flex().gap(px(2.)).child(
-                div()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title.clone()),
-            );
-            if let Some(root) = root.clone() {
-                content = content.child(
-                    h_flex()
-                        .items_center()
-                        .gap(px(4.))
-                        .child(
-                            Icon::new("ext-folder")
-                                .size(11.)
-                                .color(cx.theme().muted_foreground),
-                        )
-                        .child(div().text_size(px(11.)).child(root)),
+            let muted = cx.theme().muted_foreground;
+            let mut content = v_flex()
+                .max_w(px(320.))
+                .min_w_0()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title.clone()),
                 );
+            // Vue's `__meta` row: the status dot and label on the left, the
+            // primary authorized folder on the right, both in the secondary
+            // color at `--cs-font-size-xs`.
+            if status.is_some() || root.is_some() {
+                let mut meta = h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .text_size(px(10.))
+                    .text_color(muted);
+                if let Some((label, color)) = status.clone() {
+                    meta = meta.child(
+                        h_flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(div().size(px(6.)).rounded_full().bg(color))
+                            .child(label),
+                    );
+                }
+                if let Some(root) = root.clone() {
+                    meta = meta.child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .justify_end()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(Icon::new("ext-folder").size(12.).color(muted))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .child(root),
+                            ),
+                    );
+                }
+                content = content.child(meta);
             }
             content
         });

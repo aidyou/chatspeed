@@ -141,6 +141,64 @@ pub fn restore_position(window: &Window, x: i32, y: i32, name: &str) {
     }
 }
 
+/// Ask the X11 window manager to place the window at a saved origin.
+///
+/// Some window managers replace the position requested at creation with their
+/// own placement, so the origin is applied again once the window is mapped.
+/// Wayland has no client-side equivalent — the compositor owns toplevel
+/// placement — which is why the caller only reaches this on X11 sessions.
+#[cfg(target_os = "linux")]
+pub fn restore_position(window: &Window, x: f32, y: f32) {
+    use x11rb::{connection::Connection, protocol::xproto::*};
+    let scale = window.scale_factor();
+    if !(x.is_finite() && y.is_finite() && scale.is_finite() && scale > 0.) {
+        return;
+    }
+    let x = (x * scale).round() as i32;
+    let y = (y * scale).round() as i32;
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let x_window = match handle.as_raw() {
+        RawWindowHandle::Xcb(handle) => handle.window.get(),
+        RawWindowHandle::Xlib(handle) => match u32::try_from(handle.window) {
+            Ok(id) => id,
+            Err(_) => return,
+        },
+        _ => return,
+    };
+    let Ok((conn, screen)) = x11rb::connect(None) else {
+        return;
+    };
+    let Some(root) = conn.setup().roots.get(screen).map(|screen| screen.root) else {
+        return;
+    };
+    let Ok(atom) = conn.intern_atom(false, b"_NET_MOVERESIZE_WINDOW") else {
+        return;
+    };
+    let Ok(atom) = atom.reply() else {
+        return;
+    };
+    // EWMH: gravity | (flags << 8) | (source << 12). Move X and Y only and keep
+    // the size; the pager source reads as a placement, not a client hint.
+    let data = [10 | (0b0011 << 8) | (2 << 12), x as u32, y as u32, 0, 0];
+    let event = ClientMessageEvent::new(32, x_window, atom.atom, data);
+    if conn
+        .send_event(
+            false,
+            root,
+            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        )
+        .is_err()
+    {
+        return;
+    }
+    // Window managers without the EWMH message still honour a plain configure.
+    let _ = conn.configure_window(x_window, &ConfigureWindowAux::new().x(x).y(y));
+    let _ = conn.flush();
+}
+
 pub fn supported(window: &Window) -> bool {
     HasWindowHandle::window_handle(window).is_ok_and(|handle| match handle.as_raw() {
         #[cfg(target_os = "linux")]

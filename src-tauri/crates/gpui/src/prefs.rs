@@ -3,12 +3,59 @@
 
 use locale_config::Locale;
 use serde_json::Value;
+use std::{fs, path::PathBuf};
 
 /// Runtime configuration key the desktop stores the workflow window size under.
 pub const WORKFLOW_WINDOW_SIZE_KEY: &str = "workflow_window_size";
 
 /// Global status-panel positions shared by every conversation.
 pub const STATUS_PANEL_POSITION_KEY: &str = "workflow_status_panel_position";
+
+/// Where the last window origin is mirrored for the next launch.
+///
+/// The runtime configuration only arrives with the first poll, after the window
+/// has already opened, so the origin is cached locally the way Tauri's
+/// window-state plugin keeps it.
+fn window_state_path() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let dir = std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("ChatSpeed"));
+    #[cfg(target_os = "macos")]
+    let dir = std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join("Library/Application Support/ChatSpeed"));
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let dir = match std::env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
+        Some(state) => Some(PathBuf::from(state).join("chatspeed-gpui")),
+        None => std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(".local/state/chatspeed-gpui")),
+    };
+    dir.map(|dir| dir.join("window-state.json"))
+}
+
+/// The window origin saved by the previous session, in logical pixels.
+///
+/// Returns `None` when the cache is missing or malformed, so the window keeps
+/// the position it is created with.
+pub fn saved_window_origin() -> Option<(f32, f32)> {
+    let state: Value = serde_json::from_str(&fs::read_to_string(window_state_path()?).ok()?).ok()?;
+    let x = state.get("x")?.as_f64()? as f32;
+    let y = state.get("y")?.as_f64()? as f32;
+    (x.is_finite() && y.is_finite()).then_some((x, y))
+}
+
+/// Mirrors the current window origin for the next launch. Best effort: a
+/// missing or read-only cache directory only loses the remembered position.
+pub fn save_window_origin(x: f32, y: f32) {
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    let Some(path) = window_state_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, serde_json::json!({"x": x, "y": y}).to_string());
+}
 
 /// Reads one saved status-panel position in logical pixels.
 pub fn saved_status_panel_position(config: &Value, expanded: bool) -> Option<(f32, f32)> {

@@ -374,6 +374,10 @@ pub struct ToolView {
     pub diff: Option<Vec<DiffLine>>,
     pub detail: String,
     pub choices: Vec<ChoiceGroupView>,
+    /// Delegated prompt of a `sub_agent_run` call; the runtime reports the same
+    /// string as the live child's `task`, so a running call row can be matched
+    /// to the card that already shows it.
+    pub sub_agent_task: Option<String>,
 }
 
 impl ToolView {
@@ -428,6 +432,11 @@ impl ToolView {
             display_type,
             diff.is_some(),
         );
+        let sub_agent_task = (name == "sub_agent_run")
+            .then(|| args["prompt"].as_str())
+            .flatten()
+            .filter(|prompt| !prompt.trim().is_empty())
+            .map(str::to_owned);
         let icon = crate::icons::tool_icon_for(&name, category);
         let kind = ToolGroupKind::of(&name, category);
         let summary = tool_summary(message, &name, status);
@@ -449,6 +458,7 @@ impl ToolView {
             diff,
             detail,
             choices: Vec::new(),
+            sub_agent_task,
         }
     }
 }
@@ -1743,6 +1753,23 @@ pub fn live_child_card(id: &str, progress: &Value) -> Option<SubAgentView> {
     Some(card)
 }
 
+/// Whether a running `sub_agent_run` row is already shown by a live child card.
+///
+/// The live card carries the agent, tool count and context for the same
+/// delegation, so the call row would be a second card until the durable result
+/// row takes over.
+pub fn row_shown_by_live_child(row: &Row, live_tasks: &[&str]) -> bool {
+    let Row::Tool(tool) = row else {
+        return false;
+    };
+    tool.name == "sub_agent_run"
+        && tool.status.is_running()
+        && tool
+            .sub_agent_task
+            .as_deref()
+            .is_some_and(|task| live_tasks.contains(&task))
+}
+
 #[cfg(test)]
 #[test]
 fn live_child_card_shows_tool_count_without_a_completion_message() {
@@ -1765,6 +1792,20 @@ fn sub_agent_view(
         .unwrap_or("")
         .to_lowercase();
     if name != "sub_agent_run" && direct_id.is_none() && review_state != "final_review_pending" {
+        return None;
+    }
+    // A running call has no task id yet, so it is projected as the generic tool
+    // row and yields to the live child card (see `row_shown_by_live_child`),
+    // which already knows the agent name and its progress. Building a card for
+    // it here showed the same delegation twice, the call row titled with the
+    // fallback "Sub-agent" name until the durable result row replaced it.
+    let status = message.metadata["sub_agent_status"]
+        .as_str()
+        .or_else(|| message.metadata["execution_status"].as_str())
+        .or_else(|| message.metadata["data"]["execution_status"].as_str())
+        .unwrap_or("running");
+    let running = status.eq_ignore_ascii_case("running");
+    if direct_id.is_none() && review_state != "final_review_pending" && running {
         return None;
     }
     let data = &message.metadata["data"];
@@ -3061,6 +3102,40 @@ mod tests {
             &[],
         );
         assert!(matches!(&rows[0], Row::Activity(activity) if activity.ongoing));
+    }
+
+    #[test]
+    fn a_running_sub_agent_row_yields_to_its_live_child_card() {
+        let args = json!({
+            "description": "Diagnose spins",
+            "prompt": "Find why the spinners freeze",
+            "child_agent_name": "Zhugeliang",
+            "execution_mode": "call"
+        })
+        .to_string();
+        let assistant = Message {
+            id: 30,
+            role: "assistant".into(),
+            metadata: json!({"tool_calls": [{
+                "id": "call-30",
+                "function": {"name": "sub_agent_run", "arguments": args}
+            }]}),
+            ..Message::default()
+        };
+        let rows = project(vec![assistant], &[]);
+        let [Row::Tool(tool)] = rows.as_slice() else {
+            panic!("expected the projected call row");
+        };
+        assert_eq!(tool.name, "sub_agent_run");
+        assert_eq!(
+            tool.sub_agent_task.as_deref(),
+            Some("Find why the spinners freeze")
+        );
+        assert!(row_shown_by_live_child(
+            &rows[0],
+            &["Find why the spinners freeze"]
+        ));
+        assert!(!row_shown_by_live_child(&rows[0], &["another task"]));
     }
 
     #[test]

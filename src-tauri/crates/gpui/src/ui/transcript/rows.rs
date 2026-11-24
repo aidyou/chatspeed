@@ -68,7 +68,7 @@ pub(crate) fn row(
         Row::SubAgent(card) => window.sub_agent_row(card, cx),
         Row::FinishTask(view) => window.finish_task_row(view, cx),
         Row::Snapshot(snapshot) => window.snapshot_row(snapshot, cx),
-        Row::Alert(alert) => alert_row(alert, cx),
+        Row::Alert(alert) => alert_row(alert),
         Row::Divider => divider_row(cx),
     }
 }
@@ -227,50 +227,56 @@ pub(crate) fn activity_group(
         .into_any_element()
 }
 
-fn alert_row(view: &AlertView, cx: &App) -> AnyElement {
+fn alert_row(view: &AlertView) -> AnyElement {
     let is_warning = view.kind == AlertKind::Warning;
     let (icon, color) = if is_warning {
         ("warning", warning())
     } else {
         ("error", danger())
     };
-    v_flex()
+    // Vue renders an `el-alert` with `show-icon`: the icon is a fixed left
+    // column and everything else sits in one right column, so the body starts
+    // at the title text instead of under the icon. Element Plus tints the
+    // description of a light alert with the alert color too, which is why the
+    // details read red rather than as ordinary text here.
+    let mut content = v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(px(4.))
+        .child(
+            div()
+                .w_full()
+                .min_w_0()
+                .text_size(px(14.))
+                .line_height(px(24.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color)
+                .child(view.title.clone()),
+        );
+    if !view.body.is_empty() {
+        content = content.child(
+            div()
+                .w_full()
+                .min_w_0()
+                .text_size(px(13.))
+                .text_color(color)
+                .child(plain_text(&view.body, color)),
+        );
+    }
+    h_flex()
         .w_full()
         .min_w_0()
-        .gap_2()
-        .rounded(px(8.))
+        .items_start()
+        .gap(px(8.))
+        // Vue pills a warning and keeps a normal radius on an error.
+        .rounded(if is_warning { px(9999.) } else { px(8.) })
         .border_1()
         .border_color(color.opacity(0.45))
         .bg(color.opacity(0.08))
         .px_4()
         .py_3()
-        .child(
-            h_flex()
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .child(Icon::new(icon).size(18.).color(color))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(px(14.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color)
-                        .child(view.title.clone()),
-                ),
-        )
-        .when(!view.body.is_empty(), |alert| {
-            alert.child(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .text_size(px(13.))
-                    .text_color(cx.theme().foreground)
-                    .child(plain_text(&view.body, cx.theme().foreground)),
-            )
-        })
+        .child(Icon::new(icon).size(20.).color(color))
+        .child(content)
         .into_any_element()
 }
 

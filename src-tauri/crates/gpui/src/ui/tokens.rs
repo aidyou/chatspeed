@@ -42,3 +42,35 @@ pub fn surfaces(dark: bool) -> Surfaces {
         active: rgb(active).into(),
     }
 }
+
+/// Surfaces stacked inside a dialog, mirroring the web `--cs-bg-*` steps.
+///
+/// A dialog is level 1 and keeps the container's own background. `card` is
+/// level 2, for a group of controls inside it, and `track` is level 3, for a
+/// well inside that card such as a segmented control.
+///
+/// The steps are deliberately small — roughly 5 L* each — so the dialog stays
+/// calm, but they must stay larger than the old ad-hoc mix they replace: a
+/// `muted` wash on top of a `muted` track left the reasoning capsule nearly
+/// indistinguishable from the model card it sat in (OKLab ΔE ≈ 0.03, about the
+/// noise floor of an 8-bit neutral). Every level also carries `hairline`, so an
+/// edge never depends on the fill step alone.
+#[derive(Clone, Copy)]
+pub struct Layers {
+    pub card: Hsla,
+    pub track: Hsla,
+    pub hairline: Hsla,
+}
+
+pub fn layers(dark: bool) -> Layers {
+    let [card, track, hairline] = if dark {
+        [0x222325, 0x2e3134, 0x34383b]
+    } else {
+        [0xeaeaea, 0xdcdcdb, 0xd4d4d3]
+    };
+    Layers {
+        card: rgb(card).into(),
+        track: rgb(track).into(),
+        hairline: rgb(hairline).into(),
+    }
+}

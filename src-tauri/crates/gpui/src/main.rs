@@ -36,8 +36,10 @@ use gpui_kit::{
 use rust_i18n::t;
 use serde_json::Value;
 use std::{
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
+    rc::Rc,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Mutex,
@@ -69,6 +71,60 @@ const WORKFLOW_WINDOW_SIZE: Size<Pixels> = size(px(1024.), px(650.));
 /// `--cs-border-radius-lg` (16px) in `src/style/element/css-vars.css`.
 const WINDOW_RADIUS: f32 = 16.;
 const WORKFLOW_WINDOW_MIN_SIZE: Size<Pixels> = size(px(800.), px(400.));
+
+/// Where the workflow window opens, using the origin the last session left.
+///
+/// The origin comes from the local window cache because the runtime settings
+/// only arrive after the window exists. A saved origin that no longer lands on
+/// a connected display falls back to the centered default, so a removed
+/// monitor cannot open the window off screen. Wayland compositors own toplevel
+/// placement and ignore the requested origin.
+fn initial_workflow_bounds(cx: &App) -> Bounds<Pixels> {
+    let centered = Bounds::centered(None, WORKFLOW_WINDOW_SIZE, cx);
+    if !window_position_supported() {
+        return centered;
+    }
+    let Some((x, y)) = prefs::saved_window_origin() else {
+        return centered;
+    };
+    let origin = point(px(x), px(y));
+    if origin_on_display(cx, origin) {
+        Bounds {
+            origin,
+            size: WORKFLOW_WINDOW_SIZE,
+        }
+    } else {
+        centered
+    }
+}
+
+/// Whether a saved origin still lands on a connected display, so a monitor
+/// that was removed between sessions cannot open the window off screen.
+fn origin_on_display(cx: &App, origin: Point<Pixels>) -> bool {
+    cx.displays()
+        .iter()
+        .any(|display| display.visible_bounds().contains(&origin))
+}
+
+/// Whether this session lets the application know and place its window origin.
+///
+/// Wayland gives a client no way to read or set a toplevel's position: the
+/// compositor places every new window and never reports where a moved one
+/// landed. Caching an origin there would only store the creation-time guess,
+/// so position memory is limited to X11 (and the native backends, which keep
+/// their own path).
+fn window_position_supported() -> bool {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty());
+        let x11 = std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty());
+        !wayland && x11
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        true
+    }
+}
 
 /// Markdown bold is a per-run font weight, and GPUI has no synthetic bold: it
 /// only looks different when the family ships a bold face. Keep the themed
@@ -351,6 +407,24 @@ fn string_set(value: &Value) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+/// The `mcpTools` payload in the runtime's wire shape.
+///
+/// `McpToolConfig` is camelCase (`autoApprove`, `autoExpand`). Sending the
+/// snake_case spellings made the runtime's payload struct default both lists to
+/// empty, so the dependent switches looked like they never saved while
+/// `available` — spelled the same either way — did.
+pub(crate) fn mcp_tools_config(
+    available: &BTreeSet<String>,
+    auto_approve: &BTreeSet<String>,
+    auto_expand: &BTreeSet<String>,
+) -> Value {
+    serde_json::json!({
+        "available": available,
+        "autoApprove": auto_approve,
+        "autoExpand": auto_expand,
+    })
+}
+
 fn is_image_path(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -497,6 +571,13 @@ struct Observer {
     applied_window_size: Option<Size<Pixels>>,
     #[cfg(target_os = "windows")]
     window_position_read: bool,
+    /// Origin to re-apply once the window is mapped, for window managers that
+    /// ignore the placement requested at creation.
+    #[cfg(target_os = "linux")]
+    pending_window_origin: Option<(f32, f32)>,
+    /// Origin the last bounds change left, written once the drag settles.
+    window_origin_pending: Rc<RefCell<Option<(f32, f32)>>>,
+    window_origin_write_scheduled: Rc<Cell<bool>>,
     copy_flash: Arc<Mutex<Option<CopyFlash>>>,
     /// Sidebar collapse state, matching the Vue compact sidebar.
     #[cfg(feature = "chat-hub")]
@@ -554,6 +635,11 @@ struct Observer {
     title_drag: bool,
     /// Multi-line composer state; sends read it and clear it.
     composer: Entity<TextareaState>,
+    /// Placeholder currently applied to the composer. It spells out the key
+    /// that sends, so it changes with the locale and `send_message_key`.
+    applied_composer_placeholder: String,
+    /// Placeholder to apply on the next frame, where a window is available.
+    pending_composer_placeholder: Option<String>,
     drafts: BTreeMap<Option<String>, (String, Vec<Attachment>)>,
     draft_save: Option<Task<()>>,
     vision_task: Option<Task<()>>,
@@ -810,7 +896,7 @@ impl Observer {
                 break;
             }
         });
-        cx.observe_window_bounds(window, |this, window, _| {
+        cx.observe_window_bounds(window, |this, window, cx| {
             if !this.geometry_ready || window.is_maximized() || window.is_fullscreen() {
                 return;
             }
@@ -823,6 +909,28 @@ impl Observer {
             #[cfg(feature = "chat-hub")]
             let width = width - this.chat_hub.as_ref().map_or(0., |hub| f32::from(hub.added_width(bounds.size.width)));
             this.worker.save_geometry(ui::window_pin::geometry_values(window, width, height));
+            // Remember where the window was left. The write is deferred until
+            // the drag settles, so one gesture costs one file write, and the
+            // final position is the one that lands on disk.
+            if window_position_supported() {
+                *this.window_origin_pending.borrow_mut() = Some((
+                    f32::from(bounds.origin.x),
+                    f32::from(bounds.origin.y),
+                ));
+                if !this.window_origin_write_scheduled.replace(true) {
+                    let pending = this.window_origin_pending.clone();
+                    let scheduled = this.window_origin_write_scheduled.clone();
+                    let executor = cx.background_executor().clone();
+                    cx.spawn(async move |_owner, _cx| {
+                        executor.timer(Duration::from_millis(250)).await;
+                        if let Some((x, y)) = pending.borrow_mut().take() {
+                            prefs::save_window_origin(x, y);
+                        }
+                        scheduled.set(false);
+                    })
+                    .detach();
+                }
+            }
         }).detach();
         let mut terminal = ui::terminal::Panel::new(cx);
         // The IME needs an entity it can commit composed text into.
@@ -883,6 +991,16 @@ impl Observer {
             applied_window_size: None,
             #[cfg(target_os = "windows")]
             window_position_read: false,
+            #[cfg(target_os = "linux")]
+            pending_window_origin: if window_position_supported() {
+                prefs::saved_window_origin().filter(|(x, y)| {
+                    origin_on_display(cx, point(px(*x), px(*y)))
+                })
+            } else {
+                None
+            },
+            window_origin_pending: Rc::new(RefCell::new(None)),
+            window_origin_write_scheduled: Rc::new(Cell::new(false)),
             copy_flash: Arc::new(Mutex::new(None)),
             #[cfg(feature = "chat-hub")]
             chat_hub: None,
@@ -924,6 +1042,8 @@ impl Observer {
             files_auto_expanded: false,
             title_drag: false,
             composer,
+            applied_composer_placeholder: t!("composer_placeholder").to_string(),
+            pending_composer_placeholder: None,
             drafts: BTreeMap::new(),
             draft_save: None,
             vision_task: None,
@@ -2482,10 +2602,16 @@ impl Observer {
 
     fn continue_workflow(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.selected.clone().filter(|_| self.can_continue()) {
-            if self.worker.commands.try_send(Command::Signal {
-                id,
-                signal: serde_json::json!({"type": "continue"}),
-            }).is_err() {
+            // Vue starts the session and only falls back to a `continue` signal
+            // when the runtime says it already exists. Sending just the signal
+            // did nothing once the task had stopped, because no wait loop was
+            // there to receive it.
+            if self
+                .worker
+                .commands
+                .try_send(Command::Resume { session: id })
+                .is_err()
+            {
                 return;
             }
             self.timeline_scroll.follow = true;
@@ -3283,6 +3409,15 @@ impl Observer {
         )]);
     }
 
+    /// The composer hint, spelled with the key that actually sends.
+    fn composer_placeholder(&self) -> String {
+        if self.send_with_shift {
+            t!("composer_placeholder_shift").to_string()
+        } else {
+            t!("composer_placeholder").to_string()
+        }
+    }
+
     /// Mirrors the runtime preferences shared with the Vue titlebar.
     fn apply_config(&mut self, config: &Value, fetched_at: Instant, cx: &mut Context<Self>) {
         if !self.sidebar_changed {
@@ -3333,6 +3468,14 @@ impl Observer {
             rust_i18n::set_locale(language);
             self.rows = presentation::project(self.transcript(), self.roots());
             self.refresh_markdown(cx);
+        }
+        // The placeholder names the key that actually sends, so it has to
+        // follow both the locale and `send_message_key`. The state can only be
+        // updated with a window, hence the deferred apply in `render`.
+        let placeholder = self.composer_placeholder();
+        if placeholder != self.applied_composer_placeholder {
+            self.applied_composer_placeholder = placeholder.clone();
+            self.pending_composer_placeholder = Some(placeholder);
         }
         set_primary(config["primary_color"].as_str().unwrap_or("green"));
         self.proxy_targets = config["chat_completion_proxy"].clone();
@@ -5245,6 +5388,21 @@ impl Observer {
 impl Render for Observer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.restore_draft(window, cx);
+        if let Some(placeholder) = self.pending_composer_placeholder.take() {
+            self.composer.update(cx, |state, cx| {
+                state.set_placeholder(placeholder, window, cx);
+            });
+            // Same startup-locale problem: these were created before the
+            // runtime told us which interface language to use.
+            let sessions = t!("search_sessions").to_string();
+            self.session_search.update(cx, |state, cx| {
+                state.set_placeholder(sessions, window, cx);
+            });
+            let skills = t!("search_skills").to_string();
+            self.skill_search.update(cx, |state, cx| {
+                state.set_placeholder(skills, window, cx);
+            });
+        }
         if let Some((offset, previous_max)) = self.timeline_scroll.prepend_anchor.take() {
             let entity = cx.entity().downgrade();
             window.on_next_frame(move |_, cx| {
@@ -5293,6 +5451,19 @@ impl Render for Observer {
                 window.on_next_frame(move |window, _| {
                     if !window.is_maximized() && !window.is_fullscreen() {
                         ui::window_pin::restore_position(window, x, y, &name);
+                    }
+                });
+            });
+        }
+
+        // Some window managers place a new toplevel themselves and drop the
+        // origin requested at creation. Ask again once the window is mapped.
+        #[cfg(target_os = "linux")]
+        if let Some((x, y)) = self.pending_window_origin.take() {
+            window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |window, _| {
+                    if !window.is_maximized() && !window.is_fullscreen() {
+                        ui::window_pin::restore_position(window, x, y);
                     }
                 });
             });
@@ -5540,7 +5711,24 @@ impl Render for Observer {
             ));
         }
         let active_group = ui::transcript::latest_active_group(&self.rows, self.workflow_running());
+        // A live child card already describes a running delegation, so the
+        // pending `sub_agent_run` row that started it would show the same task
+        // twice, once without the agent and its progress.
+        let live_child_tasks: Vec<&str> = self
+            .model
+            .sub_agent_progress
+            .iter()
+            .filter(|(id, _)| {
+                !self.rows.iter().any(
+                    |row| matches!(row, Row::SubAgent(card) if card.task_id.as_ref() == Some(*id)),
+                )
+            })
+            .filter_map(|(_, progress)| progress["task"].as_str())
+            .collect();
         for row in self.rows.iter().filter(|_| !switching_session) {
+            if presentation::row_shown_by_live_child(row, &live_child_tasks) {
+                continue;
+            }
             // Vue separates transcript entries with the medium spacing token.
             content = content.child(div().w_full().min_w_0().mb(px(20.)).child(self.row(
                 row,
@@ -5868,11 +6056,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(WindowDecorations::Client)
                 },
                 app_owns_titlebar_drag: true,
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                    None,
-                    WORKFLOW_WINDOW_SIZE,
-                    cx,
-                ))),
+                window_bounds: Some(WindowBounds::Windowed(initial_workflow_bounds(cx))),
                 window_min_size: Some(WORKFLOW_WINDOW_MIN_SIZE),
                 ..Default::default()
             };
@@ -5900,6 +6084,23 @@ mod tests {
     use super::{attachment_context, attachment_metadata, is_image_path, ToolDraft};
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn mcp_tool_config_is_written_in_the_wire_camel_case() {
+        let available =
+            std::collections::BTreeSet::from(["server__MCP__tool".to_string()]);
+        let payload = super::mcp_tools_config(&available, &available, &available);
+        assert_eq!(payload["available"], json!(["server__MCP__tool"]));
+        assert_eq!(payload["autoApprove"], json!(["server__MCP__tool"]));
+        assert_eq!(payload["autoExpand"], json!(["server__MCP__tool"]));
+        assert!(payload.get("auto_approve").is_none());
+        assert!(payload.get("auto_expand").is_none());
+        // The same shape has to read back as the same draft.
+        let draft = ToolDraft::from_config(&json!({ "mcpTools": payload }));
+        assert!(draft.mcp_available.contains("server__MCP__tool"));
+        assert!(draft.mcp_auto_approve.contains("server__MCP__tool"));
+        assert!(draft.mcp_auto_expand.contains("server__MCP__tool"));
+    }
 
     #[test]
     fn tool_draft_accepts_both_mcp_serializations() {

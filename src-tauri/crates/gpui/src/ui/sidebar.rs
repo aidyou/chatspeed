@@ -720,8 +720,8 @@ fn session_row(
 }
 
 fn session_actions(session: &Session, cx: &mut Context<Observer>) -> impl IntoElement {
-    use chatspeed_gpui::components::dialog::WindowExt;
-    use gpui_kit::component::{button::Button, input::InputState};
+    use chatspeed_gpui::components::dialog::{DialogButtonProps, WindowExt};
+    use gpui_kit::component::input::InputState;
     let hover = cx.theme().background;
     let rename = session.clone();
     let delete = session.id.clone();
@@ -754,24 +754,27 @@ fn session_actions(session: &Session, cx: &mut Context<Observer>) -> impl IntoEl
                     let field_bg = crate::ui::field_bg(cx);
                     window.open_dialog(cx, move |dialog, _, _| {
                         let (field, owner, id) = (input.clone(), owner.clone(), id.clone());
+                        // Same shape as the app's Element Plus dialogs: a
+                        // bounded width, a full-width field, and Save/Cancel on
+                        // the right instead of one bare button.
                         dialog
                             .title(t!("session_rename").to_string())
-                            .child(Input::new(&input).bg(field_bg))
-                            .footer(
-                                Button::new("save-session-title")
-                                    .label(t!("session_save").to_string())
-                                    .on_click(move |_, window, cx| {
-                                        let title = field.read(cx).value().trim().to_owned();
-                                        if owner
-                                            .update(cx, |this, cx| {
-                                                this.edit_session(id.clone(), Some(title), cx)
-                                            })
-                                            .unwrap_or(false)
-                                        {
-                                            window.close_dialog(cx);
-                                        }
-                                    }),
+                            .w(px(420.))
+                            .child(Input::new(&field).w_full().bg(field_bg))
+                            .button_props(
+                                DialogButtonProps::default()
+                                    .cancel_text(t!("cancel").to_string())
+                                    .show_cancel(true)
+                                    .ok_text(t!("session_save").to_string()),
                             )
+                            .on_ok(move |_, _, cx| {
+                                let title = field.read(cx).value().trim().to_owned();
+                                owner
+                                    .update(cx, |this, cx| {
+                                        this.edit_session(id.clone(), Some(title), cx)
+                                    })
+                                    .unwrap_or(false)
+                            })
                     });
                 })),
         )
@@ -1216,7 +1219,11 @@ fn compact_badge(
                     .bg(primary),
             )
         })
-        .tooltip(tip_session(heading(session), root_label(session)))
+        .tooltip(tip_session(
+            heading(session),
+            root_label(session),
+            Some((status_label(&session.status), dot.into())),
+        ))
         .tooltip_show_delay(TOOLTIP_DELAY)
         .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
         .into_any_element()

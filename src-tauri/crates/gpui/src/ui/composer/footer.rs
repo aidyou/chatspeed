@@ -14,6 +14,7 @@ use gpui_kit::*;
 use rust_i18n::t;
 use serde_json::Value;
 
+use super::model_config::{reasoning_budget, reasoning_level};
 use crate::ui::{menu_popover::MenuPopover, Icon};
 use crate::{Observer, QuickPanel};
 use chatspeed_gpui::types::Command;
@@ -575,67 +576,42 @@ fn model_effort_row(
     on_select: impl Fn(u32, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> impl IntoElement {
-    use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants};
     let on_select = std::rc::Rc::new(on_select);
-    let current = thinking["budgetTokens"].as_u64().unwrap_or_default();
-    let current = match current {
-        4097.. => 8192,
-        2049.. => 4096,
-        1025.. => 2048,
-        _ => 1024,
-    };
-    let primary = cx.theme().primary;
-    let muted = cx.theme().muted_foreground;
-    let border = cx.theme().border;
+    let current = reasoning_level(thinking["budgetTokens"].as_u64().unwrap_or_default());
+    let levels = crate::ui::tabs::capsule_segments_sized(
+        "composer-thinking-level",
+        vec![
+            ("low", t!("reasoning_low").to_string()),
+            ("medium", t!("reasoning_medium").to_string()),
+            ("high", t!("reasoning_high").to_string()),
+            ("max", t!("reasoning_max").to_string()),
+        ],
+        current,
+        // A form-sized capsule outgrows this 12px popover, so drop to the
+        // capsule's smallest step and keep the row as compact as the model names.
+        20_f32,
+        move |level, window, cx| on_select(reasoning_budget(level), window, cx),
+        cx,
+    );
     h_flex()
+        .w_full()
+        .min_w_0()
         .items_center()
-        .gap_1()
+        .gap(px(8.))
         .px_2()
         .pb_1()
         .child(
             div()
-                .mr_1()
                 .flex_none()
                 .whitespace_nowrap()
                 .text_size(px(11.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(muted)
+                .text_color(cx.theme().muted_foreground)
                 .child(t!("model_reasoning_level").to_string()),
         )
-        .children(
-            [
-                (1024, t!("reasoning_low").to_string()),
-                (2048, t!("reasoning_medium").to_string()),
-                (4096, t!("reasoning_high").to_string()),
-                (8192, t!("reasoning_max").to_string()),
-            ]
-            .into_iter()
-            .map(|(budget, label)| {
-                let select = on_select.clone();
-                let selected = budget == current;
-                let style = ButtonCustomVariant::new(cx)
-                    .color(if selected { primary } else { border })
-                    .foreground(if selected { primary } else { muted })
-                    .hover(primary.opacity(0.12))
-                    .active(primary.opacity(0.18));
-                Button::new(("composer-thinking-level", budget as usize))
-                    .custom(style)
-                    .outline()
-                    .rounded(ButtonRounded::Size(crate::ui::tokens::RADIUS_SMALL))
-                    .h(px(20.))
-                    .px_1()
-                    .flex_none()
-                    .accessibility_label(label.clone())
-                    .child(
-                        div()
-                            .whitespace_nowrap()
-                            .text_size(px(11.))
-                            .line_height(px(16.))
-                            .child(label),
-                    )
-                    .on_click(move |_, window, cx| select(budget, window, cx))
-            }),
-        )
+        // The capsule wraps its segments inside the popover's narrow width
+        // instead of pushing the label out of the row.
+        .child(div().flex_1().min_w_0().child(levels))
 }
 
 /// The model pill: the active provider's models, as Vue's compact selector lists.
@@ -660,7 +636,10 @@ fn model_selector(
     let Some(session) = observer.selected.clone() else {
         return trigger_el;
     };
-    if observer.models_pending.is_some() || observer.options.demo {
+    // A pending save must not drop the popover: the menu is what triggered the
+    // save, and unmounting it here would close the menu mid-selection. The
+    // optimistic slot map already reflects the pending write.
+    if observer.options.demo {
         return trigger_el;
     }
     let generation = observer.model.generation;
@@ -678,12 +657,16 @@ fn model_selector(
     let base_config = config.clone();
     let all_configs = observer.model_configs();
     let observer_entity = cx.entity();
+    // Selecting a model or a reasoning level writes through `save_models` and
+    // re-renders this list from the optimistic slot map, so the menu stays open
+    // and the two choices can be made in one visit.
     MenuPopover::new(
         "composer-model-popover",
         trigger_el,
         move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
-            let popover = cx.entity();
-            let mut list = v_flex().id("composer-model-list").w(px(280.)).gap(px(4.));
+            // Wide enough for the English "Reasoning effort" label plus the
+            // four-level capsule on one line; the rows themselves stay short.
+            let mut list = v_flex().id("composer-model-list").w(px(360.)).gap(px(4.));
             if !group.is_empty() {
                 list = list.child(model_group_label(group.clone(), cx));
             }
@@ -695,10 +678,9 @@ fn model_selector(
                         let entity = observer_entity.clone();
                         let session = session.clone();
                         let model = choice.model.clone();
-                        let popover = popover.clone();
                         model_effort_row(
                             &base_config["thinking"],
-                            move |budget, window, cx| {
+                            move |budget, _, cx| {
                                 entity.update(cx, |this, cx| {
                                     if this.model.accepts(generation)
                                         && this.selected.as_ref() == Some(&session)
@@ -714,12 +696,10 @@ fn model_selector(
                                         this.save_models(configs, cx);
                                     }
                                 });
-                                popover.update(cx, |state, cx| state.dismiss(window, cx));
                             },
                             cx,
                         )
                     });
-                let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
                 let session = session.clone();
                 let mut configs = all_configs.clone();
@@ -751,8 +731,7 @@ fn model_selector(
                     .when(is_selected, |row| {
                         row.child(Icon::new("check").size(14.).color(colors.primary))
                     })
-                    .on_click(move |_, window, cx| {
-                        popover.update(cx, |state, cx| state.dismiss(window, cx));
+                    .on_click(move |_, _, cx| {
                         if !is_selected {
                             observer_entity.update(cx, |this, cx| {
                                 if this.model.accepts(generation)
@@ -910,22 +889,20 @@ fn quick_actions(
                     observer_entity.update(cx, |this, cx| this.open_quick_panel(panel, window, cx));
                 }
             };
+            // Runtime switches stay open: the menu is where a user flips
+            // several of them in one visit, matching Vue's checkbox menu.
             let toggle_planning = {
-                let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
-                move |window: &mut Window, cx: &mut App| {
-                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                move |_: &mut Window, cx: &mut App| {
                     observer_entity.update(cx, |this, cx| {
                         this.toggle_planning(cx);
                     });
                 }
             };
             let toggle_auto_approve_plan = {
-                let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
                 let session = session.clone();
-                move |window: &mut Window, cx: &mut App| {
-                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                move |_: &mut Window, cx: &mut App| {
                     observer_entity.update(cx, |this, cx| {
                         let mut config = this.agent_config();
                         config["autoApprovePlan"] = Value::from(!auto_approve_plan);
@@ -938,20 +915,16 @@ fn quick_actions(
                 }
             };
             let toggle_auto_compress = {
-                let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
-                move |window: &mut Window, cx: &mut App| {
-                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                move |_: &mut Window, cx: &mut App| {
                     observer_entity.update(cx, |this, cx| {
                         this.toggle_runtime_preference("autoCompress", cx);
                     });
                 }
             };
             let toggle_final_audit = {
-                let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
-                move |window: &mut Window, cx: &mut App| {
-                    popover.update(cx, |state, cx| state.dismiss(window, cx));
+                move |_: &mut Window, cx: &mut App| {
                     observer_entity.update(cx, |this, cx| {
                         this.toggle_runtime_preference("finalAudit", cx);
                     });
@@ -1094,7 +1067,6 @@ fn quick_actions(
                     true,
                 ),
             ] {
-                let popover = popover.clone();
                 let observer_entity = observer_entity.clone();
                 let session = session.clone();
                 let level = value.to_owned();
@@ -1104,8 +1076,7 @@ fn quick_actions(
                     label,
                     hint,
                     MenuRowStyle::new(colors, approval == value, danger),
-                    move |window: &mut Window, cx: &mut App| {
-                        popover.update(cx, |state, cx| state.dismiss(window, cx));
+                    move |_: &mut Window, cx: &mut App| {
                         observer_entity.update(cx, |this, cx| {
                             if this.approval_level() != level {
                                 this.submit_config(

@@ -284,13 +284,18 @@ pub(crate) fn overlay(
                             window.paint_path(path, track);
                         }
                         if fraction > 0.001 {
-                            let angle = TAU * fraction.clamp(0., 1.);
+                            // Vue draws this ring with
+                            // `conic-gradient(from 180deg, ...)`, so it starts at
+                            // the bottom and grows clockwise. Starting at the top
+                            // put the first percent under the top-right badge,
+                            // where it could not be seen.
+                            let sweep = TAU * fraction.clamp(0., 1.);
                             let end = point(
-                                center.x + radius * angle.sin(),
-                                center.y - radius * angle.cos(),
+                                center.x - radius * sweep.sin(),
+                                center.y + radius * sweep.cos(),
                             );
                             let mut filled = PathBuilder::stroke(px(2.));
-                            filled.move_to(top);
+                            filled.move_to(bottom);
                             filled.arc_to(point(radius, radius), px(0.), fraction > 0.5, true, end);
                             if let Ok(path) = filled.build() {
                                 window.paint_path(path, ring);

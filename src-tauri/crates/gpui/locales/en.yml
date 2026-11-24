@@ -2,13 +2,13 @@ action_cancel: Cancel
 add_attachment: "Add attachment"
 agent_placeholder: "Select Agent"
 approval_default: "Default"
-approval_default_hint: "Ask before every write and command"
+approval_default_hint: "Follow the agent rules or this task's setting"
 approval_full: "Full access"
-approval_full_hint: "Run tools without asking"
+approval_full_hint: "No approval; tools run directly"
 approval_level: "Approval level"
 approval_rejection_reason: Rejection reason (optional)
 approval_smart: "Smart"
-approval_smart_hint: "Ask only for risky actions"
+approval_smart_hint: "Read-only actions run on their own; the AI judges writes"
 approve: Approve
 approve_all: Approve all
 approve_whitelist: Approve and add to allowlist
@@ -76,19 +76,20 @@ automation_task_title: Task title
 automation_weekday_fri: Fri
 automation_weekday_mon: Mon
 automation_weekday_sat: Sat
-automation_weekday_short_fri: F
-automation_weekday_short_mon: M
-automation_weekday_short_sat: S
-automation_weekday_short_sun: S
-automation_weekday_short_thu: T
-automation_weekday_short_tue: T
-automation_weekday_short_wed: W
+automation_weekday_short_fri: Fri
+automation_weekday_short_mon: Mon
+automation_weekday_short_sat: Sat
+automation_weekday_short_sun: Sun
+automation_weekday_short_thu: Thu
+automation_weekday_short_tue: Tue
+automation_weekday_short_wed: Wed
 automation_weekday_sun: Sun
 automation_weekday_thu: Thu
 automation_weekday_tue: Tue
 automation_weekday_wed: Wed
 automation_weekdays: Weekdays
 awaiting_approval: Awaiting approval
+cancel: "Cancel"
 chat_hub: ChatHub
 chat_hub_close: Close
 chat_hub_empty: No chat sites yet
@@ -104,6 +105,7 @@ collapse: Collapse
 collapse_sidebar: Collapse sidebar
 completed: Completed
 composer_placeholder: Ask for the next step, Enter to send
+composer_placeholder_shift: Ask for the next step, Shift+Enter to send
 confirm: "Confirm"
 connected: Connected
 connecting: Disconnected — retrying discovery

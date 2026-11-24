@@ -597,6 +597,40 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
+            Command::Resume { session } => {
+                if options.demo {
+                    continue;
+                }
+                // Vue's Continue first starts the workflow; only a session that
+                // is already live answers with a conflict, and that is when a
+                // `continue` signal is what actually nudges the wait loop.
+                let started = native::control_post(
+                    &options,
+                    &format!("/control/v1/workflows/{session}/start"),
+                    json!({}),
+                )
+                .await;
+                if let Err(error) = started {
+                    if !error.contains("already exists") {
+                        if !send(&tx, 0, UpdateKind::Error(error)).await {
+                            return;
+                        }
+                        continue;
+                    }
+                    let signal = json!({"type": "continue"});
+                    if let Err(error) = native::control_post(
+                        &options,
+                        &format!("/control/v1/workflows/{session}/signal"),
+                        signal,
+                    )
+                    .await
+                    {
+                        if !send(&tx, 0, UpdateKind::Error(error)).await {
+                            return;
+                        }
+                    }
+                }
+            }
             Command::CreateWorkflow {
                 agent_id,
                 allowed_paths,

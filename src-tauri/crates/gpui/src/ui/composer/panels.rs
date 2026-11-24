@@ -5,7 +5,9 @@
 //! over the workflow frame, which keeps a long option list scrollable and lets
 //! every switch repaint from the same live state the composer reads.
 
-use gpui_kit::component::{h_flex, switch::Switch, v_flex, ActiveTheme, Sizable};
+use gpui_kit::component::{
+    h_flex, switch::Switch, v_flex, ActiveTheme, Disableable, Sizable,
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
@@ -726,6 +728,9 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                                 Switch::new(SharedString::from(format!("tool-approve-{id}")))
                                     .checked(approved)
                                     .small()
+                                    // Approval is a subset of availability, so the
+                                    // grant only makes sense once the tool is on.
+                                    .disabled(!approved && !available)
                                     .on_click(cx.listener(move |this, checked, _, cx| {
                                         if *checked
                                             != this.tool_draft.as_ref().is_some_and(|draft| {
@@ -977,6 +982,11 @@ fn mcp_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
             (ToolFlag::AutoExpand, expanded),
         ] {
             let id = id.clone();
+            // Vue disables the dependent switches until the tool is available;
+            // turning one off again stays possible so a stale grant can be
+            // revoked even when the server stopped reporting the tool.
+            let locked =
+                !checked && !available && !matches!(flag, ToolFlag::Available);
             row = row.child(
                 div()
                     .w(px(64.))
@@ -988,6 +998,7 @@ fn mcp_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                         Switch::new(SharedString::from(format!("mcp-{flag:?}-{id}")))
                             .checked(checked)
                             .small()
+                            .disabled(locked)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.toggle_tool(&id, true, flag, cx);
                             })),
@@ -1032,6 +1043,31 @@ impl Observer {
         let Some(draft) = self.tool_draft.as_mut() else {
             return;
         };
+        // Vue only lets an available tool carry the dependent flags, and the
+        // runtime enforces the same subset rule. Refuse the grant here so a
+        // disabled-looking switch can never send a config that gets normalized
+        // away.
+        let (available, checked) = if mcp {
+            (
+                draft.mcp_available.contains(id),
+                match flag {
+                    ToolFlag::Available => draft.mcp_available.contains(id),
+                    ToolFlag::AutoApprove => draft.mcp_auto_approve.contains(id),
+                    ToolFlag::AutoExpand => draft.mcp_auto_expand.contains(id),
+                },
+            )
+        } else {
+            (
+                draft.available.contains(id),
+                match flag {
+                    ToolFlag::Available => draft.available.contains(id),
+                    _ => draft.auto_approve.contains(id),
+                },
+            )
+        };
+        if !checked && !available && !matches!(flag, ToolFlag::Available) {
+            return;
+        }
         let set = match (mcp, flag) {
             (false, ToolFlag::Available) => &mut draft.available,
             (false, _) => &mut draft.auto_approve,
@@ -1075,11 +1111,11 @@ impl Observer {
         available.extend(draft.mcp_available.iter().cloned());
         config["availableTools"] = json!(available);
         config["autoApprove"] = json!(draft.auto_approve);
-        config["mcpTools"] = json!({
-            "available": draft.mcp_available,
-            "auto_approve": draft.mcp_auto_approve,
-            "auto_expand": draft.mcp_auto_expand,
-        });
+        config["mcpTools"] = crate::mcp_tools_config(
+            &draft.mcp_available,
+            &draft.mcp_auto_approve,
+            &draft.mcp_auto_expand,
+        );
         config
     }
 }
