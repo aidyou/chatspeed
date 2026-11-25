@@ -39,7 +39,7 @@ pub struct AutomationSummary {
 #[derive(Clone, Default, Deserialize)]
 pub struct Session {
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_session_title")]
     pub title: String,
     #[serde(default)]
     pub user_query: String,
@@ -55,6 +55,14 @@ pub struct Session {
     pub parent_session_id: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+}
+
+/// The runtime serializes workflows without a generated title as `null`.
+fn deserialize_session_title<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl Session {
@@ -464,6 +472,21 @@ pub enum UpdateKind {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn session_list_accepts_null_and_missing_titles() {
+        let sessions: Vec<Session> = serde_json::from_value(json!([
+            { "id": "s1", "title": null, "user_query": "Fix the build" },
+            { "id": "s2", "title": "Build notes" },
+            { "id": "s3" }
+        ]))
+        .expect("workflow titles are optional");
+
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0].heading(), "Fix the build");
+        assert_eq!(sessions[1].heading(), "Build notes");
+        assert_eq!(sessions[2].heading(), "");
+    }
 
     #[test]
     fn roots_come_from_the_serialized_agent_config() {
