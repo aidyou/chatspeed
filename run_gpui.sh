@@ -36,4 +36,4 @@ fi
 mkdir -p ../dev_data/logs
 CARGO_BUILD_JOBS=1 cargo run --release -p chatspeed-gpui -- \
   --discovery "$discovery" \
-  --metrics ../dev_data/logs/chatspeed-gpui-metrics.jsonl
+  --metrics ./dev_data/logs/chatspeed-gpui-metrics.jsonl

@@ -644,6 +644,29 @@ pub fn shortcut(
     cx: &mut Context<Observer>,
 ) {
     let mods = key.modifiers;
+    // Tab is also the window's focus traversal key, which runs before the
+    // terminal's own key listener. Forward it from the interceptor so the
+    // shell receives it instead of focus jumping to the composer.
+    if key.key == "tab"
+        && !mods.control
+        && !mods.platform
+        && !mods.alt
+        && !mods.function
+        && this.terminal.visible
+        && this.terminal.focus.is_focused(window)
+    {
+        if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
+            tab.update(cx, |tab, _| {
+                tab.screen.selection = None;
+                tab.screen.scroll_display(Scroll::Bottom);
+                send(tab, "\t".into());
+            });
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+        cx.notify();
+        return;
+    }
     let command = if cfg!(target_os = "macos") {
         mods.platform && !mods.control
     } else {
