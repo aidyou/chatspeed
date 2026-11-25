@@ -437,6 +437,35 @@ fn is_image_path(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+fn store_pasted_image(dir: &std::path::Path, image: &gpui_kit::Image) -> anyhow::Result<PathBuf> {
+    use gpui_kit::ImageFormat::*;
+    use std::io::Write;
+
+    anyhow::ensure!(!image.bytes.is_empty() && image.bytes.len() <= 32 * 1024 * 1024);
+    let extension = match image.format {
+        Png | Tiff => ".png",
+        Jpeg => ".jpg",
+        Webp => ".webp",
+        Gif => ".gif",
+        Bmp => ".bmp",
+        _ => anyhow::bail!("Unsupported clipboard image format"),
+    };
+    std::fs::create_dir_all(dir)?;
+    let mut file = tempfile::Builder::new().prefix("paste-").suffix(extension).tempfile_in(dir)?;
+    if matches!(image.format, Tiff) {
+        // macOS can supply screenshots as TIFF; the attachment pipeline takes PNG.
+        let mut reader = image::ImageReader::with_format(std::io::Cursor::new(&image.bytes), image::ImageFormat::Tiff);
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(16384);
+        limits.max_image_height = Some(16384);
+        reader.limits(limits);
+        reader.decode()?.write_to(&mut file, image::ImageFormat::Png)?;
+    } else {
+        file.write_all(&image.bytes)?;
+    }
+    Ok(file.into_temp_path().keep()?)
+}
+
 /// The context note the runtime receives with the message.
 fn vision_context(description: &str, query: &str) -> String {
     let escape = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
@@ -627,6 +656,8 @@ struct Observer {
     dir_entries: BTreeMap<String, Vec<DirEntry>>,
     dir_errors: BTreeMap<String, String>,
     dir_pending: BTreeSet<String>,
+    draft_roots: Option<Vec<String>>,
+    draft_final_audit: Option<bool>,
     file_editor: ui::file_editor::FileEditor,
     /// The first authorized root opens once per selected workflow, matching
     /// `FileTree.vue`'s mount behaviour.
@@ -647,6 +678,7 @@ struct Observer {
     show_today_cost: bool,
     today_cost: f64,
     rewind_pending: bool,
+    resuming: BTreeSet<String>,
     automation_pending: bool,
     /// Whether the composer owns focus, mirrored from its input events.
     composer_focused: bool,
@@ -692,6 +724,7 @@ struct Observer {
     tools: Vec<serde_json::Value>,
     /// Proxy groups and aliases, used by the model selector for `id = 0` slots.
     proxy_targets: Value,
+    global_vision_model: Value,
     /// Vue's planning-mode switch, applied through the workflow phase.
     planning_mode: bool,
     /// Optimistic sandbox choice; the workflow config confirms it afterwards.
@@ -705,9 +738,7 @@ struct Observer {
     model_config: Option<Entity<ui::composer::model_config::ModelConfigState>>,
     /// Active tab of the tool configuration dialog.
     tool_panel_tab: usize,
-    /// Optimistic shell-rule decisions, so the segmented control repaints before
-    /// the agent-config acknowledgement arrives.
-    shell_rule_decisions: BTreeMap<String, String>,
+    shell_rules_panel: Option<ui::composer::panels::ShellRulesPanel>,
     /// Open new-task dialog; `true` inherits the current workflow configuration.
     new_task_inherit: Option<bool>,
     skills_draft: Option<SkillsDraft>,
@@ -1038,6 +1069,8 @@ impl Observer {
             dir_entries: BTreeMap::new(),
             dir_errors: BTreeMap::new(),
             dir_pending: BTreeSet::new(),
+            draft_roots: None,
+            draft_final_audit: None,
             file_editor: Default::default(),
             files_auto_expanded: false,
             title_drag: false,
@@ -1051,6 +1084,7 @@ impl Observer {
             show_today_cost: false,
             today_cost: 0.,
             rewind_pending: false,
+            resuming: BTreeSet::new(),
             automation_pending: false,
             composer_focused: false,
             composer_expanded: false,
@@ -1082,6 +1116,7 @@ impl Observer {
             sandbox_schemes: Vec::new(),
             tools: Vec::new(),
             proxy_targets: Value::Null,
+            global_vision_model: Value::Null,
             planning_mode: false,
             config_pending: BTreeSet::new(),
             config_acks: BTreeMap::new(),
@@ -1089,7 +1124,7 @@ impl Observer {
             quick_panel: None,
             model_config: None,
             tool_panel_tab: 0,
-            shell_rule_decisions: BTreeMap::new(),
+            shell_rules_panel: None,
             new_task_inherit: None,
             skills_draft: None,
             tool_draft: None,
@@ -1103,8 +1138,6 @@ impl Observer {
             observer.drafts.extend(read_text_drafts(&path).into_iter().map(|(id, draft)| (Some(id), draft)));
         }
         observer.request_catalogue();
-        #[cfg(feature = "chat-hub")]
-        observer.ensure_chat_hub_sites(cx);
         observer
     }
 
@@ -1166,6 +1199,7 @@ impl Observer {
         }
         let (text, attachments) = self.drafts.remove(&next).unwrap_or_default();
         self.selected = next;
+        self.suggestions.close_directory_panel();
         self.attachments = attachments;
         self.restore_composer = Some(text);
         self.persist_drafts(cx);
@@ -1219,6 +1253,7 @@ impl Observer {
         self.planning_mode = false;
         self.skills_draft = None;
         self.tool_draft = None;
+        self.shell_rules_panel = None;
         self.timeline_scroll.follow = true;
         self.switched = Some(Instant::now());
         self.timeline_scroll.scroll = ScrollHandle::new();
@@ -1351,7 +1386,7 @@ impl Observer {
         if self
             .worker
             .commands
-            .try_send(Command::ListDir { path: path.clone() })
+            .try_send(Command::ListDir { generation: self.model.generation, path: path.clone() })
             .is_err()
         {
             self.dir_pending.remove(&path);
@@ -1359,12 +1394,94 @@ impl Observer {
         cx.notify();
     }
 
+    /// Saves the root list through the dedicated runtime command, without replacing agent settings.
+    fn save_authorized_roots(&mut self, paths: Vec<String>, cx: &mut Context<Self>) -> bool {
+        if paths == self.roots() {
+            return false;
+        }
+        if let Some(session) = self.selected.clone() {
+            let command = Command::SetAllowedPaths { session: session.clone(), paths };
+            if self.submit_config(&session, "allowed-paths", command, cx) {
+                return true;
+            }
+            self.show_toast(ToastKind::Error, t!("paths_save_failed").to_string(), cx);
+            false
+        } else if !self.start_pending {
+            self.draft_roots = Some(paths);
+            self.prune_dir_state();
+            self.auto_expand_first_root(cx);
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn add_authorized_root(&mut self, path: PathBuf, cx: &mut Context<Self>) -> bool {
+        if !path.is_absolute() || !path.is_dir() {
+            self.show_toast(ToastKind::Warning, t!("paths_invalid_directory").to_string(), cx);
+            return false;
+        }
+        let Some(path) = path.to_str() else {
+            self.show_toast(ToastKind::Warning, t!("paths_invalid_directory").to_string(), cx);
+            return false;
+        };
+        let path = chatspeed_gpui::types::normalize_root(path);
+        let mut roots = self.roots().to_vec();
+        if roots.contains(&path) {
+            self.show_toast(ToastKind::Info, t!("paths_already_added").to_string(), cx);
+            return false;
+        }
+        roots.push(path);
+        self.save_authorized_roots(roots, cx)
+    }
+
+    fn remove_authorized_root(&mut self, path: &str, cx: &mut Context<Self>) {
+        let paths = self.roots().iter().filter(|root| root.as_str() != path).cloned().collect();
+        self.save_authorized_roots(paths, cx);
+    }
+
+    fn pick_authorized_root(&mut self, cx: &mut Context<Self>) {
+        let generation = self.model.generation;
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(t!("suggestion_add_directory").to_string().into()),
+        });
+        cx.spawn(async move |owner, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else { return; };
+            if let Some(path) = paths.into_iter().next() {
+                let _ = owner.update(cx, |this, cx| {
+                    if this.model.accepts(generation) {
+                        this.add_authorized_root(path, cx);
+                    }
+                });
+            }
+        }).detach();
+    }
+
+    fn refresh_authorized_dirs(&mut self, cx: &mut Context<Self>) {
+        for path in self.expanded_dirs.clone() {
+            self.load_dir(path, cx);
+        }
+    }
+
+    fn prune_dir_state(&mut self) {
+        let roots: Vec<_> = self.roots().iter().map(PathBuf::from).collect();
+        let allowed = |path: &String| roots.iter().any(|root| std::path::Path::new(path).starts_with(root));
+        self.expanded_dirs.retain(allowed);
+        self.dir_entries.retain(|path, _| allowed(path));
+        self.dir_errors.retain(|path, _| allowed(path));
+        self.dir_pending.retain(allowed);
+    }
+
     /// Vue's FileTree opens the first authorized root when it mounts.
     fn auto_expand_first_root(&mut self, cx: &mut Context<Self>) {
         if self.files_auto_expanded {
             return;
         }
-        let Some(root) = self.model.roots.first().cloned() else {
+        let Some(root) = self.roots().first().cloned() else {
             return;
         };
         self.files_auto_expanded = true;
@@ -1514,6 +1631,9 @@ impl Observer {
             return;
         };
         match request.kind {
+            ui::confirm::ConfirmKind::ReplaceShellRules { session, import } => {
+                self.replace_shell_rules(&session, import, cx);
+            }
             ui::confirm::ConfirmKind::Rewind => {
                 if !self.can_rewind() {
                     cx.notify();
@@ -1638,6 +1758,32 @@ impl Observer {
             .find(|agent| agent["id"].as_str() == Some(id.as_str()))
     }
 
+    fn composer_agent(&self) -> Option<&Value> {
+        self.current_agent().or_else(|| {
+            self.agents.iter().find(|agent| agent["role"] == "primary")
+                .or_else(|| self.agents.first())
+        })
+    }
+
+    fn can_attach_images(&self) -> bool {
+        let workflow = self.model_configs();
+        let agent = self.composer_agent().unwrap_or(&Value::Null);
+        [&workflow["vision"], &agent["models"]["vision"], &agent["visionModel"], &self.global_vision_model]
+            .iter()
+            .copied()
+            .any(|model| {
+                let id = model["id"].as_i64().or_else(|| model["id"].as_str()?.parse().ok());
+                let Some(id) = id.filter(|id| *id > 0) else { return false; };
+                let Some(name) = model["model"].as_str().filter(|name| !name.trim().is_empty()) else { return false; };
+                self.models.iter().any(|provider| {
+                    provider["id"].as_i64() == Some(id)
+                        && provider["disabled"].as_bool() != Some(true)
+                        && !provider["api_protocol"].as_str().unwrap_or("").eq_ignore_ascii_case("decision")
+                        && provider["models"].as_array().is_some_and(|models| models.iter().any(|entry| entry["id"] == name))
+                })
+            })
+    }
+
     /// The model slot the composer edits: Vue uses `plan` in planning mode.
     fn active_model_config(&self) -> serde_json::Value {
         let models = self.model_configs();
@@ -1754,6 +1900,13 @@ impl Observer {
             }
             self.model.workflow["agent_config"] = config;
         }
+        if key == "allowed-paths" {
+            self.model.roots = chatspeed_gpui::types::workflow_roots(patch);
+            self.prune_dir_state();
+        } else if key == "agent" {
+            self.model.roots = chatspeed_gpui::types::workflow_roots(&self.model.workflow);
+            self.prune_dir_state();
+        }
     }
 
     fn sandbox_mode(&self) -> String {
@@ -1865,7 +2018,14 @@ impl Observer {
     }
 
     fn toggle_runtime_preference(&mut self, key: &'static str, cx: &mut Context<Self>) {
+        if key == "finalAudit" && !self.can_toggle_final_audit() {
+            return;
+        }
         let Some(session) = self.selected.clone() else {
+            if key == "finalAudit" {
+                self.draft_final_audit = Some(!self.final_audit_enabled());
+                cx.notify();
+            }
             return;
         };
         let entry = (session.clone(), key);
@@ -1894,7 +2054,25 @@ impl Observer {
         }
     }
 
+    fn can_toggle_final_audit(&self) -> bool {
+        self.final_audit_enabled() || self.composer_agent().and_then(|agent| agent["id"].as_str()).is_some_and(|id| {
+            self.agents.iter().find(|agent| {
+                agent["role"] == "child"
+                    && agent["parent_agent_id"].as_str().or_else(|| agent["parentAgentId"].as_str()) == Some(id)
+                    && agent["sub_agent_role"].as_str().or_else(|| agent["subAgentRole"].as_str()) == Some("final_reviewer")
+            }).is_some_and(|reviewer| {
+                let model = reviewer.get("actModel").unwrap_or(&reviewer["models"]["act"]);
+                reviewer["disabled"].as_bool() != Some(true)
+                    && model["model"].as_str().is_some_and(|name| !name.is_empty())
+                    && !model["id"].is_null() && model["id"] != ""
+            })
+        })
+    }
+
     fn final_audit_enabled(&self) -> bool {
+        if self.selected.is_none() {
+            return self.draft_final_audit.unwrap_or(false);
+        }
         self.runtime_preference("finalAudit", "final_audit")
     }
 
@@ -1985,7 +2163,7 @@ impl Observer {
     }
 
     fn create_new_task(&mut self, inherit: bool, cx: &mut Context<Self>) {
-        if self.options.demo {
+        if self.options.demo || self.start_pending {
             return;
         }
         let has_current = self.selected.is_some();
@@ -1998,7 +2176,13 @@ impl Observer {
                 .and_then(|agent| agent["id"].as_str())
                 .map(str::to_owned)
         });
-        let allowed_paths = inheriting.then(|| self.agent_config()["allowedPaths"].clone());
+        let allowed_paths = if inheriting {
+            Some(serde_json::json!(self.roots()))
+        } else if !has_current {
+            self.draft_roots.as_ref().map(|paths| serde_json::json!(paths))
+        } else {
+            None
+        };
         let inherited_agent_config = inheriting
             .then(|| self.inherited_workflow_config())
             .flatten();
@@ -2020,6 +2204,7 @@ impl Observer {
             );
             return;
         }
+        self.start_pending = true;
         self.reset_new_session(cx);
     }
 
@@ -2177,16 +2362,6 @@ impl Observer {
             .into_any_element()
     }
 
-    fn start_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.reset_new_session(cx);
-        self.restore_draft(window, cx);
-        self.composer.update(cx, |state, cx| {
-            let focus = state.focus_handle(cx);
-            focus.focus(window, cx);
-        });
-        cx.notify();
-    }
-
     fn reset_new_session(&mut self, cx: &mut Context<Self>) {
         self.vision_task.take();
         if self.selected.is_some() {
@@ -2215,7 +2390,9 @@ impl Observer {
         self.planning_mode = false;
         self.timeline_scroll.follow = true;
         self.timeline_scroll.scroll_pending = true;
+        self.suggestions.close_directory_panel();
         self.clear_dir_state();
+        self.auto_expand_first_root(cx);
         cx.notify();
     }
 
@@ -2228,6 +2405,9 @@ impl Observer {
             || self.start_pending
             || self.vision_task.is_some()
         {
+            return;
+        }
+        if ui::composer::suggestions::run_typed(self, &text, window, cx) {
             return;
         }
         let attachments = self.attachments.clone();
@@ -2390,6 +2570,9 @@ impl Observer {
                         prompt,
                         attached_context,
                         metadata,
+                        allowed_paths: self.draft_roots.clone(),
+                        planning_mode: self.planning_mode,
+                        final_audit: self.draft_final_audit,
                     })
                     .is_err()
                 {
@@ -2437,6 +2620,39 @@ impl Observer {
             });
         })
         .detach();
+    }
+
+    fn paste_attachments(&mut self, images: Vec<gpui_kit::Image>, cx: &mut Context<Self>) {
+        let dir = self.draft_file().and_then(|path| path.parent().map(|parent| parent.join("gpui-pasted-images")))
+            .unwrap_or_else(|| std::env::temp_dir().join("chatspeed-gpui-pasted-images"));
+        let generation = self.model.generation;
+        let session = self.selected.clone();
+        let stored = cx.background_executor().spawn(async move {
+            let mut paths = Vec::new();
+            let mut failed = false;
+            for image in images {
+                match store_pasted_image(&dir, &image) {
+                    Ok(path) => paths.push(path),
+                    Err(_) => failed = true,
+                }
+            }
+            (paths, failed)
+        });
+        cx.spawn(async move |owner, cx| {
+            let (paths, failed) = stored.await;
+            let mut paths = Some(paths);
+            let _ = owner.update(cx, |this, cx| {
+                if this.model.accepts(generation) && this.selected == session {
+                    this.add_attachments(paths.take().unwrap_or_default(), cx);
+                    if failed {
+                        this.show_toast(ToastKind::Warning, t!("attachment_paste_failed").to_string(), cx);
+                    }
+                }
+            });
+            for path in paths.into_iter().flatten() {
+                let _ = std::fs::remove_file(path);
+            }
+        }).detach();
     }
 
     fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
@@ -2592,7 +2808,8 @@ impl Observer {
             QuickPanel::Mcp | QuickPanel::Tools => {
                 self.tool_panel_tab = 0;
                 self.tool_draft = Some(ToolDraft::from_config(&config));
-                self.shell_rule_decisions.clear();
+                self.shell_rules_panel = (panel == QuickPanel::Tools)
+                    .then(|| ui::composer::panels::ShellRulesPanel::new(window, cx));
                 // Vue refreshes the catalogue whenever the panel opens, so a
                 // tool removed by the server (for example through
                 // `disabled_tools`) disappears instead of staying cached.
@@ -2662,6 +2879,7 @@ impl Observer {
         self.quick_panel = None;
         self.skills_draft = None;
         self.tool_draft = None;
+        self.shell_rules_panel = None;
         self.model_config = None;
         cx.notify();
     }
@@ -2672,25 +2890,40 @@ impl Observer {
         self.selected.is_some() && !self.options.demo && self.model.can_continue()
     }
 
+    fn resume_pending(&self) -> bool {
+        self.selected.as_ref().is_some_and(|id| self.resuming.contains(id))
+    }
+
     fn continue_workflow(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected.clone().filter(|_| self.can_continue()) {
-            // Vue starts the session and only falls back to a `continue` signal
-            // when the runtime says it already exists. Sending just the signal
-            // did nothing once the task had stopped, because no wait loop was
-            // there to receive it.
-            if self
-                .worker
-                .commands
-                .try_send(Command::Resume { session: id })
-                .is_err()
-            {
-                return;
-            }
-            self.timeline_scroll.follow = true;
-            self.model.resume_follow();
-            self.timeline_scroll.scroll_pending = true;
-            cx.notify();
+        let Some(session) = self.selected.clone().filter(|_| self.can_continue() && !self.resume_pending()) else {
+            return;
+        };
+        let (reply, response) = tokio::sync::oneshot::channel();
+        if self.worker.commands.try_send(Command::Resume {
+            session: session.clone(),
+            agent_id: self.current_agent_id(),
+            reply,
+        }).is_err() {
+            self.show_toast(ToastKind::Error, t!("resume_runtime_unavailable").to_string(), cx);
+            return;
         }
+        self.resuming.insert(session.clone());
+        self.timeline_scroll.follow = true;
+        self.model.resume_follow();
+        self.timeline_scroll.scroll_pending = true;
+        cx.notify();
+        cx.spawn(async move |owner, cx| {
+            let result = response.await.unwrap_or_else(|_| Err(t!("resume_runtime_unavailable").to_string()));
+            let _ = owner.update(cx, |this, cx| {
+                this.resuming.remove(&session);
+                if this.selected.as_ref() == Some(&session) {
+                    if let Err(error) = result {
+                        this.show_toast(ToastKind::Error, error, cx);
+                    }
+                    cx.notify();
+                }
+            });
+        }).detach();
     }
 
     fn manual_compress(&mut self, cx: &mut Context<Self>) {
@@ -3043,6 +3276,9 @@ impl Observer {
                                     self.models_saved_at = None;
                                 }
                                 self.apply_config_ack(key, &patch);
+                                if key == "allowed-paths" {
+                                    self.auto_expand_first_root(cx);
+                                }
                                 self.config_acks.insert(key, (update.queued, patch));
                                 self.sync_planning_mode();
                             }
@@ -3134,6 +3370,8 @@ impl Observer {
                 UpdateKind::Connected(connected) => self.connected = connected,
                 UpdateKind::Config(config, fetched_at) => {
                     self.apply_config(&config, fetched_at, cx);
+                    #[cfg(feature = "chat-hub")]
+                    self.refresh_chat_hub_sites(cx);
                 }
                 UpdateKind::DesktopMenuUnavailable => {
                     self.show_toast(
@@ -3186,16 +3424,23 @@ impl Observer {
                         }
                     }
                 }
-                UpdateKind::WorkflowCreated(result) => match result {
-                    Ok(id) => {
-                        self.new_task_inherit = None;
-                        self.select(id, cx);
+                UpdateKind::WorkflowCreated(result) => {
+                    self.start_pending = false;
+                    match result {
+                        Ok(id) => {
+                            self.new_task_inherit = None;
+                            self.draft_roots = None;
+                            self.draft_final_audit = None;
+                            self.select(id, cx);
+                        }
+                        Err(message) => self.show_toast(ToastKind::Error, message, cx),
                     }
-                    Err(message) => self.show_toast(ToastKind::Error, message, cx),
-                },
+                }
                 UpdateKind::Opened(id) => {
                     self.start_pending = false;
                     self.start_draft = None;
+                    self.draft_roots = None;
+                    self.draft_final_audit = None;
                     if self.selected.is_none() {
                         self.select(id, cx);
                     }
@@ -3314,7 +3559,9 @@ impl Observer {
                     entries,
                     error,
                 } => {
-                    self.dir_pending.remove(&path);
+                    if !self.dir_pending.remove(&path) {
+                        continue;
+                    }
                     if let Some(error) = error {
                         self.dir_errors.insert(path, error);
                     } else {
@@ -3551,6 +3798,7 @@ impl Observer {
         }
         set_primary(config["primary_color"].as_str().unwrap_or("green"));
         self.proxy_targets = config["chat_completion_proxy"].clone();
+        self.global_vision_model = config["vision_model"].clone();
         if !self.geometry_ready && !self.geometry_restore_pending {
             self.geometry_restore_pending = true;
             self.adopt_window_size(config);
@@ -3707,10 +3955,10 @@ impl Observer {
             .then(|| Bounds::new(point(sidebar, px(ui::TITLEBAR_HEIGHT)), size(width, height)))
     }
 
-    /// Loads the configured chat sites once, for the sidebar entry list.
+    /// Refresh the independently stored site list on the runtime config poll.
     #[cfg(feature = "chat-hub")]
-    fn ensure_chat_hub_sites(&mut self, cx: &mut Context<Self>) {
-        if self.chat_hub_sites_loading || !self.chat_hub_sites.is_empty() {
+    fn refresh_chat_hub_sites(&mut self, cx: &mut Context<Self>) {
+        if self.chat_hub_sites_loading {
             return;
         }
         let (reply, response) = tokio::sync::oneshot::channel();
@@ -3728,12 +3976,15 @@ impl Observer {
             let result = response.await;
             let _ = owner.update(cx, |this, cx| {
                 this.chat_hub_sites_loading = false;
-                match result {
-                    Ok(Ok(sites)) => this.chat_hub_sites = chat_hub::sites_from_json(&sites),
-                    Ok(Err(error)) => this.show_toast(ToastKind::Error, error, cx),
-                    Err(_) => {}
+                if let Ok(Ok(sites)) = result {
+                    if let Some(sites) = sites.as_array() {
+                        let sites = chat_hub::sites_from_json(sites);
+                        if sites != this.chat_hub_sites {
+                            this.chat_hub_sites = sites;
+                            cx.notify();
+                        }
+                    }
                 }
-                cx.notify();
             });
         })
         .detach();
@@ -3777,7 +4028,6 @@ impl Observer {
             Some(Err(error)) => self.show_toast(ToastKind::Error, error, cx),
             None => {}
         }
-        self.ensure_chat_hub_sites(cx);
     }
 
     #[cfg(feature = "chat-hub")]
@@ -3825,7 +4075,11 @@ impl Observer {
     }
 
     fn roots(&self) -> &[String] {
-        &self.model.roots
+        if self.selected.is_none() {
+            self.draft_roots.as_deref().unwrap_or_default()
+        } else {
+            &self.model.roots
+        }
     }
 
     /// Durable rows plus the transient live message and live tool lifecycle state.
@@ -5296,7 +5550,6 @@ impl Observer {
                                         "double-arrow-down",
                                         14.,
                                         muted,
-                                        if open { 0. } else { 180. },
                                         if open { 180. } else { 0. },
                                     )),
                             ),
@@ -5407,7 +5660,6 @@ impl Observer {
                                         "double-arrow-down",
                                         14.,
                                         muted,
-                                        if open { 0. } else { 180. },
                                         if open { 180. } else { 0. },
                                     )),
                             ),
@@ -5590,6 +5842,7 @@ impl Render for Observer {
         let background = cx.theme().background;
         let foreground = cx.theme().foreground;
         let muted = cx.theme().muted_foreground;
+        #[cfg(feature = "chat-hub")]
         let primary = cx.theme().primary;
 
         // The answer fields are entities, so they are created outside the row
@@ -6020,7 +6273,16 @@ impl Render for Observer {
         } else {
             None
         };
-        let mut shell = div().id("workflow-shell").size_full().relative().child(frame)
+        let shell = div().id("workflow-shell").size_full().relative().child(frame);
+        #[cfg(all(target_os = "macos", feature = "chat-hub"))]
+        let shell = shell.capture_any_mouse_down(cx.listener(|this, _, _, _| {
+            // AppKit delivers clicks inside WebKit directly to the child view.
+            // A GPUI click must also restore native focus, not just a FocusHandle.
+            if let Some(dock) = &this.chat_hub {
+                dock.return_keyboard_focus();
+            }
+        }));
+        let mut shell = shell
             .capture_key_down(cx.listener(|this, event, window, cx| {
                 ui::terminal::shortcut(this, event, window, cx);
             }))
@@ -6087,6 +6349,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_assets(ui::IconAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            #[cfg(all(target_os = "macos", feature = "chat-hub"))]
+            chat_hub::install_edit_menu(cx);
             cx.set_app_identity("ai.aidyou.chatspeed", "ChatSpeed");
             ensure_bold_capable_font(cx);
             // Remote favicons and other images need a real client; the GPUI
@@ -6190,6 +6454,24 @@ mod tests {
         assert!(draft.mcp_available.contains("server__MCP__tool"));
         assert!(draft.mcp_auto_approve.contains("server__MCP__tool"));
         assert!(draft.mcp_auto_expand.contains("server__MCP__tool"));
+    }
+
+    #[test]
+    fn pasted_tiff_is_saved_as_a_readable_png_attachment() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 3)
+            .write_to(&mut bytes, image::ImageFormat::Tiff)
+            .unwrap();
+        let image = gpui_kit::Image {
+            format: gpui_kit::ImageFormat::Tiff,
+            bytes: bytes.into_inner(),
+            id: 0,
+        };
+        let path = super::store_pasted_image(dir.path(), &image).unwrap();
+        assert!(is_image_path(&path));
+        let decoded = image::open(path).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (2, 3));
     }
 
     #[test]

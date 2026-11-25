@@ -51,7 +51,7 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 }),
         )
         .when(observer.can_continue(), |row| {
-            row.child(continue_button(accent, cx))
+            row.child(continue_button(accent, observer.resume_pending(), cx))
         })
         .when(can_stop, |row| {
             row.child(icon_action(
@@ -306,6 +306,9 @@ fn agent_selector(
     if !observer.can_switch_agent() || agents.is_empty() {
         return trigger_el;
     }
+    let selected_index = agents
+        .iter()
+        .position(|(id, _, _)| current.as_deref() == Some(id.as_str()));
     let selected = current.clone();
     let observer_entity = cx.entity();
     MenuPopover::new(
@@ -347,6 +350,7 @@ fn agent_selector(
             list
         },
     )
+    .selected_index(selected_index)
     .into_any_element()
 }
 
@@ -653,6 +657,10 @@ fn model_selector(
     if entries.is_empty() {
         return trigger_el;
     }
+    let selected_index = entries
+        .iter()
+        .position(|choice| choice.model == current_model)
+        .map(|index| index + usize::from(!group.is_empty()));
     let base_config = config.clone();
     let all_configs = observer.model_configs();
     let observer_entity = cx.entity();
@@ -663,9 +671,7 @@ fn model_selector(
         "composer-model-popover",
         trigger_el,
         move |_: &mut PopoverState, _: &mut Window, cx: &mut Context<PopoverState>| {
-            // Wide enough for the English "Reasoning effort" label plus the
-            // four-level capsule on one line; the rows themselves stay short.
-            let mut list = v_flex().id("composer-model-list").w(px(360.)).gap(px(4.));
+            let mut list = v_flex().id("composer-model-list").w_full().gap(px(4.));
             if !group.is_empty() {
                 list = list.child(model_group_label(group.clone(), cx));
             }
@@ -773,6 +779,8 @@ fn model_selector(
             list
         },
     )
+    .width(px(315.))
+    .selected_index(selected_index)
     .into_any_element()
 }
 
@@ -1279,6 +1287,18 @@ fn sandbox_selector(
             String::new(),
         ),
     ];
+    let mode = observer.sandbox_mode();
+    let selected_index = (mode != "host_only")
+        .then(|| observer.sandbox_scheme_id())
+        .flatten()
+        .and_then(|scheme| schemes.iter().position(|(id, _)| id == &scheme))
+        .map(|index| index + options.len() + 2)
+        .or_else(|| {
+            options
+                .iter()
+                .position(|(value, _, _)| *value == mode)
+                .map(|index| index + 1)
+        });
     let observer_entity = cx.entity();
     MenuPopover::new(
         "composer-sandbox-popover",
@@ -1430,6 +1450,7 @@ fn sandbox_selector(
             list
         },
     )
+    .selected_index(selected_index)
     .into_any_element()
 }
 
@@ -1491,7 +1512,7 @@ fn icon_action(
 }
 
 /// Vue offers "Continue" for every resumable status.
-fn continue_button(accent: Hsla, cx: &mut Context<Observer>) -> AnyElement {
+fn continue_button(accent: Hsla, pending: bool, cx: &mut Context<Observer>) -> AnyElement {
     // Vue renders this as a small round primary button.
     let foreground = cx.theme().primary_foreground;
     h_flex()
@@ -1502,13 +1523,20 @@ fn continue_button(accent: Hsla, cx: &mut Context<Observer>) -> AnyElement {
         .px(px(8.))
         .py(px(4.))
         .rounded(px(9999.))
-        .cursor_pointer()
         .bg(accent)
-        .hover(|style| style.opacity(0.9))
+        .when(pending, |button| button.opacity(0.75))
         .text_size(px(12.))
         .text_color(foreground)
-        .child(Icon::new("send").size(12.).color(foreground))
+        .child(if pending {
+            Icon::new("loading").size(12.).color(foreground)
+                .spin("continue-loading", crate::ui::Spin::Linear)
+        } else {
+            Icon::new("send").size(12.).color(foreground)
+        })
         .child(t!("continue_workflow").to_string())
-        .on_click(cx.listener(|this, _, _, cx| this.continue_workflow(cx)))
+        .when(!pending, |button| {
+            button.cursor_pointer().hover(|style| style.opacity(0.9))
+                .on_click(cx.listener(|this, _, _, cx| this.continue_workflow(cx)))
+        })
         .into_any_element()
 }

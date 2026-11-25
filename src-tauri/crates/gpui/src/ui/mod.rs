@@ -15,31 +15,81 @@ pub(crate) use chatspeed_gpui::components::tooltip::{tip, TOOLTIP_DELAY};
 
 pub(crate) use tokens::{field_bg, layers, surfaces, Surfaces};
 
-/// Rotates an icon between two angles when a disclosure state flips.
-///
-/// The animation id includes the target angle, so each toggle starts a fresh
-/// one-shot animation from the previous angle instead of jumping.
+/// Samples disclosure rotation from a monotonic clock and explicitly wakes
+/// GPUI Fast's cached transcript layers while the angle changes.
+#[derive(IntoElement)]
+struct DisclosureRotation {
+    id: SharedString,
+    icon: Icon,
+    target: f32,
+}
+
+struct DisclosureMotion {
+    from: f32,
+    target: f32,
+    started: std::time::Instant,
+}
+
+impl DisclosureMotion {
+    fn angle(&self, now: std::time::Instant) -> (f32, bool) {
+        let phase = (now.duration_since(self.started).as_secs_f32() / 0.18).min(1.);
+        let moving = self.from != self.target && phase < 1.;
+        (self.from + (self.target - self.from) * ease_in_out(phase), moving)
+    }
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn disclosure_rotation_reaches_the_target_and_stops_requesting_frames() {
+    use std::time::{Duration, Instant};
+
+    let started = Instant::now();
+    let motion = DisclosureMotion { from: 0., target: 180., started };
+    assert_eq!(motion.angle(started), (0., true));
+    let (midpoint, moving) = motion.angle(started + Duration::from_millis(90));
+    assert!(moving && midpoint > 0. && midpoint < 180.);
+    assert_eq!(motion.angle(started + Duration::from_millis(200)), (180., false));
+}
+
+impl RenderOnce for DisclosureRotation {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let now = std::time::Instant::now();
+        let state = window.use_keyed_state(self.id, cx, |_, _| {
+            std::cell::RefCell::new(DisclosureMotion {
+                from: self.target,
+                target: self.target,
+                started: now,
+            })
+        });
+        let mut motion = state.read(cx).borrow_mut();
+        if motion.target != self.target {
+            *motion = DisclosureMotion {
+                from: motion.angle(now).0,
+                target: self.target,
+                started: now,
+            };
+        }
+        let (angle, moving) = motion.angle(now);
+        if moving {
+            window.request_animation_frame();
+        }
+        self.icon.rotate(angle)
+    }
+}
+
 pub(crate) fn rotating_icon(
     id: impl Into<SharedString>,
     icon: &'static str,
     size: f32,
     color: Hsla,
-    from: f32,
     to: f32,
 ) -> AnyElement {
-    // A spring retargets from its current angle, so repeated toggles stay smooth
-    // and never restart from a stale one-shot phase.
-    Icon::new(icon)
-        .size(size)
-        .color(color)
-        .with_spring(
-            id.into(),
-            SpringAnimation::new(SpringConfig::new(420., 32., 1.))
-                .to(to)
-                .from(from),
-            move |icon, angle| icon.rotate(angle),
-        )
-        .into_any_element()
+    DisclosureRotation {
+        id: id.into(),
+        icon: Icon::new(icon).size(size).color(color),
+        target: to,
+    }
+    .into_any_element()
 }
 
 /// A compact label next to an icon. Keep its optical adjustment out of the row layout.
@@ -182,7 +232,6 @@ pub(super) fn disclosure_caret(group: &'static str, open: bool, color: Hsla) -> 
             "caret-right",
             14.,
             color,
-            if open { 0. } else { 90. },
             if open { 90. } else { 0. },
         ))
 }
@@ -265,6 +314,7 @@ pub(crate) mod confirm {
         CloseTerminal(usize),
         DeleteSession(String),
         DeleteAutomation(String),
+        ReplaceShellRules { session: String, import: bool },
     }
 }
 pub(crate) mod file_editor;

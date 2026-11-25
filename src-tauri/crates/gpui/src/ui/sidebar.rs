@@ -1232,7 +1232,7 @@ fn compact_badge(
 /// The rail's ChatHub slot: the site dropdown with the docked logo, or the
 /// legacy toggle when the feature is off.
 fn chat_hub_rail_entry(
-    observer: &Observer,
+    #[cfg_attr(not(feature = "chat-hub"), allow(unused_variables))] observer: &Observer,
     skin: &Surfaces,
     cx: &mut Context<Observer>,
 ) -> AnyElement {
@@ -1268,8 +1268,6 @@ fn chat_hub_entry(observer: &Observer, skin: &Surfaces, cx: &mut Context<Observe
         .and_then(|dock| dock.active())
         .cloned();
     let active_id = active.as_ref().map(|site| site.id);
-    let sites = observer.chat_hub_sites.clone();
-    let menu_active = active.clone();
     let observer_entity = cx.entity();
 
     let menu = Popover::new("chat-hub-menu")
@@ -1294,6 +1292,10 @@ fn chat_hub_entry(observer: &Observer, skin: &Surfaces, cx: &mut Context<Observe
         ))
         .content(move |_, window, cx| {
             let popover = cx.entity();
+            let observer = observer_entity.read(cx);
+            let sites = observer.chat_hub_sites.clone();
+            let menu_active = observer.chat_hub.as_ref().and_then(|dock| dock.active()).cloned();
+            let active_id = menu_active.as_ref().map(|site| site.id);
             let mut list = v_flex()
                 .id("chat-hub-site-list")
                 .w(px(220.))

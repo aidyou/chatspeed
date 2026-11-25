@@ -2115,7 +2115,41 @@ fn finish_task_label(message: &Message) -> String {
     }
 }
 
-fn activity_view(items: Vec<Message>, roots: &[String]) -> ActivityView {
+fn is_tool_group_boundary(message: &Message) -> bool {
+    let kind = message.metadata["message_kind"].as_str();
+    kind == Some("exploration_batch")
+        || match message.role.as_str() {
+            "user" => true,
+            "system" => message.message_kind == "summary",
+            "assistant" => {
+                message.message_kind == "completion_report"
+                    || kind == Some("completion_report")
+                    || has_visible_text(&clean_text(&message.message))
+            }
+            "tool" => !is_collapsible_tool(message),
+            _ => false,
+        }
+}
+
+// Match Vue's display states without changing the tool's lifecycle or deduplication rank.
+fn is_tool_running_for_group(message: &Message) -> bool {
+    let execution = message.metadata["execution_status"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match execution.as_str() {
+        "waiting" if tool_name(&message.metadata) == "ask_user" => false,
+        "running" | "pending" | "queued" | "waiting" | "awaiting_execution" | "approval_submitted" => true,
+        "" => match message.metadata["type"].as_str() {
+            Some("tool_started") => true,
+            Some("tool_completed" | "tool_failed") => false,
+            _ => ToolStatus::from_message(message) == ToolStatus::Running,
+        },
+        _ => false,
+    }
+}
+
+fn activity_view(items: Vec<Message>, roots: &[String], open_tail: bool) -> ActivityView {
     let first = items.first().cloned().unwrap_or_default();
     let key = format!(
         "activity-{}",
@@ -2170,12 +2204,11 @@ fn activity_view(items: Vec<Message>, roots: &[String]) -> ActivityView {
             .join(" · "),
         120,
     );
-    let ongoing = first.metadata["tool_group_is_ongoing"]
-        .as_bool()
-        .unwrap_or(false)
-        || tools
+    let ongoing = open_tail
+        || items
             .iter()
-            .any(|message| ToolStatus::from_message(message).is_running());
+            .any(|message| message.metadata["tool_group_is_ongoing"] == true)
+        || tools.iter().any(|message| is_tool_running_for_group(message));
     let items = items
         .into_iter()
         .map(|message| {
@@ -2586,7 +2619,9 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
         deduped.push(message);
     }
 
-    // A thought directly followed by its completion report is one step.
+    // Like Vue, a tool result does not close the group. Only a later turn,
+    // reply, or standalone activity does; trailing thought text can join it.
+    let last_group_boundary = deduped.iter().rposition(is_tool_group_boundary);
     let mut rows = Vec::new();
     let mut index = 0usize;
     let total = deduped.len();
@@ -2603,21 +2638,23 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
             index += 1;
             continue;
         }
-        if is_think_only(message) || is_collapsible_tool(message) {
+        if !is_tool_group_boundary(message) && (is_think_only(message) || is_collapsible_tool(message)) {
             let mut collected: Vec<Message> = Vec::new();
             let mut cursor = index;
             while cursor < total {
                 let candidate = &deduped[cursor];
-                if is_think_only(candidate) || is_collapsible_tool(candidate) {
-                    collected.push(candidate.clone());
-                    cursor += 1;
-                } else {
+                if is_tool_group_boundary(candidate)
+                    || !(is_think_only(candidate) || is_collapsible_tool(candidate))
+                {
                     break;
                 }
+                collected.push(candidate.clone());
+                cursor += 1;
             }
             let has_tool = collected.iter().any(|message| message.role == "tool");
             if has_tool {
-                rows.push(Row::Activity(activity_view(collected, roots)));
+                let open_tail = last_group_boundary.is_none_or(|boundary| boundary < cursor);
+                rows.push(Row::Activity(activity_view(collected, roots, open_tail)));
             } else {
                 rows.extend(collected.into_iter().map(|message| {
                     Row::Assistant(AssistantView {
@@ -2937,6 +2974,57 @@ mod tests {
         assert_eq!(activity.items.len(), 4);
         assert!(activity.items[0].thought.is_some());
         assert!(matches!(&rows[1], Row::FinishTask(task) if !task.failed));
+    }
+
+    #[test]
+    fn activity_group_stays_open_after_tool_completion_until_a_boundary() {
+        let completed = || tool(1, "read_file", json!({"execution_status":"completed"}));
+        let reasoning = Message {
+            id: -1,
+            role: "assistant".into(),
+            reasoning: Some("Checking the result".into()),
+            ..Message::default()
+        };
+        for messages in [vec![completed()], vec![completed(), reasoning]] {
+            let rows = project(messages, &[]);
+            assert!(matches!(rows.as_slice(), [Row::Activity(group)] if group.ongoing));
+        }
+        for boundary in [
+            Message {
+                role: "assistant".into(),
+                message: "Done".into(),
+                ..Message::default()
+            },
+            Message {
+                role: "user".into(),
+                message: "Next turn".into(),
+                ..Message::default()
+            },
+            tool(2, "write_file", json!({"execution_status":"pending_approval"})),
+            tool(2, "ask_user", json!({"execution_status":"waiting"})),
+        ] {
+            let rows = project(vec![completed(), boundary], &[]);
+            assert!(matches!(&rows[0], Row::Activity(group) if !group.ongoing));
+        }
+    }
+
+    #[test]
+    fn activity_group_uses_vue_display_states_for_tools() {
+        for status in ["running", "pending", "queued", "waiting", "awaiting_execution", "approval_submitted"] {
+            let call = tool(1, "read_file", json!({"execution_status":status}));
+            assert!(is_tool_running_for_group(&call), "{status}");
+        }
+        for status in ["completed", "failed", "interrupted", "rejected", "pending_approval"] {
+            let call = tool(1, "read_file", json!({"execution_status":status}));
+            assert!(!is_tool_running_for_group(&call), "{status}");
+        }
+        assert!(!is_tool_running_for_group(&tool(
+            1,
+            "ask_user",
+            json!({"execution_status":"waiting"}),
+        )));
+        assert!(is_tool_running_for_group(&tool(1, "read_file", json!({"type":"tool_started"}))));
+        assert!(!is_tool_running_for_group(&tool(1, "read_file", json!({"type":"tool_completed"}))));
     }
 
     #[test]

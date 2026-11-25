@@ -19,6 +19,7 @@ ask_user_other_required: Type your own answer for the “Other” option
 approval_submit_failed: Could not send the approval decision
 ask_user_required: Pick an option for every question first
 ask_user_submit_failed: Could not send the answer
+attachment_paste_failed: "Could not add the clipboard image"
 attachment_unsupported: "Only image files can be attached"
 auto_approve_plan: "Auto-approve plan"
 auto_approve_plan_hint: "Start implementation as soon as a plan is submitted"
@@ -186,9 +187,11 @@ menu_agent: Agent
 menu_assistant: Assistant
 menu_chat: Chat
 menu_chat_hub: Chat Hub
+menu_edit: Edit
 menu_mcp: MCP
 menu_model: AI Provider
 menu_note: Note
+menu_paste: Paste
 menu_proxy: Proxy
 menu_proxy_switcher: Proxy Switcher
 menu_quit: Quit
@@ -232,7 +235,12 @@ file_editor_save_error: "Could not save the file: %{reason}"
 file_editor_saving: Saving…
 file_editor_unsaved: You have unsaved changes.
 open_file: Open file
+paths_already_added: This directory is already authorized
 paths_empty: No authorized paths
+paths_invalid_directory: Enter an existing absolute directory path
+paths_remove_no_args: Select a directory from the list instead of passing a path
+paths_save_failed: Could not update authorized directories
+paths_title: AUTHORIZED DIRECTORIES
 personality_coach: "Coach"
 personality_coach_hint: "Move the task forward transparently and explain key decisions"
 personality_companion: "Companion"
@@ -271,6 +279,8 @@ reject: Reject
 rejected_label: Rejected
 result_label: Result
 remove_attachment: "Remove attachment"
+resume_agent_missing: The workflow has no saved agent.
+resume_runtime_unavailable: Could not connect to the runtime to resume the workflow.
 rewind_confirm: Rewind this conversation by removing its latest step?
 rewind_done: Conversation rewound
 rewind_unavailable: The conversation cannot be rewound right now
@@ -322,6 +332,20 @@ snapshot_required_fixes: Required fixes
 shell_decision_allow: "Allow"
 shell_decision_deny: "Deny"
 shell_decision_review: "Review"
+shell_rules_add: "Add rule"
+shell_rules_clear: "Clear rules"
+shell_rules_clear_confirm: "Remove all shell rules from the current workflow?"
+shell_rules_defaults_unavailable: "Could not load the selected agent’s default rules."
+shell_rules_duplicate: "This rule already exists."
+shell_rules_empty: "No matching shell rules"
+shell_rules_import: "Import defaults"
+shell_rules_import_confirm: "Replace the current workflow’s shell rules with the selected agent’s defaults?"
+shell_rules_next: "Next page"
+shell_rules_pattern: "Enter a shell command pattern"
+shell_rules_previous: "Previous page"
+shell_rules_remove: "Remove rule"
+shell_rules_save_failed: "Could not save the shell rules."
+shell_rules_search: "Search shell rules"
 snapshot_review_approved: Approved
 snapshot_review_open: Open
 snapshot_review_round: Review
@@ -430,7 +454,7 @@ suggestion_add_directory: "Authorize a directory"
 suggestion_bundled: "Bundled skills"
 suggestion_clear_context: "Start a new context"
 suggestion_commands: "ChatSpeed commands"
-suggestion_directory_invalid: "Enter an existing absolute directory path"
+suggestion_compress_no_session: Start a task before compressing context
 suggestion_installed: "Installed skills"
 suggestion_remove_directory: "Remove an authorized directory"
 tab_automation: Automation

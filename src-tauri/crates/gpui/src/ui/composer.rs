@@ -163,7 +163,25 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     // giving it a percentage height: a `h_full` here resolved against the whole
     // box, so the textarea (and its scrollbar) ran under the footer row and the
     // lines that passed it were hidden behind the buttons.
+    let owner = cx.entity().downgrade();
     let textarea = Textarea::new(&observer.composer)
+        .on_paste(move |clipboard, _, cx| {
+            #[cfg(all(target_os = "macos", feature = "chat-hub"))]
+            if owner.upgrade().is_some_and(|owner| {
+                owner.read(cx).chat_hub.as_ref().and_then(crate::chat_hub::Dock::focused_view).is_some()
+            }) {
+                // A native Paste action must not also land in the stale GPUI field.
+                return true;
+            }
+            let images: Vec<_> = clipboard.entries.iter().filter_map(|entry| match entry {
+                ClipboardEntry::Image(image) => Some(image.clone()),
+                _ => None,
+            }).collect();
+            if images.is_empty() {
+                return false; // Keep normal text paste in the input component.
+            }
+            owner.update(cx, |this, cx| this.paste_attachments(images, cx)).is_ok()
+        })
         .appearance(false)
         .bordered(false)
         .w_full()

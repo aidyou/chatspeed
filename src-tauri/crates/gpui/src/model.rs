@@ -588,7 +588,12 @@ impl Model {
                 }
             }
             "state" => {
-                self.state = event["state"].as_str().unwrap_or_default().to_owned();
+                if let Some(state) = event["state"].as_str().filter(|state| !state.is_empty()) {
+                    // The stream can report a restarted session before the next snapshot.
+                    // Keep the footer from pairing its new state with the old liveness flag.
+                    self.has_live_session = !crate::chimes::terminal(state);
+                    self.state = state.to_owned();
+                }
                 self.wait_reason = event["wait_reason"].as_str().unwrap_or_default().to_owned();
                 let call_id = event.get("awaiting_user_tool_call_id");
                 if self.wait_reason != "user_input" || call_id.is_some() {
@@ -762,6 +767,29 @@ mod tests {
         model.page(page("paused", Value::Null, false, Some("ask_user_wait")), false);
         assert!(!model.can_continue());
         model.page(page("paused", Value::Null, false, None), false);
+        assert!(model.can_continue());
+    }
+
+    #[test]
+    fn restarted_workflow_offers_stop_on_live_state_without_waiting_for_a_snapshot() {
+        let mut model = Model::default();
+        model.page(Page { status: "completed".into(), ..Page::default() }, false);
+        assert!(!model.can_continue());
+        assert!(!model.can_stop());
+
+        for state in ["thinking", "executing", "awaiting_user"] {
+            model.event(json!({"type": "state", "state": state}));
+            assert!(!model.can_continue(), "{state}");
+            assert!(model.can_stop(), "{state}");
+        }
+
+        model.event(json!({"type": "state", "state": "completed"}));
+        assert!(!model.has_live_session);
+        assert!(!model.can_stop());
+        assert!(!model.can_continue());
+
+        model.event(json!({"type": "state", "state": "error"}));
+        assert!(!model.can_stop());
         assert!(model.can_continue());
     }
 

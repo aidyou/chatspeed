@@ -19,6 +19,7 @@ ask_user_other_required: 请为「其他」填写回答内容
 approval_submit_failed: 无法发送审批决定
 ask_user_required: 请先为每个问题选择一个选项
 ask_user_submit_failed: 无法发送回答
+attachment_paste_failed: "无法添加剪贴板图片"
 attachment_unsupported: "只能添加图片文件"
 auto_approve_plan: "自动批准计划"
 auto_approve_plan_hint: "计划提交后直接进入实施阶段"
@@ -186,9 +187,11 @@ menu_agent: 智能体
 menu_assistant: 助手
 menu_chat: 聊天
 menu_chat_hub: 聊天入口
+menu_edit: 编辑
 menu_mcp: MCP
 menu_model: AI供应商
 menu_note: 智记
+menu_paste: 粘贴
 menu_proxy: 代理
 menu_proxy_switcher: 代理切换
 menu_quit: 退出
@@ -232,7 +235,12 @@ file_editor_save_error: "无法保存文件：%{reason}"
 file_editor_saving: 正在保存…
 file_editor_unsaved: 有未保存的改动。
 open_file: 打开文件
+paths_already_added: 此目录已授权
 paths_empty: 暂无授权目录
+paths_invalid_directory: 请输入存在的绝对目录路径
+paths_remove_no_args: 请从列表选择要移除的目录，不要传入路径
+paths_save_failed: 无法更新授权目录
+paths_title: 授权目录
 personality_coach: "教练"
 personality_coach_hint: "透明推进任务，在有助于用户理解时解释关键决策与下一步"
 personality_companion: "伙伴"
@@ -271,6 +279,8 @@ reject: 拒绝
 rejected_label: 已拒绝
 result_label: 结果
 remove_attachment: "移除附件"
+resume_agent_missing: 该工作流没有已保存的智能体。
+resume_runtime_unavailable: 无法连接运行时以继续工作流。
 rewind_confirm: 确定移除最近一步并回退会话吗？
 rewind_done: 已回退会话
 rewind_unavailable: 当前无法回退会话
@@ -321,7 +331,21 @@ snapshot_recent_actions: 最近操作
 snapshot_required_fixes: 必需修复
 shell_decision_allow: "允许"
 shell_decision_deny: "拒绝"
-shell_decision_review: "须审批"
+shell_decision_review: "须审核"
+shell_rules_add: "添加规则"
+shell_rules_clear: "清空规则"
+shell_rules_clear_confirm: "确定清空当前工作流的所有 Shell 规则吗？"
+shell_rules_defaults_unavailable: "无法读取当前智能体的默认规则。"
+shell_rules_duplicate: "此规则已存在。"
+shell_rules_empty: "没有匹配的 Shell 规则"
+shell_rules_import: "导入默认配置"
+shell_rules_import_confirm: "确定用当前智能体的默认规则替换当前工作流的 Shell 规则吗？"
+shell_rules_next: "下一页"
+shell_rules_pattern: "输入 Shell 命令模式"
+shell_rules_previous: "上一页"
+shell_rules_remove: "删除规则"
+shell_rules_save_failed: "无法保存 Shell 规则。"
+shell_rules_search: "搜索 Shell 规则"
 snapshot_review_approved: 已批准
 snapshot_review_open: 未解决
 snapshot_review_round: 审查
@@ -430,7 +454,7 @@ suggestion_add_directory: "添加授权目录"
 suggestion_bundled: "内置技能"
 suggestion_clear_context: "开启新上下文"
 suggestion_commands: "ChatSpeed 命令"
-suggestion_directory_invalid: "请输入存在的绝对目录路径"
+suggestion_compress_no_session: 请先创建任务，再压缩上下文
 suggestion_installed: "已安装技能"
 suggestion_remove_directory: "移除授权目录"
 tab_automation: 自动化

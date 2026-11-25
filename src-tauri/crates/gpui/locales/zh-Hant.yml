@@ -19,6 +19,7 @@ ask_user_other_required: 請為「其他」填寫回答內容
 approval_submit_failed: 無法傳送審批決定
 ask_user_required: 請先為每個問題選擇一個選項
 ask_user_submit_failed: 無法傳送回答
+attachment_paste_failed: "無法新增剪貼簿圖片"
 attachment_unsupported: "只能新增圖片檔案"
 auto_approve_plan: "自動批准計劃"
 auto_approve_plan_hint: "計劃提交後直接進入實施階段"
@@ -186,9 +187,11 @@ menu_agent: 智能體
 menu_assistant: 助手
 menu_chat: 聊天
 menu_chat_hub: 聊天入口
+menu_edit: 編輯
 menu_mcp: MCP
 menu_model: AI供應商
 menu_note: 智記
+menu_paste: 貼上
 menu_proxy: 代理
 menu_proxy_switcher: 代理切換
 menu_quit: 退出
@@ -232,7 +235,12 @@ file_editor_save_error: "無法儲存檔案：%{reason}"
 file_editor_saving: 正在儲存…
 file_editor_unsaved: 有未儲存的變更。
 open_file: 開啟檔案
+paths_already_added: 此目錄已授權
 paths_empty: 暫無授權目錄
+paths_invalid_directory: 請輸入存在的絕對目錄路徑
+paths_remove_no_args: 請從列表選擇要移除的目錄，不要傳入路徑
+paths_save_failed: 無法更新授權目錄
+paths_title: 授權目錄
 personality_coach: "教練"
 personality_coach_hint: "透明推進任務，在有助於用戶理解時解釋關鍵決策與下一步"
 personality_companion: "夥伴"
@@ -271,6 +279,8 @@ reject: 拒絕
 rejected_label: 已拒絕
 result_label: 結果
 remove_attachment: "移除附件"
+resume_agent_missing: 此工作流沒有已儲存的智慧體。
+resume_runtime_unavailable: 無法連線至執行階段以繼續工作流。
 rewind_confirm: 確定移除最近一步並回退會話嗎？
 rewind_done: 已回退會話
 rewind_unavailable: 目前無法回退會話
@@ -321,7 +331,21 @@ snapshot_recent_actions: 最近操作
 snapshot_required_fixes: 必需修復
 shell_decision_allow: "允許"
 shell_decision_deny: "拒絕"
-shell_decision_review: "須審批"
+shell_decision_review: "須審核"
+shell_rules_add: "新增規則"
+shell_rules_clear: "清空規則"
+shell_rules_clear_confirm: "確定清空目前工作流程的所有 Shell 規則嗎？"
+shell_rules_defaults_unavailable: "無法讀取目前智慧體的預設規則。"
+shell_rules_duplicate: "此規則已存在。"
+shell_rules_empty: "沒有符合的 Shell 規則"
+shell_rules_import: "匯入預設設定"
+shell_rules_import_confirm: "確定用目前智慧體的預設規則替換目前工作流程的 Shell 規則嗎？"
+shell_rules_next: "下一頁"
+shell_rules_pattern: "輸入 Shell 指令模式"
+shell_rules_previous: "上一頁"
+shell_rules_remove: "刪除規則"
+shell_rules_save_failed: "無法儲存 Shell 規則。"
+shell_rules_search: "搜尋 Shell 規則"
 snapshot_review_approved: 已批準
 snapshot_review_open: 未解決
 snapshot_review_round: 審查
@@ -430,7 +454,7 @@ suggestion_add_directory: "新增授權目錄"
 suggestion_bundled: "內建技能"
 suggestion_clear_context: "開啟新上下文"
 suggestion_commands: "ChatSpeed 命令"
-suggestion_directory_invalid: "請輸入存在的絕對目錄路徑"
+suggestion_compress_no_session: 請先建立任務，再壓縮上下文
 suggestion_installed: "已安裝技能"
 suggestion_remove_directory: "移除授權目錄"
 tab_automation: 自動化

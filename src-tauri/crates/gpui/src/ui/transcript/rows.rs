@@ -4,6 +4,7 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
+use std::time::{Duration, Instant};
 
 use crate::{accent, danger, pill, plain_text, ui::Icon, warning, MsgScope, Observer};
 use chatspeed_gpui::presentation::{ActivityView, AlertKind, AlertView, Row};
@@ -12,18 +13,155 @@ pub(crate) fn latest_active_group(rows: &[Row], running: bool) -> Option<&str> {
     if !running {
         return None;
     }
-    rows.iter().rev().find_map(|row| match row {
-        Row::Activity(group) if group.ongoing => Some(group.key.as_str()),
-        _ => None,
-    })
+    rows.iter()
+        .rev()
+        .find_map(|row| match row {
+            Row::Activity(group) => Some(group),
+            _ => None,
+        })
+        .filter(|group| group.ongoing)
+        .map(|group| group.key.as_str())
+}
+
+const SWEEP_PERIOD: Duration = Duration::from_secs(3);
+const SWEEP_HALF_WIDTH: f32 = 0.384;
+
+fn sweep_center(elapsed: Duration) -> f32 {
+    let phase = (elapsed.as_nanos() % SWEEP_PERIOD.as_nanos()) as f32
+        / SWEEP_PERIOD.as_nanos() as f32;
+    // Vue sweeps during the first half of the cycle, then rests off the right edge.
+    let t = (phase * 2.).min(1.);
+    -0.7 + 2.4 * t * t * (3. - 2. * t)
+}
+
+#[derive(IntoElement)]
+struct ActivitySweep {
+    id: SharedString,
+    summary: SharedString,
+    color: Hsla,
+}
+
+impl RenderOnce for ActivitySweep {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let started = *window.use_keyed_state(self.id, cx, |_, _| Instant::now()).read(cx);
+        SweepText {
+            text: StyledText::new(self.summary),
+            started,
+            highlight: self.color,
+        }
+    }
+}
+
+/// Keep GPUI in charge of shaping and ellipsis; tint only the glyphs it laid out.
+struct SweepText {
+    text: StyledText,
+    started: Instant,
+    highlight: Hsla,
+}
+
+#[cfg(not(feature = "fast"))]
+impl IntoElement for SweepText {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for SweepText {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        self.text.request_layout(id, inspector, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        layout: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.text.prepaint(id, inspector, bounds, layout, window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        _: &mut App,
+    ) {
+        if bounds.size.width <= px(0.) {
+            return;
+        }
+        // Request from paint so GPUI Fast marks the transcript tile animated.
+        window.request_animation_frame();
+        let center = sweep_center(self.started.elapsed());
+        let foreground = window.text_style().color;
+        let layout = self.text.layout();
+        let height = layout.line_height();
+        let mut y = bounds.top();
+        for wrapped in layout.line_layouts() {
+            let line = &wrapped.unwrapped_layout;
+            let baseline = y + (height - line.ascent - line.descent) / 2. + line.ascent;
+            for run in &line.runs {
+                for glyph in &run.glyphs {
+                    let x = glyph.position.x;
+                    let origin = point(bounds.left() + x, baseline + glyph.position.y);
+                    if glyph.is_emoji {
+                        let _ = window.paint_emoji(origin, run.font_id, glyph.id, line.font_size);
+                    } else {
+                        let position = x / bounds.size.width;
+                        let strength = (1. - (position - center).abs() / SWEEP_HALF_WIDTH).max(0.);
+                        let color = foreground.blend(self.highlight.opacity(strength));
+                        let _ = window.paint_glyph(origin, run.font_id, glyph.id, line.font_size, color);
+                    }
+                }
+            }
+            y += wrapped.size(height).height;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{latest_active_group, ActivityView, Row};
+    use super::{latest_active_group, sweep_center, ActivityView, Duration, Row, SWEEP_HALF_WIDTH, SWEEP_PERIOD};
 
     #[test]
-    fn sweep_selects_latest_running_group_even_with_later_non_group_rows() {
+    fn sweep_crosses_the_text_then_rests_offscreen() {
+        let start = sweep_center(Duration::ZERO);
+        let middle = sweep_center(Duration::from_millis(750));
+        let end = sweep_center(Duration::from_millis(1500));
+        assert!(start + SWEEP_HALF_WIDTH < 0.);
+        assert!((middle - 0.5).abs() < 0.0001);
+        assert!(end - SWEEP_HALF_WIDTH > 1.);
+        assert_eq!(sweep_center(Duration::from_millis(2250)), end);
+        assert_eq!(sweep_center(SWEEP_PERIOD), start);
+    }
+
+    #[test]
+    fn sweep_stays_on_the_last_group_and_never_jumps_back() {
         let group = |key: &str, ongoing| {
             Row::Activity(ActivityView {
                 key: key.into(),
@@ -41,7 +179,8 @@ mod tests {
             group("finished", false),
             Row::Divider,
         ];
-        assert_eq!(latest_active_group(&rows, true), Some("latest"));
+        assert_eq!(latest_active_group(&rows[..2], true), Some("latest"));
+        assert_eq!(latest_active_group(&rows, true), None);
         assert_eq!(latest_active_group(&rows, false), None);
         assert_eq!(latest_active_group(&rows[2..], true), None);
     }
@@ -94,7 +233,6 @@ pub(crate) fn activity_group(
         .px(px(4.))
         .rounded(px(4.))
         .cursor_pointer();
-    let primary = cx.theme().primary;
     let mut title = h_flex()
         .relative()
         .overflow_hidden()
@@ -124,6 +262,17 @@ pub(crate) fn activity_group(
                 .child(format!("{} x{}", t!("error"), group.error_count)),
         );
     }
+    let summary = group.summary.trim().replace(['\r', '\n'], " ");
+    let summary = if shimmer && !cx.reduce_motion() {
+        ActivitySweep {
+            id: format!("sweep-{}", group.key).into(),
+            summary: summary.into(),
+            color: cx.theme().primary.blend(cx.theme().success.opacity(0.18)),
+        }
+        .into_any_element()
+    } else {
+        crate::ui::chrome_label(summary).into_any_element()
+    };
     title = title.child(
         div()
             .flex_shrink_1()
@@ -133,54 +282,9 @@ pub(crate) fn activity_group(
             .text_ellipsis()
             .text_size(px(12.))
             .line_height(px(18.))
-            .text_color(if group.ongoing {
-                cx.theme().foreground
-            } else {
-                muted
-            })
-            .child(crate::ui::chrome_label(group.summary.clone())),
+            .text_color(if shimmer { cx.theme().foreground } else { muted })
+            .child(summary),
     );
-    if shimmer && !cx.reduce_motion() {
-        let clear = primary.opacity(0.);
-        let peak = primary.opacity(0.35);
-        title = title.child(
-            div().absolute().inset_0().with_animation(
-                "activity-sweep",
-                Animation::new(std::time::Duration::from_secs(3))
-                    .repeat_synced()
-                    .with_max_fps(30.)
-                    .with_easing(ease_in_out),
-                move |track, phase| {
-                    track.child(
-                        canvas(
-                            |_, _, _| (),
-                            move |bounds, (), window, _| {
-                                let half = bounds.size.width * 0.225;
-                                let x = bounds.origin.x + (bounds.size.width + half * 2.) * phase
-                                    - half * 2.;
-                                let size = size(half, bounds.size.height);
-                                for (offset, from, to) in
-                                    [(px(0.), clear, peak), (half, peak, clear)]
-                                {
-                                    let band =
-                                        Bounds::new(point(x + offset, bounds.origin.y), size);
-                                    window.paint_quad(fill(
-                                        band,
-                                        linear_gradient(
-                                            90.,
-                                            linear_color_stop(from, 0.),
-                                            linear_color_stop(to, 1.),
-                                        ),
-                                    ));
-                                }
-                            },
-                        )
-                        .size_full(),
-                    )
-                },
-            ),
-        );
-    }
     header = header
         .child(title)
         .child(
@@ -195,7 +299,6 @@ pub(crate) fn activity_group(
                     "caret-right",
                     14.,
                     muted,
-                    if items.is_some() { 0. } else { 90. },
                     if items.is_some() { 90. } else { 0. },
                 )),
         )

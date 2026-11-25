@@ -632,6 +632,7 @@ fn open_automation(observer: &mut Observer, window: &mut Window, cx: &mut Contex
                             }
                         },
                     )
+                    .selected_index(agents.iter().position(|(id, _)| *id == *selected_agent.borrow()))
                     .into_any_element(),
                 ))
                 .child(field(
@@ -1210,12 +1211,29 @@ pub(super) fn edit_automation(
                 input.set_value(current_schedule.as_str(), window, cx);
                 input
             });
+            let allowed_paths = std::rc::Rc::new(std::cell::RefCell::new(
+                chatspeed_gpui::types::workflow_roots(&view),
+            ));
             let owner = cx.entity().downgrade();
             let field_bg = crate::ui::field_bg(cx);
-            window.open_dialog(cx, move |dialog, _, _| {
+            window.open_dialog(cx, move |dialog, _, cx| {
                 let (input_state, owner, id, view) =
                     (input.clone(), owner.clone(), id.clone(), view.clone());
                 let (prompt_state, schedule_state) = (prompt.clone(), schedule.clone());
+                let paths_for_save = allowed_paths.clone();
+                let muted = cx.theme().muted_foreground;
+                let mut paths = v_flex().id("automation-edit-paths").max_h(px(120.)).overflow_y_scroll();
+                for path in allowed_paths.borrow().iter().cloned() {
+                    let paths_for_remove = allowed_paths.clone();
+                    paths = paths.child(h_flex().gap_2().items_center()
+                        .child(div().flex_1().min_w_0().text_ellipsis().child(path.clone()))
+                        .child(div().id(SharedString::from(path.clone())).p_1().cursor_pointer()
+                            .child(Icon::new("trash").size(14.).color(muted))
+                            .on_click(move |_, window, _| {
+                                paths_for_remove.borrow_mut().retain(|entry| entry != &path);
+                                window.refresh();
+                            })));
+                }
                 dialog
                     .title(t!("automation_edit").to_string())
                     .child(
@@ -1228,7 +1246,16 @@ pub(super) fn edit_automation(
                                 )
                             })
                             .child(t!("automation_schedule_input").to_string())
-                            .child(Input::new(&schedule).bg(field_bg)),
+                            .child(Input::new(&schedule).bg(field_bg))
+                            .child(h_flex().justify_between().items_center()
+                                .child(t!("paths_title").to_string())
+                                .child(Button::new("automation-edit-add-path")
+                                    .label(t!("automation_add_directory").to_string())
+                                    .on_click({
+                                        let paths = allowed_paths.clone();
+                                        move |_, window, cx| pick_automation_directories(paths.clone(), window, cx)
+                                    })))
+                            .child(paths),
                     )
                     .footer(
                         h_flex()
@@ -1312,6 +1339,10 @@ pub(super) fn edit_automation(
                                                             body["spec"]["schedule_config"] =
                                                                 merged.into();
                                                         }
+                                                        let paths = paths_for_save.borrow();
+                                                        if *paths != chatspeed_gpui::types::workflow_roots(&view) {
+                                                            body["spec"]["allowed_paths"] = serde_json::json!(*paths);
+                                                        }
                                                         Some(body)
                                                     });
                                                     let Some(body) = body else {
@@ -1379,6 +1410,32 @@ pub(super) fn edit_automation(
         });
     })
     .detach();
+}
+
+fn pick_automation_directories(
+    paths: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let receiver = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: true,
+        prompt: Some(t!("suggestion_add_directory").to_string().into()),
+    });
+    window.spawn(cx, async move |cx| {
+        let Ok(Ok(Some(selected))) = receiver.await else { return; };
+        let _ = cx.update(|window, _| {
+            let mut paths = paths.borrow_mut();
+            for path in selected.iter().filter_map(|path| path.to_str()) {
+                let path = chatspeed_gpui::types::normalize_root(path);
+                if !paths.contains(&path) {
+                    paths.push(path);
+                }
+            }
+            window.refresh();
+        });
+    }).detach();
 }
 
 fn review_automation(plan: serde_json::Value, window: &mut Window, cx: &mut Context<Observer>) {

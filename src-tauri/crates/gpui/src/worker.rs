@@ -5,7 +5,8 @@ use crate::{
     native,
     types::*,
 };
-use chatspeed_runtime_client::RuntimeClient;
+use chatspeed_contracts::{ErrorReason, WorkflowStartRequest};
+use chatspeed_runtime_client::{user_error_message, ClientError, RuntimeClient};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -597,39 +598,12 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
-            Command::Resume { session } => {
-                if options.demo {
-                    continue;
-                }
-                // Vue's Continue first starts the workflow; only a session that
-                // is already live answers with a conflict, and that is when a
-                // `continue` signal is what actually nudges the wait loop.
-                let started = native::control_post(
-                    &options,
-                    &format!("/control/v1/workflows/{session}/start"),
-                    json!({}),
-                )
-                .await;
-                if let Err(error) = started {
-                    if !error.contains("already exists") {
-                        if !send(&tx, 0, UpdateKind::Error(error)).await {
-                            return;
-                        }
-                        continue;
-                    }
-                    let signal = json!({"type": "continue"});
-                    if let Err(error) = native::control_post(
-                        &options,
-                        &format!("/control/v1/workflows/{session}/signal"),
-                        signal,
-                    )
-                    .await
-                    {
-                        if !send(&tx, 0, UpdateKind::Error(error)).await {
-                            return;
-                        }
-                    }
-                }
+            Command::Resume { session, agent_id, reply } => {
+                let options = options.clone();
+                tokio::spawn(async move {
+                    let result = resume_workflow(&options, &session, agent_id).await;
+                    let _ = reply.send(result);
+                });
             }
             Command::CreateWorkflow {
                 agent_id,
@@ -657,6 +631,9 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 prompt,
                 attached_context,
                 metadata,
+                allowed_paths,
+                planning_mode,
+                final_audit,
             } => {
                 if options.demo {
                     if !send(
@@ -670,7 +647,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                     continue;
                 }
-                match start_session(&options, agent_id, &prompt, attached_context, metadata).await {
+                match start_session(&options, agent_id, &prompt, attached_context, metadata, allowed_paths, planning_mode, final_audit).await {
                     Ok(id) => {
                         if !send(&tx, 0, UpdateKind::Opened(id)).await {
                             return;
@@ -683,7 +660,20 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
-            Command::ListDir { path } => {
+            Command::SetAllowedPaths { session, paths } => {
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_allowed_paths",
+                    json!({"session_id": session, "allowed_paths": paths}),
+                    Some(&idempotency_key("allowed-paths")),
+                )
+                .await
+                .map(|_| json!({"allowedPaths": paths}));
+                if !send(&tx, 0, UpdateKind::ConfigSaved { session, key: "allowed-paths", result }).await {
+                    return;
+                }
+            }
+            Command::ListDir { generation, path } => {
                 let tx = tx.clone();
                 tokio::task::spawn(async move {
                     let listing = tokio::task::spawn_blocking({
@@ -696,10 +686,9 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                         Ok(Err(error)) => (Vec::new(), Some(error)),
                         Err(error) => (Vec::new(), Some(error.to_string())),
                     };
-                    // Directory listings are not tied to a selected session.
                     let _ = send(
                         &tx,
-                        0,
+                        generation,
                         UpdateKind::Dir {
                             path,
                             entries,
@@ -964,6 +953,25 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     return;
                 }
             }
+            Command::SetShellRules { session, config } => {
+                if options.demo {
+                    continue;
+                }
+                let result = native::workflow_command(
+                    &options,
+                    "update_workflow_agent_config",
+                    json!({
+                        "session_id": session,
+                        "agent_config": config.to_string(),
+                    }),
+                    Some(&idempotency_key("shell-rules")),
+                )
+                .await
+                .map(|_| json!({"shellPolicy": config["shellPolicy"]}));
+                if !send(&tx, 0, UpdateKind::ConfigSaved { session, key: "shell-rules", result }).await {
+                    return;
+                }
+            }
             Command::SetAgentConfig { session, config } => {
                 if options.demo {
                     continue;
@@ -1159,12 +1167,102 @@ async fn create_workflow(
         .map(str::to_owned)
 }
 
+fn resume_start_request(session: &str, agent_id: String) -> WorkflowStartRequest {
+    WorkflowStartRequest {
+        session_id: session.to_owned(),
+        agent_id,
+        initial_prompt: None,
+        initial_metadata: None,
+        initial_attached_context: None,
+        planning_mode: None,
+    }
+}
+
+fn is_live_start_conflict(error: &ClientError) -> bool {
+    matches!(error, ClientError::Server(response)
+        if response.status == 409
+            && response.presentation.as_ref().and_then(|p| p.reason)
+                == Some(ErrorReason::SessionAlreadyExists))
+}
+
+async fn resume_workflow(options: &Options, session: &str, agent_id: Option<String>) -> Result<(), String> {
+    let client = native::connect(options)
+        .await
+        .ok_or_else(|| rust_i18n::t!("resume_runtime_unavailable").to_string())?;
+    let path = format!("/control/v1/workflows/{session}");
+    // The selected workflow already has an authoritative snapshot in the UI.
+    // Only fetch another one if that snapshot has not arrived yet.
+    let agent_id = match agent_id {
+        Some(agent_id) => agent_id,
+        None => client
+            .get(&format!("{path}?limit=1"))
+            .await
+            .map_err(|error| user_error_message(&error).to_owned())?["workflow"]["agent_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| rust_i18n::t!("resume_agent_missing").to_string())?,
+    };
+    let body = serde_json::to_value(resume_start_request(session, agent_id))
+        .map_err(|error| error.to_string())?;
+    match client.post(&format!("{path}/start"), &body).await {
+        Ok(_) => Ok(()),
+        // Only an existing live executor can receive the continue signal.
+        Err(error) if is_live_start_conflict(&error) => client
+            .post(&format!("{path}/signal"), &json!({"type": "continue"}))
+            .await
+            .map(|_| ())
+            .map_err(|error| user_error_message(&error).to_owned()),
+        Err(error) => Err(user_error_message(&error).to_owned()),
+    }
+}
+
+#[test]
+fn resume_request_uses_the_saved_agent_without_replaying_the_prompt() {
+    let request = resume_start_request("session-1", "saved-agent".to_owned());
+    assert_eq!(
+        serde_json::to_value(request).expect("serialize resume request"),
+        json!({
+            "session_id": "session-1",
+            "agent_id": "saved-agent",
+            "initial_prompt": null,
+            "initial_metadata": null,
+            "initial_attached_context": null,
+            "planning_mode": null,
+        })
+    );
+}
+
+#[test]
+fn resume_signals_only_a_live_executor_conflict() {
+    let conflict = |reason| {
+        ClientError::Server(chatspeed_runtime_client::ClientResponseError {
+            legacy_display: String::new(),
+            status: 409,
+            code: "conflict".to_owned(),
+            message: String::new(),
+            presentation: Some(chatspeed_contracts::UserErrorPresentation {
+                schema_version: 1,
+                message: String::new(),
+                reason,
+                upstream_status: None,
+            }),
+        })
+    };
+    assert!(is_live_start_conflict(&conflict(Some(ErrorReason::SessionAlreadyExists))));
+    assert!(!is_live_start_conflict(&conflict(Some(ErrorReason::SessionStopping))));
+    assert!(!is_live_start_conflict(&conflict(None)));
+}
+
 async fn start_session(
     options: &Options,
     agent_id: Option<String>,
     prompt: &str,
     attached_context: Option<String>,
     metadata: Option<Value>,
+    allowed_paths: Option<Vec<String>>,
+    planning_mode: bool,
+    final_audit: Option<bool>,
 ) -> Result<String, String> {
     let client = native::connect(options)
         .await
@@ -1184,9 +1282,9 @@ async fn start_session(
             &json!({
                 "user_query": prompt,
                 "agent_id": agent_id,
-                "allowed_paths": null,
+                "allowed_paths": allowed_paths,
                 "auto_approve_plan": null,
-                "final_audit": null,
+                "final_audit": final_audit,
                 "inherited_agent_config": null,
             }),
         )
@@ -1205,7 +1303,7 @@ async fn start_session(
                 "initial_prompt": prompt,
                 "initial_metadata": metadata,
                 "initial_attached_context": attached_context,
-                "planning_mode": null,
+                "planning_mode": planning_mode.then_some(true),
             }),
         )
         .await

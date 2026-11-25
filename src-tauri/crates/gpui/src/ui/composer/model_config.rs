@@ -502,6 +502,7 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
         let state_for_select = state.clone();
         let slot_key = slot.clone();
         let groups = proxy_groups.clone();
+        let selected_index = groups.iter().position(|group| group == &group_label);
         MenuPopover::new("model-group-popover", left_trigger, move |_, _, cx| {
             let popover = cx.entity();
             let mut list = v_flex().id("model-group-list").w(px(220.)).gap(px(2.));
@@ -536,11 +537,15 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
             }
             list
         })
+        .selected_index(selected_index)
         .into_any_element()
     } else {
         let state_for_select = state.clone();
         let slot_key = slot.clone();
         let providers = providers.clone();
+        let selected_index = providers
+            .iter()
+            .position(|(id, _, _)| *id == current_provider);
         MenuPopover::new("model-provider-popover", left_trigger, move |_, _, cx| {
             let popover = cx.entity();
             let mut list = v_flex().id("model-provider-list").w(px(220.)).gap(px(2.));
@@ -566,6 +571,7 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
             }
             list
         })
+        .selected_index(selected_index)
         .into_any_element()
     };
 
@@ -584,14 +590,12 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
     let state_for_choices = state.clone();
     let slot_key = slot.clone();
     let all_choices = choices.clone();
+    let selected_index = all_choices
+        .iter()
+        .position(|choice| choice.model == current_model);
     let right_select = MenuPopover::new("model-choice-popover", right_trigger, move |_, _, cx| {
         let popover = cx.entity();
-        let mut list = v_flex()
-            .id("model-choice-list")
-            .w(px(240.))
-            .max_h(px(280.))
-            .overflow_y_scroll()
-            .gap(px(2.));
+        let mut list = v_flex().id("model-choice-list").w(px(240.)).gap(px(2.));
         if all_choices.is_empty() {
             list = list.child(empty_note(t!("model_placeholder").to_string(), cx));
         }
@@ -617,6 +621,7 @@ pub(crate) fn model_config_content(state: &Entity<ModelConfigState>, cx: &mut Ap
         }
         list
     })
+    .selected_index(selected_index)
     .into_any_element();
 
     v_flex()

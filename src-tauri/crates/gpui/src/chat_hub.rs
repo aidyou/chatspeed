@@ -19,6 +19,104 @@ use wry::{NewWindowResponse, Rect, WebView, WebViewBuilder};
 
 pub(crate) const DOCK_WIDTH: f32 = 600.;
 
+// Wry's navigation handler cannot distinguish a link click from a redirect.
+// Route external anchors through the native new-window handler instead, without
+// exposing an IPC bridge to the site or taking over its own navigation.
+const OPEN_LINKS_IN_BROWSER: &str = r#"
+window.addEventListener('click', function (event) {
+    if (!event.isTrusted || event.defaultPrevented || event.button !== 0) return;
+    const link = event.composedPath().find(function (node) {
+        return node instanceof HTMLAnchorElement && node.hasAttribute('href');
+    });
+    if (!link || link.hasAttribute('download')) return;
+    if (link.protocol !== 'https:' && link.protocol !== 'http:') return;
+    if (link.origin === location.origin) return;
+    event.preventDefault();
+    window.open(link.href, '_blank', 'noopener,noreferrer');
+});
+"#;
+
+#[cfg(target_os = "macos")]
+pub(crate) fn install_edit_menu(cx: &mut gpui_kit::App) {
+    use gpui_kit::{component::input::Paste, Menu, MenuItem, OsAction};
+
+    // Wry child views leave Command shortcuts to the menu bar. A native
+    // paste: action gives WebKit the original pasteboard, including images.
+    cx.set_menus([
+        Menu::new("ChatSpeed"),
+        Menu::new(rust_i18n::t!("menu_edit").to_string()).items([MenuItem::os_action(
+            rust_i18n::t!("menu_paste").to_string(),
+            Paste,
+            OsAction::Paste,
+        )]),
+    ]);
+    // When GPUI sees the key equivalent first, forward it before the editor's
+    // Paste binding can consume the event while WebKit has native focus.
+    cx.intercept_keystrokes(|event, window, cx| {
+        let key = &event.keystroke;
+        if key.key != "v" || !key.modifiers.platform || key.modifiers.control
+            || key.modifiers.alt || key.modifiers.shift || key.modifiers.function
+        {
+            return;
+        }
+        let Some(observer) = window.root::<crate::Observer>().flatten() else {
+            return;
+        };
+        let Some(view) = observer.read(cx).chat_hub.as_ref().and_then(Dock::focused_view) else {
+            return;
+        };
+        // GPUI's logical focus can still point to the composer. Once WebKit
+        // owns native focus, never fall through to that stale Paste binding.
+        cx.stop_propagation();
+        paste_into_webview(&view);
+    }).detach();
+}
+
+#[cfg(target_os = "macos")]
+fn webview_has_keyboard_focus(view: &WebView) -> bool {
+    use objc2_app_kit::NSView;
+    use wry::WebViewExtMacOS;
+
+    let webview = view.webview();
+    let native: &NSView = &webview;
+    // WebKit focuses an internal view, which need not include WKWebView
+    // itself in its responder chain.
+    native.window().and_then(|window| window.firstResponder())
+        .and_then(|responder| responder.downcast::<NSView>().ok())
+        .is_some_and(|responder| responder.isDescendantOf(native))
+}
+
+#[cfg(target_os = "macos")]
+fn paste_into_webview(view: &WebView) {
+    use objc2_app_kit::{NSApplication, NSView};
+    use wry::WebViewExtMacOS;
+
+    let webview = view.webview();
+    let native: &NSView = &webview;
+    let app = NSApplication::sharedApplication(native.into());
+    let Some(sender) = app.mainMenu().and_then(|menu| menu.itemAtIndex(1))
+        .and_then(|item| item.submenu()).and_then(|menu| menu.itemAtIndex(0)) else {
+        return;
+    };
+    let Some(action) = sender.action() else { return; };
+    // SAFETY: The selector and sender are from the native Paste menu item.
+    let target = unsafe { app.targetForAction_to_from(action, None, Some(&sender)) };
+    let Some(target) = target.and_then(|target| target.downcast::<NSView>().ok()) else {
+        return;
+    };
+    if target.isDescendantOf(native) {
+        // SAFETY: AppKit resolved this target for the same selector and sender.
+        unsafe { app.sendAction_to_from(action, Some(&target), Some(&sender)) };
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn relinquish_keyboard_focus(view: &WebView) {
+    if webview_has_keyboard_focus(view) {
+        let _ = view.focus_parent();
+    }
+}
+
 /// One configured chat site, mirroring the Vue `ChatHub` record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Site {
@@ -43,15 +141,9 @@ impl Site {
     }
 }
 
-pub(crate) fn sites_from_json(sites: &serde_json::Value) -> Vec<Site> {
-    let mut sites: Vec<Site> = sites
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Site::from_json)
-        .collect();
-    sites.sort_by_key(|site| site.id);
-    sites
+pub(crate) fn sites_from_json(sites: &[serde_json::Value]) -> Vec<Site> {
+    // The runtime returns the settings center's persisted order.
+    sites.iter().filter_map(Site::from_json).collect()
 }
 
 /// Proxy a ChatHub page has to reach the network through.
@@ -297,6 +389,7 @@ impl Dock {
             #[cfg(not(target_os = "linux"))]
             let view = Some(Rc::new(self.build(
                 window,
+                cx,
                 &site.url,
                 Rect {
                     position: wry::dpi::LogicalPosition::new(-1024, -1024).into(),
@@ -338,7 +431,36 @@ impl Dock {
         self.sync_visibility();
     }
 
+    #[cfg(target_os = "macos")]
+    fn active_view(&self) -> Option<&Rc<WebView>> {
+        self.pages
+            .iter()
+            .find(|page| Some(page.site.id) == self.active)
+            .and_then(|page| page.view.as_ref())
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn focused_view(&self) -> Option<Rc<WebView>> {
+        if !self.visible() {
+            return None;
+        }
+        self.active_view()
+            .filter(|view| webview_has_keyboard_focus(view))
+            .cloned()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn return_keyboard_focus(&self) {
+        if let Some(view) = self.active_view() {
+            relinquish_keyboard_focus(view);
+        }
+    }
+
     pub(crate) fn close_tab(&mut self, id: i64) {
+        #[cfg(target_os = "macos")]
+        if self.active == Some(id) {
+            self.return_keyboard_focus();
+        }
         self.pages.retain(|page| page.site.id != id);
         if self.active == Some(id) {
             self.active = self.pages.last().map(|page| page.site.id);
@@ -363,13 +485,22 @@ impl Dock {
                     page.applied_bounds.take().is_some()
                 };
                 if let (true, Some(view)) = (was_shown, &page.view) {
+                    #[cfg(target_os = "macos")]
+                    relinquish_keyboard_focus(view);
                     let _ = view.set_visible(false);
                 }
             }
         }
     }
 
-    fn build(&mut self, window: &mut Window, url: &str, rect: Rect) -> Result<WebView, String> {
+    fn build(
+        &mut self,
+        window: &mut Window,
+        cx: &gpui_kit::App,
+        url: &str,
+        rect: Rect,
+    ) -> Result<WebView, String> {
+        let opener = cx.to_async();
         #[cfg(target_os = "macos")]
         let builder = {
             use wry::WebViewBuilderExtDarwin;
@@ -383,7 +514,13 @@ impl Dock {
             .with_url(url)
             .with_background_color(self.background)
             .with_navigation_handler(|url| web_url(&url))
-            .with_new_window_req_handler(|_, _| NewWindowResponse::Deny);
+            .with_initialization_script(OPEN_LINKS_IN_BROWSER)
+            .with_new_window_req_handler(move |url, _| {
+                forward_browser_link(url, |url| {
+                    // Defer app access until the native WebView callback has returned.
+                    opener.spawn(async move |cx| cx.update(|cx| cx.open_url(&url))).detach();
+                })
+            });
         let builder = match self.proxy.clone() {
             Some(proxy) => {
                 let endpoint = wry::ProxyEndpoint {
@@ -503,6 +640,7 @@ impl Dock {
     fn apply_layout(
         &mut self,
         window: &mut Window,
+        cx: &gpui_kit::App,
         id: i64,
         bounds: &Rc<Cell<Option<Rect>>>,
         rect: Option<Rect>,
@@ -524,7 +662,7 @@ impl Dock {
         let result = match (rect, &self.pages[index].view) {
             (Some(rect), None) => {
                 let url = self.pages[index].site.url.clone();
-                self.build(window, &url, rect).and_then(|view| {
+                self.build(window, cx, &url, rect).and_then(|view| {
                     resize_x11_child(&view, rect, false)?;
                     self.pages[index].view = Some(Rc::new(view));
                     Ok(())
@@ -570,7 +708,7 @@ impl Dock {
                 window.defer(cx, move |window, cx| {
                     let _ = owner.update(cx, |this, cx| {
                         if let Some(dock) = &mut this.chat_hub {
-                            if let Err(error) = dock.apply_layout(window, id, &bounds_cell, rect) {
+                            if let Err(error) = dock.apply_layout(window, cx, id, &bounds_cell, rect) {
                                 this.show_toast(crate::ToastKind::Error, error, cx);
                             }
                         }
@@ -602,6 +740,8 @@ impl Dock {
                 let w = f32::from(bounds.size.width);
                 let h = f32::from(bounds.size.height);
                 if w <= 0. || h <= 0. {
+                    #[cfg(target_os = "macos")]
+                    relinquish_keyboard_focus(&view);
                     let _ = view.set_visible(false);
                     last.set(None);
                     return;
@@ -741,6 +881,36 @@ fn web_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
 }
 
+fn forward_browser_link(url: String, open: impl FnOnce(String)) -> NewWindowResponse {
+    if web_url(&url) {
+        if let Ok(url) = reqwest::Url::parse(&url) {
+            open(url.to_string());
+        }
+    }
+    // Even when forwarding succeeds, the embedded view should not spawn a window.
+    NewWindowResponse::Deny
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn chat_hub_forwards_web_popups_without_creating_embedded_windows() {
+    let mut opened = Vec::new();
+    for url in [
+        "https://example.com/docs?q=test#start",
+        "http://example.org/",
+        "https://",
+        "file:///tmp/test",
+        "javascript:alert(1)",
+        "about:blank",
+    ] {
+        assert!(matches!(
+            forward_browser_link(url.into(), |url| opened.push(url)),
+            NewWindowResponse::Deny,
+        ));
+    }
+    assert_eq!(opened, ["https://example.com/docs?q=test#start", "http://example.org/"]);
+}
+
 #[cfg(test)]
 #[::core::prelude::v1::test]
 fn chat_hub_profile_lock_releases_on_close() {
@@ -771,13 +941,14 @@ fn chat_hub_rejects_non_web_navigation() {
 
 #[cfg(test)]
 #[::core::prelude::v1::test]
-fn site_list_skips_entries_without_a_web_url() {
-    let sites = sites_from_json(&serde_json::json!([
-        {"id": 2, "name": "B", "url": "https://b.example/", "logo": ""},
+fn chat_hub_site_list_preserves_settings_order_and_filters_invalid_urls() {
+    let payload = serde_json::json!([
+        {"id": 3, "name": "C", "url": "https://c.example/", "logo": "https://c.example/i.png"},
         {"id": 1, "name": "A", "url": "file:///tmp/a", "logo": ""},
-        {"id": 3, "name": "C", "url": "https://c.example/", "logo": "https://c.example/i.png"}
-    ]));
-    assert_eq!(sites.len(), 2);
-    assert_eq!(sites[0].name, "B");
-    assert_eq!(sites[1].logo, "https://c.example/i.png");
+        {"id": 2, "name": "B", "url": "https://b.example/", "logo": ""}
+    ]);
+    let sites = sites_from_json(payload.as_array().expect("site list"));
+    assert_eq!(sites.iter().map(|site| site.id).collect::<Vec<_>>(), [3, 2]);
+    assert_eq!(sites[0].logo, "https://c.example/i.png");
+    assert!(sites_from_json(&[]).is_empty());
 }

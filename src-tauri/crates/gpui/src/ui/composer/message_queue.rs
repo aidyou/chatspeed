@@ -10,6 +10,8 @@ use crate::{
     Observer,
 };
 
+const MESSAGE_LINE_HEIGHT: f32 = 18.;
+
 pub(crate) fn render(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let hover = surfaces(observer.appearance_dark).hover;
     let muted = cx.theme().muted_foreground;
@@ -67,10 +69,11 @@ pub(crate) fn render(observer: &Observer, cx: &mut Context<Observer>) -> AnyElem
                     .rounded(px(16.))
                     .bg(hover)
                     .child(
-                        div()
+                        h_flex()
                             .flex_none()
-                            .mt(px(2.))
-                            .child(Icon::new("clock").size(12.).color(muted)),
+                            .h(px(MESSAGE_LINE_HEIGHT))
+                            .items_center()
+                            .child(Icon::new("clock").size(12.).color(cx.theme().warning)),
                     )
                     .child(
                         v_flex()
@@ -80,7 +83,7 @@ pub(crate) fn render(observer: &Observer, cx: &mut Context<Observer>) -> AnyElem
                                 column.child(
                                     div()
                                         .text_size(px(12.))
-                                        .line_height(px(18.))
+                                        .line_height(px(MESSAGE_LINE_HEIGHT))
                                         .text_color(foreground)
                                         .child(item.content.clone()),
                                 )

@@ -51,7 +51,6 @@ pub(crate) fn user_bubble(
             "double-arrow-down",
             12.,
             cx.theme().muted_foreground,
-            if expanded { 0. } else { 180. },
             if expanded { 180. } else { 0. },
         ))
         .on_click(on_toggle);

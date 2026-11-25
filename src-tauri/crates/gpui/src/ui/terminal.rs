@@ -9,11 +9,15 @@ use alacritty_terminal::{
     grid::{Dimensions, Scroll},
     index::{Column, Line, Point as CellPoint, Side},
     selection::{Selection, SelectionType},
-    term::{cell::Flags, Config, Term, TermMode},
-    vte::ansi::Processor,
+    term::{
+        cell::{Cell, Flags},
+        Config, Term, TermMode,
+    },
+    vte::ansi::{CursorShape, CursorStyle as VtCursorStyle, Processor},
 };
 use chatspeed_gpui::terminal::{self, Input, Output};
 use gpui_kit::component::popover::Popover;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     component::{h_flex, v_flex, ActiveTheme},
     *,
@@ -22,9 +26,14 @@ use rust_i18n::t;
 
 use crate::ui::{icon::spin_phase, trigger, Icon};
 
-/// Vue's terminal opens at 13px with a blinking cursor.
-const FONT_SIZE: f32 = 13.;
-const LINE_HEIGHT: f32 = 18.;
+// Keep the terminal comfortably readable independently of the surrounding UI.
+const FONT_SIZE: f32 = 14.;
+const LINE_HEIGHT: f32 = 20.;
+const BEAM_WIDTH: f32 = 2.;
+const DEFAULT_CURSOR: VtCursorStyle = VtCursorStyle {
+    shape: CursorShape::Beam,
+    blinking: true,
+};
 /// The caret's amber and the ink that stays readable on it: the ayu skin's
 /// cursor pair in `src/constants/terminalThemes.js`. The amber reads on both the
 /// light and dark terminal surfaces, and the dark accent keeps a glyph visible
@@ -69,9 +78,45 @@ impl TermSize {
     }
 }
 
+fn cell_text(cell: &Cell) -> String {
+    let mut text = cell.c.to_string();
+    if let Some(marks) = cell.zerowidth() {
+        text.extend(marks.iter().copied());
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Config, Processor, Term, TermSize, VoidListener};
+
+    #[test]
+    fn rendered_cell_keeps_combining_marks_without_using_another_column() {
+        let mut cell = super::Cell {
+            c: 'e',
+            ..Default::default()
+        };
+        cell.push_zerowidth('\u{301}');
+        assert_eq!(super::cell_text(&cell), "e\u{301}");
+    }
+
+    #[test]
+    fn terminal_starts_with_a_beam_and_honors_application_cursor_changes() {
+        let config = Config {
+            default_cursor_style: super::DEFAULT_CURSOR,
+            ..Config::default()
+        };
+        let mut screen = Term::new(config, &TermSize::new(24, 80), VoidListener);
+        assert_eq!(screen.renderable_content().cursor.shape, super::CursorShape::Beam);
+        assert!(screen.cursor_style().blinking);
+
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut screen, b"\x1b[2 q");
+        assert_eq!(screen.renderable_content().cursor.shape, super::CursorShape::Block);
+        assert!(!screen.cursor_style().blinking);
+        parser.advance(&mut screen, b"\x1b[4 q");
+        assert_eq!(screen.renderable_content().cursor.shape, super::CursorShape::Underline);
+    }
 
     #[test]
     fn terminal_parser_preserves_split_utf8_and_cursor_movement() {
@@ -88,6 +133,33 @@ mod tests {
             .map(|cell| cell.c)
             .collect();
         assert_eq!(row, "abé");
+    }
+
+    #[test]
+    fn reverse_video_keeps_the_last_glyph_visible_with_default_colors() {
+        let mut screen = Term::new(Config::default(), &TermSize::new(24, 80), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut screen, b"ab\x1b[7mc\x1b[0m");
+        let content = screen.renderable_content();
+        let mut cells = content.display_iter;
+        let normal = cells.next().expect("first character");
+        let reversed = cells.nth(1).expect("last character");
+        assert_eq!(reversed.c, 'c');
+        assert!(reversed.flags.contains(super::Flags::INVERSE));
+        assert_eq!(content.cursor.point.column.0, 3);
+
+        let light = gpui_kit::rgb(0xf5f5f5).into();
+        let dark = gpui_kit::rgb(0x202020).into();
+        for (foreground, background) in [(light, dark), (dark, light)] {
+            assert_eq!(
+                super::cell_colors(&normal, content.colors, foreground, background),
+                (foreground, gpui_kit::transparent_black().into()),
+            );
+            assert_eq!(
+                super::cell_colors(&reversed, content.colors, foreground, background),
+                (background, foreground),
+            );
+        }
     }
 
     #[test]
@@ -390,7 +462,14 @@ fn add_tab(
     let (out, mut updates) = tokio::sync::mpsc::channel(64);
     let size = TermSize::new(DEFAULT_ROWS, DEFAULT_COLUMNS);
     let tab = cx.new(|_| Tab {
-        screen: Term::new(Config::default(), &size, VoidListener),
+        screen: Term::new(
+            Config {
+                default_cursor_style: DEFAULT_CURSOR,
+                ..Config::default()
+            },
+            &size,
+            VoidListener,
+        ),
         parser: Processor::new(),
         label: None,
         status: "terminal_connecting",
@@ -651,6 +730,21 @@ fn terminal_color(
     gpui_kit::rgb(rgb).into()
 }
 
+/// Default backgrounds are transparent only until they become ink for reverse video.
+fn cell_colors(
+    cell: &Cell,
+    colors: &alacritty_terminal::term::color::Colors,
+    foreground: Hsla,
+    background: Hsla,
+) -> (Hsla, Hsla) {
+    let ink = terminal_color(cell.fg, colors, foreground);
+    if cell.flags.contains(Flags::INVERSE) {
+        (terminal_color(cell.bg, colors, background), ink)
+    } else {
+        (ink, terminal_color(cell.bg, colors, transparent_black().into()))
+    }
+}
+
 pub(crate) fn expanded(this: &Observer) -> bool {
     this.terminal.visible && this.terminal.maximized
 }
@@ -686,14 +780,16 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
     let hover = crate::ui::surfaces(this.appearance_dark).hover;
     let active = panel.tabs.get(panel.active).cloned();
 
-    let mono = cx
-        .text_system()
-        .resolve_font(&gpui_kit::font(crate::MONO_FONT));
-    let cell_width = cx
-        .text_system()
-        .advance(mono, px(FONT_SIZE), 'M')
-        .map(|size| size.width)
-        .unwrap_or(px(FALLBACK_CELL_WIDTH));
+    // Match the font and shaped width used to paint the cells. The raw glyph
+    // advance can differ from the platform's text layout metrics.
+    let font = gpui_kit::font(cx.theme().mono_font_family.clone());
+    let font_id = cx.text_system().resolve_font(&font);
+    let measured_width = window.text_system().layout_width(font_id, px(FONT_SIZE), '0');
+    let cell_width = if measured_width > px(0.) && f32::from(measured_width).is_finite() {
+        measured_width
+    } else {
+        px(FALLBACK_CELL_WIDTH)
+    };
 
     let mut tabs = h_flex().flex_1().min_w_0().h_full().overflow_hidden();
     for (index, tab) in panel.tabs.iter().enumerate() {
@@ -910,8 +1006,9 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
         .px(px(8.))
         .py(px(8.))
         .bg(background)
-        .font_family(crate::MONO_FONT)
-        .text_size(px(FONT_SIZE));
+        .font(font)
+        .text_size(px(FONT_SIZE))
+        .line_height(px(LINE_HEIGHT));
 
     if let Some(tab) = active {
         let status = tab.read(cx).status;
@@ -930,16 +1027,15 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
         let cursor = content.cursor;
         let cursor_row = usize::try_from(cursor.point.line.0).unwrap_or(0);
         let cursor_column = usize::from(cursor.point.column.0);
-        let show_cursor = has_input
-            && cursor.shape != alacritty_terminal::vte::ansi::CursorShape::Hidden
-            && cursor_row < rows;
+        let show_cursor = has_input && cursor.shape != CursorShape::Hidden && cursor_row < rows;
         // Sample the 1s blink from the shared clock instead of using
         // `with_animation`: a repeating animation is pinned to phase zero under
         // the desktop's reduced-motion preference, which left the caret on
         // forever. Requesting the frame also keeps gpui-fast's cached scroll
         // layers repainting.
-        let cursor_on = show_cursor && spin_phase(Duration::from_millis(1000)) < 0.5;
-        if show_cursor {
+        let blinking = state.screen.cursor_style().blinking;
+        let cursor_on = show_cursor && (!blinking || spin_phase(Duration::from_secs(1)) < 0.5);
+        if show_cursor && blinking {
             window.request_animation_frame();
         }
         let cursor_color: Hsla = rgb(CURSOR_COLOR).into();
@@ -955,11 +1051,7 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
             let Some(row) = lines.get_mut(line) else {
                 continue;
             };
-            let mut fg = terminal_color(cell.fg, content.colors, foreground);
-            let mut bg = terminal_color(cell.bg, content.colors, transparent_black().into());
-            if cell.flags.contains(Flags::INVERSE) {
-                std::mem::swap(&mut fg, &mut bg);
-            }
+            let (mut fg, mut bg) = cell_colors(&cell, content.colors, foreground, background);
             if cell.flags.contains(Flags::DIM) {
                 fg = fg.opacity(0.55);
             }
@@ -967,13 +1059,11 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                 bg = cx.theme().primary;
                 fg = cx.theme().primary_foreground;
             }
-            // Invert the cursor cell the way xterm does: the block is the
-            // cell's background, so the glyph stays readable in the accent ink
-            // instead of being painted over.
-            if cursor_on
+            let cursor_here = cursor_on
                 && line == cursor_row
-                && usize::from(cell.point.column.0) == cursor_column
-            {
+                && usize::from(cell.point.column.0) == cursor_column;
+            // Leave the glyph readable when the cursor covers the whole cell.
+            if cursor_here && cursor.shape == CursorShape::Block {
                 bg = cursor_color;
                 fg = cursor_accent;
             }
@@ -987,9 +1077,24 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                     .flex_none()
                     .w(width)
                     .h(px(LINE_HEIGHT))
+                    .relative()
                     .text_color(fg)
                     .bg(bg)
-                    .child(cell.c.to_string())
+                    .child(cell_text(&cell))
+                    .when(cursor_here, |view| match cursor.shape {
+                        CursorShape::Beam => view.child(
+                            div().absolute().top_0().bottom_0().left_0()
+                                .w(px(BEAM_WIDTH)).bg(cursor_color),
+                        ),
+                        CursorShape::Underline => view.child(
+                            div().absolute().bottom_0().left_0().right_0()
+                                .h(px(1.)).bg(cursor_color),
+                        ),
+                        CursorShape::HollowBlock => view.child(
+                            div().absolute().inset_0().border_1().border_color(cursor_color),
+                        ),
+                        CursorShape::Block | CursorShape::Hidden => view,
+                    })
                     .into_any_element(),
             );
         }
@@ -1049,6 +1154,7 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
             }));
         for cells in lines {
             let row = h_flex()
+                .flex_none()
                 .w_full()
                 .min_w_0()
                 .h(px(LINE_HEIGHT))

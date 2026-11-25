@@ -6,7 +6,11 @@
 //! every switch repaint from the same live state the composer reads.
 
 use gpui_kit::component::{
-    h_flex, switch::Switch, v_flex, ActiveTheme, Disableable, Sizable,
+    button::{Button, ButtonVariants},
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    switch::Switch,
+    v_flex, ActiveTheme, Disableable, Sizable,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -525,72 +529,332 @@ fn tool_display_name(observer: &Observer, id: &str) -> String {
         .to_owned()
 }
 
-fn shell_rules(observer: &Observer) -> Vec<(String, String, String)> {
-    let config = observer.agent_config();
-    let policy = config
-        .get("shellPolicy")
-        .or_else(|| config.get("shell_policy"));
-    let Some(Value::Array(rules)) = policy else {
-        return Vec::new();
-    };
-    let mut rules: Vec<(String, String, String)> = rules
-        .iter()
-        .filter_map(|rule| {
-            let pattern = rule["pattern"].as_str()?.trim();
-            (!pattern.is_empty()).then(|| {
-                (
-                    pattern.to_owned(),
-                    rule["description"].as_str().unwrap_or_default().to_owned(),
-                    observer
-                        .shell_rule_decisions
-                        .get(pattern)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            rule["decision"].as_str().unwrap_or("review").to_owned()
-                        }),
-                )
-            })
-        })
-        .collect();
-    rules.sort_by(|a, b| a.0.cmp(&b.0));
-    rules
+const SHELL_RULES_KEY: &str = "shell-rules";
+const SHELL_PAGE_SIZE: usize = 10;
+const SHELL_RULE_FONT_SIZE: f32 = 12.;
+
+/// Input and pagination state scoped to one opening of the tool dialog.
+pub(crate) struct ShellRulesPanel {
+    search: Entity<InputState>,
+    pattern: Entity<InputState>,
+    decision: &'static str,
+    page: usize,
+    scroll: ScrollHandle,
 }
 
-fn persist_shell_rules(observer: &mut Observer, rules: Vec<Value>, cx: &mut Context<Observer>) {
-    let Some(session) = observer.selected.clone() else {
-        return;
-    };
-    let mut config = observer.agent_config();
-    config["shellPolicy"] = Value::Array(rules);
-    // Show the new decision immediately; the runtime acknowledgement later
-    // replaces the same values through `agent_config`.
-    observer.shell_rule_decisions = config["shellPolicy"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|rule| {
-            Some((
-                rule["pattern"].as_str()?.to_owned(),
-                rule["decision"].as_str().unwrap_or("review").to_owned(),
-            ))
-        })
-        .collect();
-    let _ = observer
-        .worker
-        .commands
-        .try_send(Command::SetAgentConfig { session, config });
-    cx.notify();
+impl ShellRulesPanel {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Observer>) -> Self {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("shell_rules_search").to_string()));
+        let pattern = cx.new(|cx| InputState::new(window, cx).placeholder(t!("shell_rules_pattern").to_string()));
+        cx.subscribe_in(&search, window, |this, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.set_shell_rules_page(0, cx);
+            }
+        }).detach();
+        cx.subscribe_in(&pattern, window, |this, _, event: &InputEvent, window, cx| match event {
+            InputEvent::Change => cx.notify(),
+            InputEvent::PressEnter { secondary: false, shift: false } => this.add_shell_rule(window, cx),
+            _ => {}
+        }).detach();
+        Self { search, pattern, decision: "review", page: 0, scroll: ScrollHandle::new() }
+    }
+}
+
+fn policy_field(config: &Value) -> &Value {
+    config.get("shellPolicy").unwrap_or(&config["shell_policy"])
+}
+
+fn default_shell_rules(agent: &Value) -> Option<Vec<Value>> {
+    match policy_field(agent) {
+        Value::Array(rules) => Some(rules.clone()),
+        Value::String(rules) => serde_json::from_str(rules).ok(),
+        Value::Null => Some(Vec::new()),
+        _ => None,
+    }
+}
+
+fn shell_rule_pattern(rule: &Value) -> Option<&str> {
+    rule["pattern"].as_str().filter(|pattern| !pattern.trim().is_empty())
+}
+
+fn shell_rule_description(rule: &Value) -> &str {
+    rule["description"].as_str().unwrap_or_default()
+}
+
+fn shell_rule_page<'a>(rules: &'a [Value], query: &str, requested: usize) -> (Vec<&'a Value>, usize, usize) {
+    let query = query.trim().to_lowercase();
+    let mut matching: Vec<_> = rules.iter().filter_map(|rule| {
+        let pattern = shell_rule_pattern(rule)?;
+        (pattern.to_lowercase().contains(&query) || shell_rule_description(rule).to_lowercase().contains(&query))
+            .then_some((pattern, rule))
+    }).collect();
+    matching.sort_by(|a, b| a.0.cmp(b.0));
+    let pages = matching.len().div_ceil(SHELL_PAGE_SIZE).max(1);
+    let page = requested.min(pages - 1);
+    let visible = matching.into_iter().skip(page * SHELL_PAGE_SIZE).take(SHELL_PAGE_SIZE)
+        .map(|(_, rule)| rule).collect();
+    (visible, page, pages)
+}
+
+fn append_shell_rule(rules: &mut Vec<Value>, pattern: &str, decision: &str) -> bool {
+    let pattern = pattern.trim();
+    if pattern.is_empty() || rules.iter().any(|rule| shell_rule_pattern(rule) == Some(pattern)) {
+        return false;
+    }
+    rules.push(json!({"pattern": pattern, "decision": decision}));
+    true
+}
+
+impl Observer {
+    fn shell_rules(&self) -> Vec<Value> {
+        policy_field(&self.agent_config()).as_array().cloned().unwrap_or_default()
+    }
+
+    fn can_save_shell_rules(&self) -> bool {
+        !self.options.demo && self.quick_panel == Some(QuickPanel::Tools)
+            && self.tool_panel_tab == 1 && self.confirm.is_none()
+            && self.selected.as_ref().is_some_and(|session| {
+                !self.config_pending.contains(&(session.clone(), SHELL_RULES_KEY))
+            })
+    }
+
+    fn save_shell_rules(&mut self, rules: Vec<Value>, cx: &mut Context<Self>) -> bool {
+        let Some(session) = self.selected.clone().filter(|_| self.can_save_shell_rules()) else {
+            return false;
+        };
+        let mut config = self.agent_config();
+        if let Some(fields) = config.as_object_mut() {
+            fields.remove("shell_policy");
+        }
+        config["shellPolicy"] = Value::Array(rules);
+        let command = Command::SetShellRules { session: session.clone(), config };
+        if !self.submit_config(&session, SHELL_RULES_KEY, command, cx) {
+            self.show_toast(crate::ToastKind::Error, t!("shell_rules_save_failed").to_string(), cx);
+            return false;
+        }
+        true
+    }
+
+    fn set_shell_rules_page(&mut self, page: usize, cx: &mut Context<Self>) {
+        if let Some(panel) = self.shell_rules_panel.as_mut() {
+            panel.page = page;
+            panel.scroll.set_offset(point(px(0.), px(0.)));
+            cx.notify();
+        }
+    }
+
+    fn add_shell_rule(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_save_shell_rules() { return; }
+        let Some(panel) = &self.shell_rules_panel else { return; };
+        let input = panel.pattern.clone();
+        let pattern = input.read(cx).value().trim().to_owned();
+        if pattern.is_empty() { return; }
+        let mut rules = self.shell_rules();
+        if !append_shell_rule(&mut rules, &pattern, panel.decision) {
+            self.show_toast(crate::ToastKind::Info, t!("shell_rules_duplicate").to_string(), cx);
+            return;
+        }
+        if self.save_shell_rules(rules, cx) {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+    }
+
+    fn confirm_shell_rules(&mut self, import: bool, cx: &mut Context<Self>) {
+        let Some(session) = self.selected.clone().filter(|_| self.can_save_shell_rules()) else { return; };
+        self.confirm = Some(crate::ui::confirm::ConfirmRequest {
+            kind: crate::ui::confirm::ConfirmKind::ReplaceShellRules { session, import },
+            title: if import { t!("shell_rules_import") } else { t!("shell_rules_clear") }.to_string(),
+            message: if import { t!("shell_rules_import_confirm") } else { t!("shell_rules_clear_confirm") }.to_string(),
+            confirm_label: t!("confirm").to_string(),
+            danger: !import,
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn replace_shell_rules(&mut self, session: &str, import: bool, cx: &mut Context<Self>) {
+        if self.selected.as_deref() != Some(session) || !self.can_save_shell_rules() { return; }
+        let rules = if import {
+            let Some(rules) = self.current_agent().and_then(default_shell_rules) else {
+                self.show_toast(crate::ToastKind::Error, t!("shell_rules_defaults_unavailable").to_string(), cx);
+                return;
+            };
+            rules
+        } else {
+            Vec::new()
+        };
+        if self.save_shell_rules(rules, cx) {
+            self.set_shell_rules_page(0, cx);
+        }
+    }
+}
+
+#[cfg(test)]
+mod shell_rules_tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn shell_rule_search_and_pagination_leave_the_full_policy_intact() {
+        let mut rules: Vec<_> = (0..23)
+            .rev()
+            .map(|id| json!({"pattern": format!("Rule-{id:02}")}))
+            .collect();
+        rules[0]["description"] = json!("Example description");
+        let (visible, page, pages) = shell_rule_page(&rules, "", 9);
+        assert_eq!((page, pages, visible.len()), (2, 3, 3));
+        assert_eq!(visible[0]["pattern"], "Rule-20");
+        let (visible, page, pages) = shell_rule_page(&rules, " EXAMPLE ", 2);
+        assert_eq!((page, pages), (0, 1));
+        assert_eq!(visible, vec![&rules[0]]);
+        assert_eq!(shell_rule_page(&rules, "rule-0", 0).0.len(), 10);
+        assert_eq!(rules.len(), 23);
+    }
+
+    #[::core::prelude::v1::test]
+    fn shell_rule_add_trims_and_rejects_empty_or_duplicate_patterns() {
+        let mut rules = vec![json!({"pattern": "first", "decision": "deny", "description": "Keep"})];
+        assert!(!append_shell_rule(&mut rules, " first ", "allow"));
+        assert!(!append_shell_rule(&mut rules, "   ", "allow"));
+        assert!(append_shell_rule(&mut rules, " second ", "review"));
+        assert_eq!(rules[0]["description"], "Keep");
+        assert_eq!(rules[1], json!({"pattern": "second", "decision": "review"}));
+    }
+
+    #[::core::prelude::v1::test]
+    fn shell_rule_import_reads_agent_defaults_and_distinguishes_invalid_data() {
+        let rules = json!([{"pattern": "first", "decision": "deny"}]);
+        assert_eq!(default_shell_rules(&json!({"shell_policy": rules.to_string()})), rules.as_array().cloned());
+        assert_eq!(default_shell_rules(&json!({"shellPolicy": rules})), rules.as_array().cloned());
+        assert_eq!(default_shell_rules(&json!({"shell_policy": null})), Some(vec![]));
+        assert_eq!(default_shell_rules(&json!({"shell_policy": "invalid"})), None);
+    }
+}
+
+fn shell_decisions(
+    id: &str,
+    decision: &str,
+    on_select: impl Fn(&'static str, &mut Window, &mut App) + 'static,
+) -> crate::ui::tabs::CapsuleSegments {
+    crate::ui::tabs::capsule_segments_sized(
+        id,
+        vec![
+            ("allow", t!("shell_decision_allow").to_string()),
+            ("deny", t!("shell_decision_deny").to_string()),
+            ("review", t!("shell_decision_review").to_string()),
+        ],
+        decision,
+        22., // Include the two hairlines in the 24px control height.
+        on_select,
+    )
+    .font_size(SHELL_RULE_FONT_SIZE)
+}
+
+fn shell_rules_content(observer: &Observer, rules: &[Value], cx: &mut Context<Observer>) -> AnyElement {
+    let Some(panel) = &observer.shell_rules_panel else { return div().into_any_element(); };
+    let (visible, page, pages) = shell_rule_page(rules, &panel.search.read(cx).value(), panel.page);
+    let writable = observer.can_save_shell_rules();
+    let can_add = writable && !panel.pattern.read(cx).value().trim().is_empty();
+    let can_import = writable && observer.current_agent().is_some();
+    let muted = cx.theme().muted_foreground;
+    let mut list = v_flex()
+        .id("shell-rule-list")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .track_scroll(&panel.scroll);
+    if visible.is_empty() {
+        list = list.child(empty_note(t!("shell_rules_empty").to_string(), cx));
+    }
+    for (index, rule) in visible.into_iter().enumerate() {
+        let Some(pattern) = shell_rule_pattern(rule).map(str::to_owned) else { continue; };
+        let description = shell_rule_description(rule).to_owned();
+        let decision = rule["decision"].as_str().unwrap_or("review");
+        let target = pattern.clone();
+        let entity = cx.entity();
+        list = list.child(
+            h_flex()
+                .flex_none()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .rounded(crate::ui::tokens::RADIUS_MEDIUM)
+                .hover(|style| style.bg(cx.theme().muted))
+                .child(v_flex().flex_1().min_w_0().child(
+                    div().min_w_0().whitespace_nowrap().text_ellipsis()
+                        .text_size(px(SHELL_RULE_FONT_SIZE)).font_family(crate::MONO_FONT).child(pattern.clone()),
+                ).when(!description.is_empty(), |element| element.child(
+                    div().min_w_0().whitespace_nowrap().text_ellipsis()
+                        .text_size(px(10.)).text_color(muted).child(description),
+                )))
+                .child(div().flex_none().when(!writable, |element| element.opacity(0.55)).child(
+                    shell_decisions(&format!("shell-decision-{index}"), decision, move |value, _, cx| {
+                        entity.update(cx, |this, cx| {
+                            let mut rules = this.shell_rules();
+                            let mut changed = false;
+                            for rule in &mut rules {
+                                if shell_rule_pattern(rule) == Some(target.as_str()) && rule["decision"] != value {
+                                    rule["decision"] = Value::from(value);
+                                    changed = true;
+                                }
+                            }
+                            if changed { this.save_shell_rules(rules, cx); }
+                        });
+                    }),
+                ))
+                .child(Button::new(("shell-rule-remove", index)).small().ghost()
+                    .disabled(!writable)
+                    .accessibility_label(t!("shell_rules_remove").to_string())
+                    .child(Icon::new("trash").size(12.).color(muted))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let mut rules = this.shell_rules();
+                        let previous = rules.len();
+                        rules.retain(|rule| shell_rule_pattern(rule) != Some(pattern.as_str()));
+                        if rules.len() != previous { this.save_shell_rules(rules, cx); }
+                    }))),
+        );
+    }
+    let entity = cx.entity();
+    v_flex().flex_1().min_h_0().gap_2()
+        .child(Input::new(&panel.search).small().cleanable(true))
+        .child(h_flex().gap_2().items_center()
+            .child(div().flex_1().min_w_0().child(Input::new(&panel.pattern).small().cleanable(true)))
+            .child(shell_decisions("shell-new-decision", panel.decision, move |decision, _, cx| {
+                entity.update(cx, |this, cx| {
+                    if let Some(panel) = &mut this.shell_rules_panel {
+                        panel.decision = decision;
+                        cx.notify();
+                    }
+                });
+            }))
+            .child(Button::new("shell-add").small().primary().label(t!("shell_rules_add").to_string())
+                .disabled(!can_add).on_click(cx.listener(|this, _, window, cx| this.add_shell_rule(window, cx)))))
+        .child(list)
+        .when(pages > 1, |content| content.child(h_flex().flex_none().justify_center().items_center().gap_2()
+            .child(Button::new("shell-prev").small().ghost().disabled(page == 0)
+                .accessibility_label(t!("shell_rules_previous").to_string()).child(Icon::new("caret-right").size(12.).rotate(180.))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_shell_rules_page(page.saturating_sub(1), cx))))
+            .child(div().text_size(px(12.)).text_color(muted).child(format!("{} / {pages}", page + 1)))
+            .child(Button::new("shell-next").small().ghost().disabled(page + 1 >= pages)
+                .accessibility_label(t!("shell_rules_next").to_string()).child(Icon::new("caret-right").size(12.))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_shell_rules_page(page + 1, cx))))))
+        .child(h_flex().flex_none().justify_end().gap_2().pt_2().border_t_1().border_color(cx.theme().border)
+            .child(Button::new("shell-import").small().label(t!("shell_rules_import").to_string())
+                .disabled(!can_import).on_click(cx.listener(|this, _, _, cx| this.confirm_shell_rules(true, cx))))
+            .child(Button::new("shell-clear").small().danger().label(t!("shell_rules_clear").to_string())
+                .disabled(!writable || rules.is_empty()).on_click(cx.listener(|this, _, _, cx| this.confirm_shell_rules(false, cx)))))
+        .into_any_element()
 }
 
 /// Vue's tabs: available tools, auto approval and shell rules.
 fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+    const AUTO_APPROVE_WIDTH: Pixels = px(88.);
     let Some(draft) = observer.tool_draft.clone() else {
         return empty_note(t!("tools_empty").to_string(), cx);
     };
     let tab = observer.tool_panel_tab.min(1);
     let ids = agent_tool_ids(observer);
-    let rules = shell_rules(observer);
-    let border = cx.theme().border;
+    let rules = observer.shell_rules();
     let muted = cx.theme().muted_foreground;
 
     let observer_entity = cx.entity();
@@ -617,7 +881,7 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .min_w_0()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
+        .when(tab == 0, |body| body.overflow_y_scroll())
         .px(crate::ui::tokens::SPACE_16)
         .pt(crate::ui::tokens::SPACE_16)
         .pb_3();
@@ -646,8 +910,9 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                         )
                         .child(
                             div()
-                                .w(px(64.))
+                                .w(AUTO_APPROVE_WIDTH)
                                 .flex_none()
+                                .whitespace_nowrap()
                                 .text_size(px(10.))
                                 .text_align(TextAlign::Center)
                                 .text_color(muted)
@@ -724,7 +989,7 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                             ),
                         )
                         .child(
-                            div().w(px(64.)).flex_none().flex().items_center().justify_center().child(
+                            div().w(AUTO_APPROVE_WIDTH).flex_none().flex().items_center().justify_center().child(
                                 Switch::new(SharedString::from(format!("tool-approve-{id}")))
                                     .checked(approved)
                                     .small()
@@ -750,103 +1015,7 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 );
             }
         }
-        _ => {
-            let observer_entity = cx.entity();
-            let config = observer.agent_config();
-            let existing: Vec<Value> = config
-                .get("shellPolicy")
-                .or_else(|| config.get("shell_policy"))
-                .and_then(|policy| policy.as_array().cloned())
-                .unwrap_or_default();
-            let mut rules_body = v_flex().w_full().min_w_0().gap(px(4.));
-            if rules.is_empty() {
-                rules_body = rules_body.child(empty_note(t!("tools_empty").to_string(), cx));
-            }
-            for (pattern, description, decision) in rules {
-                let mut remaining = existing.clone();
-                remaining.retain(|rule| rule["pattern"].as_str() != Some(pattern.as_str()));
-                let observer_entity = observer_entity.clone();
-                let decision_observer = observer_entity.clone();
-                let decision_pattern = pattern.clone();
-                let decision_existing = existing.clone();
-                let decisions = capsule_segments(
-                    &format!("shell-decision-{pattern}"),
-                    vec![
-                        ("allow", t!("shell_decision_allow").to_string()),
-                        ("deny", t!("shell_decision_deny").to_string()),
-                        ("review", t!("shell_decision_review").to_string()),
-                    ],
-                    &decision,
-                    move |value, _, cx| {
-                        let mut updated = decision_existing.clone();
-                        for rule in &mut updated {
-                            if rule["pattern"].as_str() == Some(decision_pattern.as_str()) {
-                                rule["decision"] = Value::from(value);
-                            }
-                        }
-                        let _ = decision_observer.update(cx, |this, cx| {
-                            persist_shell_rules(this, updated, cx);
-                        });
-                    },
-                );
-                rules_body = rules_body.child(
-                    h_flex()
-                        .w_full()
-                        .min_w_0()
-                        .items_center()
-                        .gap(px(8.))
-                        .px_2()
-                        .py_1()
-                        .rounded(crate::ui::tokens::RADIUS_MEDIUM)
-                        .hover(|style| style.bg(cx.theme().muted))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .text_size(px(12.))
-                                .font_family(crate::MONO_FONT)
-                                .text_color(cx.theme().foreground)
-                                .child(pattern.clone()),
-                        )
-                        .when(!description.is_empty(), |row| {
-                            row.child(
-                                div()
-                                    .flex_none()
-                                    .px(px(4.))
-                                    .py(px(1.))
-                                    .rounded(px(4.))
-                                    .border_1()
-                                    .border_color(border)
-                                    .text_size(px(10.))
-                                    .text_color(muted)
-                                    .child(description),
-                            )
-                        })
-                        .child(decisions)
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("shell-rule-remove-{pattern}")))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .size(px(18.))
-                                .rounded(px(4.))
-                                .cursor_pointer()
-                                .hover(|style| style.bg(cx.theme().border))
-                                .child(Icon::new("close").size(10.).color(muted))
-                                .on_click(move |_, _, cx: &mut App| {
-                                    observer_entity.update(cx, |this, cx| {
-                                        persist_shell_rules(this, remaining.clone(), cx);
-                                    });
-                                }),
-                        ),
-                );
-            }
-            body = body.child(rules_body);
-        }
+        _ => body = body.child(shell_rules_content(observer, &rules, cx)),
     }
 
     v_flex()
@@ -854,7 +1023,13 @@ fn tool_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .w_full()
         .min_w_0()
         .h(px(460.))
-        .child(tabs)
+        .child(
+            div()
+                .w_full()
+                .px(crate::ui::tokens::SPACE_16)
+                .pt(crate::ui::tokens::SPACE_16)
+                .child(tabs),
+        )
         .child(body)
         .into_any_element()
 }

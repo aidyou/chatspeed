@@ -67,7 +67,6 @@ pub(crate) fn snapshot_card(
                     "double-arrow-down",
                     14.,
                     muted,
-                    if open { 0. } else { 180. },
                     if open { 180. } else { 0. },
                 ))
                 .on_click(on_toggle),

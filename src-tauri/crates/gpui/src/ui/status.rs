@@ -87,6 +87,41 @@ fn context_fill(percent: u32) -> Hsla {
     Hsla::from(accent()).opacity(MIN_OPACITY + (1. - MIN_OPACITY) * fraction)
 }
 
+fn context_progress_clip(bounds: Bounds<Pixels>, percent: u32) -> Bounds<Pixels> {
+    Bounds::new(
+        bounds.origin,
+        size(bounds.size.width * (percent.min(100) as f32 / 100.), bounds.size.height),
+    )
+}
+
+fn context_gradient_start(track: Hsla, end: Hsla) -> Hsla {
+    // Blend into an opaque color so low percentages still read against the track.
+    track.blend(end.opacity(0.5))
+}
+
+fn context_gradient(percent: u32, start: Hsla, end: Hsla, radius: Pixels) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            let clip = context_progress_clip(bounds, percent);
+            if clip.size.width <= px(0.) {
+                return;
+            }
+            window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                window.paint_quad(quad(
+                    bounds,
+                    radius,
+                    linear_gradient(90., linear_color_stop(start, 0.), linear_color_stop(end, 1.)),
+                    px(0.),
+                    transparent_black(),
+                    BorderStyle::default(),
+                ));
+            });
+        },
+    )
+    .size_full()
+}
+
 /// Task completion is a solid primary bar; completed todo checks reuse the same
 /// hue so the panel has one progress color.
 fn task_fill() -> Hsla {
@@ -458,16 +493,17 @@ pub(crate) fn overlay(
 
     // The collapsed bar reports context usage as a leading edge wash.
     let usage_bar = match (mode, context) {
-        (PanelMode::Compact, Some(percent)) => Some(
-            div()
-                .absolute()
-                .left_0()
-                .top_0()
-                .bottom_0()
-                .w(relative(percent as f32 / 100.))
-                .bg(context_fill(percent).opacity(0.2))
-                .into_any_element(),
-        ),
+        (PanelMode::Compact, Some(percent)) => {
+            // Keep the label legible over the compact header's progress wash.
+            let end = surface.blend(task_fill().opacity(0.35));
+            Some(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(context_gradient(percent, context_gradient_start(surface, end), end, px(0.)))
+                    .into_any_element(),
+            )
+        }
         _ => None,
     };
     let mut header = h_flex()
@@ -593,7 +629,21 @@ fn section_header(icon: &'static str, title: String, meta: Option<String>, cx: &
         .into_any_element()
 }
 
-fn progress_bar(percent: u32, fill: Hsla, cx: &App) -> AnyElement {
+fn progress_bar(percent: u32, fill: Option<Hsla>, cx: &App) -> AnyElement {
+    let track = cx.theme().muted;
+    let fill = match fill {
+        Some(color) => div()
+            .w(relative(percent.min(100) as f32 / 100.))
+            .h_full()
+            .rounded_full()
+            .bg(color)
+            .into_any_element(),
+        None => {
+            let end = task_fill();
+            context_gradient(percent, context_gradient_start(track, end), end, px(4.))
+                .into_any_element()
+        }
+    };
     h_flex()
         .w_full()
         .min_w_0()
@@ -605,15 +655,9 @@ fn progress_bar(percent: u32, fill: Hsla, cx: &App) -> AnyElement {
                 .min_w_0()
                 .h(px(8.))
                 .rounded_full()
-                .bg(cx.theme().muted)
+                .bg(track)
                 .overflow_hidden()
-                .child(
-                    div()
-                        .w(relative(percent as f32 / 100.))
-                        .h_full()
-                        .rounded_full()
-                        .bg(fill),
-                ),
+                .child(fill),
         )
         .child(
             div()
@@ -1708,7 +1752,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                         None,
                         cx,
                     ));
-                section = section.child(progress_bar(percent, context_fill(percent), cx));
+                section = section.child(progress_bar(percent, None, cx));
                 section = section.child(
                     div()
                         .w_full()
@@ -1731,7 +1775,7 @@ fn workflow_details(observer: &crate::Observer, cx: &mut Context<crate::Observer
                         None,
                         cx,
                     ));
-                section = section.child(progress_bar(percent, task_fill(), cx));
+                section = section.child(progress_bar(percent, Some(task_fill()), cx));
                 body = body.child(section);
 
                 let expanded = observer.status_panel_todos_expanded;
@@ -2320,6 +2364,27 @@ mod tests {
         assert!(low.a < middle.a);
         assert!(middle.a < high.a);
         assert!((high.a - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn context_bar_clips_the_full_track_and_starts_with_opaque_color() {
+        use super::{context_gradient_start, context_progress_clip, point, px, rgb, size, Bounds, Hsla};
+
+        let track_bounds = Bounds::new(point(px(12.), px(4.)), size(px(200.), px(8.)));
+        for (percent, width) in [(0, 0.), (1, 2.), (30, 60.), (100, 200.), (140, 200.)] {
+            let clip = context_progress_clip(track_bounds, percent);
+            assert_eq!(clip.origin, track_bounds.origin);
+            assert_eq!(clip.size.height, track_bounds.size.height);
+            assert!((clip.size.width - px(width)).abs() < px(0.001));
+        }
+
+        let end: Hsla = rgb(0x29ae74).into();
+        for track in [rgb(0x242729).into(), rgb(0xe8ebee).into()] {
+            let start = context_gradient_start(track, end);
+            assert!((start.a - 1.).abs() < f32::EPSILON);
+            assert_ne!(start, track);
+            assert_ne!(start, end);
+        }
     }
 
     #[test]

@@ -82,9 +82,16 @@ pub struct State {
     current: Option<Trigger>,
     dismissed: bool,
     selected: usize,
+    removing_directory: bool,
     scroll: ScrollHandle,
     pub(crate) file_request: Option<(u64, String, Vec<String>)>,
     request_id: u64,
+}
+
+impl State {
+    pub fn close_directory_panel(&mut self) {
+        self.removing_directory = false;
+    }
 }
 
 fn active(observer: &Observer, cx: &App) -> Option<Trigger> {
@@ -104,6 +111,9 @@ fn rows(observer: &Observer, trigger: &Trigger) -> Vec<Row> {
 
 /// The panel above the box, or `None` when nothing matches.
 pub fn panel(observer: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement> {
+    if observer.suggestions.removing_directory {
+        return Some(directory_panel(observer, cx));
+    }
     let trigger = active(observer, cx)?;
     if !observer.composer_focused
         || observer.suggestions.dismissed && observer.suggestions.current.as_ref() == Some(&trigger)
@@ -225,6 +235,51 @@ pub fn panel(observer: &Observer, cx: &mut Context<Observer>) -> Option<AnyEleme
     )
 }
 
+fn directory_panel(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
+    use rust_i18n::t;
+    let muted = cx.theme().muted_foreground;
+    let hover = cx.theme().muted;
+    let mut list = v_flex().id("remove-directory-list").max_h(px(240.)).overflow_y_scroll();
+    if observer.roots().is_empty() {
+        list = list.child(div().px_2().py_1().text_color(muted).child(t!("paths_empty").to_string()));
+    }
+    let pending = observer.selected.as_ref().is_some_and(|id| {
+        observer.config_pending.contains(&(id.clone(), "allowed-paths"))
+    });
+    for path in observer.roots() {
+        let path = path.clone();
+        list = list.child(
+            h_flex().gap_2().px_2().py_1().min_w_0().items_center()
+                .child(Icon::new("ext-folder").size(14.).color(muted))
+                .child(div().flex_1().min_w_0().text_ellipsis().child(path.clone()))
+                .child(
+                    div().id(SharedString::from(path.clone())).p_1().rounded_sm()
+                        .child(Icon::new("trash").size(14.).color(muted))
+                        .when(!pending, |button| button.cursor_pointer()
+                            .hover(move |style| style.bg(hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.remove_authorized_root(&path, cx);
+                            }))),
+                ),
+        );
+    }
+    v_flex().id("remove-directory-panel").occlude().w_full().popover_style(cx).p_2()
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+            this.suggestions.removing_directory = false;
+            cx.notify();
+        }))
+        .child(h_flex().justify_between().items_center().px_2().py_1()
+            .child(t!("paths_title").to_string())
+            .child(div().id("dismiss-remove-directory").p_1().cursor_pointer()
+                .child(Icon::new("close").size(14.).color(muted))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.suggestions.removing_directory = false;
+                    cx.notify();
+                }))))
+        .child(list)
+        .into_any_element()
+}
+
 struct Row {
     id: String,
     label: String,
@@ -258,11 +313,9 @@ impl Group {
     }
 }
 
-fn skill_rows(observer: &Observer, query: &str) -> Vec<Row> {
+fn builtin_commands(observer: &Observer) -> [(&'static str, std::borrow::Cow<'static, str>, bool); 15] {
     use rust_i18n::t;
-    let mut candidates = Vec::new();
-    let existing = observer.selected.is_some();
-    for (name, detail, available) in [
+    [
         ("settings", t!("menu_settings"), true),
         ("models", t!("model_config"), true),
         ("skills-config", t!("skills_config"), true),
@@ -271,39 +324,54 @@ fn skill_rows(observer: &Observer, query: &str) -> Vec<Row> {
         ("agent", t!("menu_agent"), true),
         ("about", t!("menu_about"), true),
         ("new", t!("new_task"), true),
-        ("audit", t!("final_audit_label"), existing),
-        ("compress", t!("manual_compress"), existing),
-        (
-            "clear",
-            t!("clear_context"),
-            existing && !observer.workflow_running(),
-        ),
-        ("plan", t!("planning_mode"), existing),
-        ("attach", t!("add_attachment"), true),
-    ] {
+        ("audit", t!("final_audit_label"), true),
+        ("compress", t!("manual_compress"), true),
+        ("clear", t!("clear_context"), observer.can_clear_context()),
+        ("plan", t!("planning_mode"), observer.can_toggle_planning()),
+        ("attach", t!("add_attachment"), observer.can_attach_images()),
+        ("add-dir", t!("suggestion_add_directory"), true),
+        ("remove-dir", t!("suggestion_remove_directory"), true),
+    ]
+}
+
+fn skill_rows(observer: &Observer, query: &str) -> Vec<Row> {
+    let mut candidates = Vec::new();
+    for (name, detail, available) in builtin_commands(observer) {
         if available {
             candidates.push(Row {
                 id: format!("command-{name}"),
                 label: format!("/{name}"),
                 detail: detail.into_owned(),
                 icon: "setting",
-                completion: Completion::Run(name),
+                completion: if name == "add-dir" {
+                    Completion::Insert("/add-dir ".into())
+                } else {
+                    Completion::Run(name)
+                },
                 group: Some(Group::Commands),
             });
         }
     }
-    let config = observer.agent_config();
+    let workflow = observer.agent_config();
+    let config = if observer.selected.is_some() && !observer.model.workflow.is_null() {
+        &workflow
+    } else if let Some(agent) = observer.composer_agent() {
+        agent
+    } else {
+        return rank_rows(candidates, query);
+    };
     let disabled = config["skillEnabled"]
         .as_bool()
         .or_else(|| config["skill_enabled"].as_bool())
         == Some(false);
-    let selected = crate::SkillsDraft::from_config(&config).selected;
+    let selected = config.get("selectedSkills").or_else(|| config.get("selected_skills"))
+        .and_then(Value::as_array);
     if !disabled {
         for skill in &observer.skills {
             let Some(name) = skill["name"].as_str() else {
                 continue;
             };
-            if !selected.is_empty() && !selected.contains(name) {
+            if !skill_allowed(selected, name) {
                 continue;
             }
             candidates.push(Row {
@@ -321,6 +389,10 @@ fn skill_rows(observer: &Observer, query: &str) -> Vec<Row> {
         }
     }
     rank_rows(candidates, query)
+}
+
+fn skill_allowed(selected: Option<&Vec<Value>>, name: &str) -> bool {
+    name == "help" || selected.is_none_or(|names| names.iter().any(|value| value.as_str() == Some(name)))
 }
 
 fn rank_rows(rows: Vec<Row>, query: &str) -> Vec<Row> {
@@ -376,11 +448,11 @@ fn file_rows(observer: &Observer, query: &str) -> Vec<Row> {
         .suggestions
         .file_request
         .as_ref()
-        .is_some_and(|(_, previous, roots)| previous == query && *roots == observer.model.roots)
+        .is_some_and(|(_, previous, roots)| previous == query && roots == observer.roots())
     {
         return Vec::new();
     }
-    let primary_root = observer.model.roots.first();
+    let primary_root = observer.roots().first();
     observer
         .file_results
         .iter()
@@ -448,12 +520,16 @@ fn apply(
     let input = observer.composer.clone();
     let value = input.read(cx).value();
     let range = expected.range();
-    let replacement = match completion {
-        Completion::Insert(text) => text.trim_end(),
-        Completion::Run(_) => "",
-    };
-    let append_space = matches!(completion, Completion::Insert(_))
-        && !value[range.end..].starts_with(char::is_whitespace);
+    if let Completion::Run(name) = completion {
+        if can_run(observer, name) {
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+            execute(observer, name, "", window, cx);
+        }
+        return;
+    }
+    let Completion::Insert(text) = completion else { return; };
+    let replacement = text.trim_end();
+    let append_space = !value[range.end..].starts_with(char::is_whitespace);
     let replacement = if append_space {
         format!("{replacement} ")
     } else {
@@ -465,9 +541,6 @@ fn apply(
         EntityInputHandler::replace_text_in_range(state, Some(utf16), &replacement, window, cx);
         state.focus_handle(cx).focus(window, cx);
     });
-    if let Completion::Run(name) = completion {
-        run(observer, name, window, cx);
-    }
     refresh(observer, cx);
     observer.suggestions.dismissed = true;
     cx.notify();
@@ -479,6 +552,14 @@ pub fn handle_key(
     window: &mut Window,
     cx: &mut Context<Observer>,
 ) -> bool {
+    if observer.suggestions.removing_directory {
+        if key == "escape" {
+            observer.suggestions.removing_directory = false;
+            cx.notify();
+            return true;
+        }
+        return false;
+    }
     refresh(observer, cx);
     let Some(trigger) = observer.suggestions.current.clone() else {
         return false;
@@ -487,6 +568,9 @@ pub fn handle_key(
         return false;
     }
     let rows = rows(observer, &trigger);
+    if rows.is_empty() {
+        return false;
+    }
     let state = &mut observer.suggestions;
     match key {
         "escape" => state.dismissed = true,
@@ -525,6 +609,7 @@ fn advance(selected: usize, len: usize, down: bool) -> usize {
 
 pub fn refresh(observer: &mut Observer, cx: &mut Context<Observer>) -> bool {
     let trigger = active(observer, cx);
+    let paths = observer.roots().to_vec();
     let state = &mut observer.suggestions;
     let changed = state.current != trigger;
     if changed {
@@ -538,7 +623,6 @@ pub fn refresh(observer: &mut Observer, cx: &mut Context<Observer>) -> bool {
         observer.file_results.clear();
         return changed;
     };
-    let paths = observer.model.roots.clone();
     if !state
         .file_request
         .as_ref()
@@ -563,7 +647,68 @@ pub fn refresh(observer: &mut Observer, cx: &mut Context<Observer>) -> bool {
     changed
 }
 
-fn run(observer: &mut Observer, name: &str, window: &mut Window, cx: &mut Context<Observer>) {
+fn parse_command(text: &str) -> Option<(String, &str)> {
+    let text = text.trim().strip_prefix('/')?;
+    let boundary = text.find(char::is_whitespace).unwrap_or(text.len());
+    let (name, argument) = text.split_at(boundary);
+    (!name.is_empty()).then(|| (name.to_ascii_lowercase(), argument.trim()))
+}
+
+fn directory_argument(argument: &str) -> String {
+    let mut chars = argument.chars();
+    let Some(quote @ ('\'' | '"')) = chars.next() else { return argument.to_owned(); };
+    if chars.next_back() != Some(quote) {
+        return argument.to_owned();
+    }
+    let mut inner = chars.peekable();
+    let mut path = String::new();
+    while let Some(ch) = inner.next() {
+        if ch == '\\' && inner.peek().is_some_and(|ch| matches!(ch, '\\' | '\'' | '"')) {
+            path.extend(inner.next());
+        } else {
+            path.push(ch);
+        }
+    }
+    path.trim().to_owned()
+}
+
+fn expand_directory(path: &str, home: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    match path.strip_prefix('~') {
+        Some("") => home.map(std::path::Path::to_path_buf),
+        Some(rest) if rest.starts_with(std::path::is_separator) => {
+            Some(home?.join(rest.trim_start_matches(std::path::is_separator)))
+        }
+        _ => Some(path.into()),
+    }
+}
+
+fn can_run(observer: &Observer, name: &str) -> bool {
+    match name {
+        "clear" => observer.can_clear_context(),
+        "plan" => observer.can_toggle_planning(),
+        "attach" => observer.can_attach_images(),
+        "audit" => observer.can_toggle_final_audit(),
+        _ => true,
+    }
+}
+
+pub fn run_typed(observer: &mut Observer, text: &str, window: &mut Window, cx: &mut Context<Observer>) -> bool {
+    let Some((name, argument)) = parse_command(text) else { return false; };
+    if !builtin_commands(observer).iter().any(|(command, _, _)| *command == name)
+        || (!argument.is_empty() && !matches!(name.as_str(), "add-dir" | "remove-dir"))
+        || !can_run(observer, &name)
+    {
+        return false;
+    }
+    // Preserve an incomplete command so the user can correct the path.
+    if name != "add-dir" {
+        observer.composer.update(cx, |state, cx| state.set_value("", window, cx));
+    }
+    execute(observer, &name, argument, window, cx);
+    true
+}
+
+fn execute(observer: &mut Observer, name: &str, argument: &str, window: &mut Window, cx: &mut Context<Observer>) {
     use crate::QuickPanel;
     use chatspeed_runtime_client::desktop_menu::Action;
     match name {
@@ -574,14 +719,29 @@ fn run(observer: &mut Observer, name: &str, window: &mut Window, cx: &mut Contex
         "about" => observer.desktop_menu_action(Action::About, cx),
         "models" => observer.open_quick_panel(QuickPanel::Models, window, cx),
         "skills-config" => observer.open_quick_panel(QuickPanel::Skills, window, cx),
-        "new" => observer.start_new_session(window, cx),
+        "new" => observer.open_new_task_dialog(cx),
         "clear" => observer.clear_context_frame(cx),
-        "compress" => observer.manual_compress(cx),
+        "compress" if observer.selected.is_some() => observer.manual_compress(cx),
+        "compress" => observer.show_toast(crate::ToastKind::Warning, rust_i18n::t!("suggestion_compress_no_session").to_string(), cx),
         "attach" => observer.pick_attachments(cx),
         "plan" => observer.toggle_planning(cx),
         "audit" => observer.toggle_runtime_preference("finalAudit", cx),
+        "add-dir" => {
+            let path = directory_argument(argument);
+            let home = std::env::home_dir();
+            if let Some(path) = expand_directory(&path, home.as_deref()).filter(|path| !path.as_os_str().is_empty()) {
+                if observer.add_authorized_root(path, cx) {
+                    observer.composer.update(cx, |state, cx| state.set_value("", window, cx));
+                }
+            } else {
+                observer.show_toast(crate::ToastKind::Warning, rust_i18n::t!("paths_invalid_directory").to_string(), cx);
+            }
+        }
+        "remove-dir" if argument.is_empty() => observer.suggestions.removing_directory = true,
+        "remove-dir" => observer.show_toast(crate::ToastKind::Warning, rust_i18n::t!("paths_remove_no_args").to_string(), cx),
         _ => {}
     }
+    cx.notify();
 }
 
 #[cfg(test)]
@@ -590,6 +750,36 @@ mod tests {
 
     fn trigger(text: &str) -> Option<Trigger> {
         at_caret(text, text.len())
+    }
+
+    #[test]
+    fn directory_commands_parse_quoted_paths_and_home_without_shell_expansion() {
+        use super::{directory_argument, expand_directory, parse_command};
+        use std::path::Path;
+
+        let (name, argument) = parse_command("  /ADD-DIR  \"~/My Projects/中文\" ").unwrap();
+        assert_eq!(name, "add-dir");
+        assert_eq!(directory_argument(argument), "~/My Projects/中文");
+        assert_eq!(directory_argument(r#"'/work/it\'s here'"#), "/work/it's here");
+        assert_eq!(directory_argument(r#"C:\My Projects\app"#), r#"C:\My Projects\app"#);
+        let home = Path::new("home");
+        assert_eq!(expand_directory("~/work", Some(home)), Some(home.join("work")));
+        assert_eq!(expand_directory("~", None), None);
+        assert_eq!(parse_command("/remove-dir"), Some(("remove-dir".into(), "")));
+        assert_eq!(parse_command("tell me /add-dir"), None);
+    }
+
+    #[test]
+    fn explicitly_empty_skill_config_keeps_only_help() {
+        use super::skill_allowed;
+        use serde_json::json;
+
+        assert!(skill_allowed(None, "custom"));
+        assert!(!skill_allowed(Some(&vec![]), "custom"));
+        let selected = vec![json!("custom")];
+        assert!(skill_allowed(Some(&selected), "custom"));
+        assert!(skill_allowed(Some(&selected), "help"));
+        assert!(!skill_allowed(Some(&selected), "other"));
     }
 
     #[test]

@@ -5,7 +5,8 @@
 //! folder glyph, files carry the extension glyph, and every level hangs off a
 //! dashed guide with a short connector per row.
 
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
+use gpui_kit::component::{h_flex, tooltip::Tooltip, v_flex, ActiveTheme};
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use rust_i18n::t;
 use std::path::Path;
@@ -54,7 +55,68 @@ pub fn tree(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
                 .child(t!("paths_empty").to_string()),
         );
     }
-    list.into_any_element()
+    v_flex()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .child(
+            h_flex()
+                .flex_none()
+                .w_full()
+                .justify_between()
+                .items_center()
+                .px_4()
+                .py_2()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(div().text_xs().font_weight(FontWeight::BOLD).text_color(secondary)
+                    .child(t!("paths_title").to_string()))
+                .child(h_flex().gap_2()
+                    .child(header_action("add", t!("suggestion_add_directory").to_string(), Observer::pick_authorized_root, cx))
+                    .child(header_action("refresh", t!("status_panel_refresh").to_string(), Observer::refresh_authorized_dirs, cx))),
+        )
+        .child(list)
+        .into_any_element()
+}
+
+fn header_action(
+    icon: &'static str,
+    label: String,
+    action: fn(&mut Observer, &mut Context<Observer>),
+    cx: &mut Context<Observer>,
+) -> impl IntoElement {
+    let muted = cx.theme().muted_foreground;
+    let primary = cx.theme().primary;
+    div().id(icon).p_1().rounded_sm().cursor_pointer().text_color(muted)
+        .hover(move |style| style.text_color(primary))
+        .child(Icon::new(icon).size(14.))
+        .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
+        .on_click(cx.listener(move |this, _, _, cx| action(this, cx)))
+}
+
+#[derive(Clone)]
+struct RootDrag {
+    path: String,
+    generation: u64,
+}
+
+impl Render for RootDrag {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().px_2().py_1().rounded_sm().bg(cx.theme().background)
+            .child(root_name(&self.path).to_owned())
+    }
+}
+
+fn reordered_roots(roots: &[String], source: &str, target: &str) -> Option<Vec<String>> {
+    let from = roots.iter().position(|root| root == source)?;
+    let to = roots.iter().position(|root| root == target)?;
+    if from == to {
+        return None;
+    }
+    let mut roots = roots.to_vec();
+    let root = roots.remove(from);
+    roots.insert(to, root);
+    Some(roots)
 }
 
 fn root_row(
@@ -98,6 +160,21 @@ fn root_row(
                 .child(root_name(root).to_owned()),
         )
         .child(actions(root, true, true, cx))
+        .when(observer.roots().len() > 1, |row| {
+            row.on_drag(RootDrag { path: path.clone(), generation: observer.model.generation }, |drag, _, _, cx| {
+                cx.new(|_| drag.clone())
+            })
+            .on_drop(cx.listener({
+                let target = path.clone();
+                move |this, drag: &RootDrag, _, cx| {
+                    if this.model.accepts(drag.generation) {
+                        if let Some(roots) = reordered_roots(this.roots(), &drag.path, &target) {
+                            this.save_authorized_roots(roots, cx);
+                        }
+                    }
+                }
+            }))
+        })
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_dir(path.clone(), cx)))
         .into_any_element()
 }
@@ -266,30 +343,7 @@ fn actions(path: &str, directory: bool, root: bool, cx: &mut Context<Observer>) 
                                 this.dir_entries.remove(&path);
                             }
                         }
-                        "trash" => {
-                            if let Some(session) = this.selected.clone() {
-                                let mut config = this.agent_config();
-                                if config.is_object() {
-                                    config["allowedPaths"] = serde_json::json!(this
-                                        .roots()
-                                        .iter()
-                                        .filter(|root| *root != &path)
-                                        .collect::<Vec<_>>());
-                                    if let Err(error) = this.worker.commands.try_send(
-                                        chatspeed_gpui::types::Command::SetAgentConfig {
-                                            session,
-                                            config,
-                                        },
-                                    ) {
-                                        this.show_toast(
-                                            crate::ToastKind::Error,
-                                            error.to_string(),
-                                            cx,
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                        "trash" => this.remove_authorized_root(&path, cx),
                         "at" => {
                             let normalized = path.replace('\\', "/");
                             let root = this.roots().first().map(|root| root.replace('\\', "/"));
@@ -345,6 +399,20 @@ fn open_folder(path: &str, roots: &[String]) -> std::io::Result<()> {
         let _ = child.wait();
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reordered_roots;
+
+    #[test]
+    fn dragging_a_root_changes_order_without_changing_membership() {
+        let roots = ["/a".into(), "/b".into(), "/c".into()];
+        assert_eq!(reordered_roots(&roots, "/a", "/c").unwrap(), ["/b", "/c", "/a"]);
+        assert_eq!(reordered_roots(&roots, "/c", "/a").unwrap(), ["/c", "/a", "/b"]);
+        assert_eq!(reordered_roots(&roots, "/a", "/a"), None);
+        assert_eq!(reordered_roots(&roots, "/old", "/a"), None);
+    }
 }
 
 /// A loading or error line inside an expanded folder.

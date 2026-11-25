@@ -90,7 +90,7 @@ fn roots_from(value: Option<&Value>) -> Vec<String> {
         Some(Value::Array(roots)) => roots
             .iter()
             .filter_map(Value::as_str)
-            .map(|root| root.trim_end_matches(['/', '\\']).to_owned())
+            .map(normalize_root)
             .filter(|root| !root.is_empty())
             .collect(),
         // `agent_config` is a serialized agent config, so its roots are nested.
@@ -110,6 +110,16 @@ fn roots_from(value: Option<&Value>) -> Vec<String> {
             .map(|roots| roots_from(Some(roots)))
             .unwrap_or_default(),
         _ => Vec::new(),
+    }
+}
+
+/// Preserve filesystem roots while trimming redundant directory separators.
+pub fn normalize_root(path: &str) -> String {
+    let trimmed = path.trim_end_matches(std::path::is_separator);
+    if trimmed.is_empty() || (cfg!(windows) && trimmed.ends_with(':')) {
+        path.to_owned()
+    } else {
+        trimmed.to_owned()
     }
 }
 
@@ -257,6 +267,8 @@ pub enum Command {
     /// button starts the session before falling back to a `continue` signal.
     Resume {
         session: String,
+        agent_id: Option<String>,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
     },
     /// Creates a session and starts it with the first prompt.
     StartNew {
@@ -264,6 +276,14 @@ pub enum Command {
         prompt: String,
         attached_context: Option<String>,
         metadata: Option<Value>,
+        allowed_paths: Option<Vec<String>>,
+        planning_mode: bool,
+        final_audit: Option<bool>,
+    },
+    /// Changes only the workflow's authorized roots, including in a live session.
+    SetAllowedPaths {
+        session: String,
+        paths: Vec<String>,
     },
     /// Creates an empty workflow, Vue's new-task dialog target.
     CreateWorkflow {
@@ -273,6 +293,7 @@ pub enum Command {
     },
     /// Lists one directory for the authorized-path tree.
     ListDir {
+        generation: u64,
         path: String,
     },
     /// Reloads the agents, models and skills the composer selectors list.
@@ -331,6 +352,11 @@ pub enum Command {
         session: String,
         enabled: bool,
         selected: Vec<String>,
+    },
+    /// Saves the full workflow config and acknowledges its shell-policy field.
+    SetShellRules {
+        session: String,
+        config: Value,
     },
     /// Replaces the workflow's effective agent config (tools, MCP, plan approval).
     SetAgentConfig {
