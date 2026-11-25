@@ -11,6 +11,12 @@ pub const WORKFLOW_WINDOW_SIZE_KEY: &str = "workflow_window_size";
 /// Global status-panel positions shared by every conversation.
 pub const STATUS_PANEL_POSITION_KEY: &str = "workflow_status_panel_position";
 
+/// Runtime configuration key for the docked ChatHub page width.
+///
+/// The splitter writes it when a drag ends, so the page opens at the width the
+/// user left it at on the next launch.
+pub const CHAT_HUB_WIDTH_KEY: &str = "gpui_chat_hub_page_width";
+
 /// Where the last window origin is mirrored for the next launch.
 ///
 /// The runtime configuration only arrives with the first poll, after the window

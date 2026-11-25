@@ -13,8 +13,12 @@ use alacritty_terminal::{
         cell::{Cell, Flags},
         Config, Term, TermMode,
     },
-    vte::ansi::{CursorShape, CursorStyle as VtCursorStyle, Processor},
+    vte::{
+        ansi::{CursorShape, CursorStyle as VtCursorStyle, Processor},
+        Parser as VteParser, Perform,
+    },
 };
+use chatspeed_gpui::components::dialog::WindowExt;
 use chatspeed_gpui::terminal::{self, Input, Output};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::prelude::FluentBuilder;
@@ -34,12 +38,57 @@ const DEFAULT_CURSOR: VtCursorStyle = VtCursorStyle {
     shape: CursorShape::Beam,
     blinking: true,
 };
-/// The caret's amber and the ink that stays readable on it: the ayu skin's
-/// cursor pair in `src/constants/terminalThemes.js`. The amber reads on both the
-/// light and dark terminal surfaces, and the dark accent keeps a glyph visible
-/// when the block sits on a character.
-const CURSOR_COLOR: u32 = 0xe6b450;
-const CURSOR_ACCENT: u32 = 0x0b0e14;
+
+/// One terminal skin, in the shape the Vue terminal themes use.
+///
+/// The values mirror the `ayu` skin in `src/constants/terminalThemes.js`, so the
+/// native dock shows the same colours as the web terminal for the same output.
+struct TerminalPalette {
+    background: u32,
+    foreground: u32,
+    /// The caret color. The dock always draws a beam, so the skin's block
+    /// accent is unused.
+    cursor: u32,
+    selection: u32,
+    selection_foreground: u32,
+    /// Indices 0-7, then the bright 8-15.
+    ansi: [u32; 16],
+}
+
+/// ayu dark (iTerm2-Color-Schemes `ghostty/Ayu`).
+const AYU_DARK: TerminalPalette = TerminalPalette {
+    background: 0x0b0e14,
+    foreground: 0xbfbdb6,
+    cursor: 0xe6b450,
+    selection: 0x409fff,
+    selection_foreground: 0x0b0e14,
+    ansi: [
+        0x11151c, 0xea6c73, 0x7fd962, 0xf9af4f, 0x53bdfa, 0xcda1fa, 0x90e1c6, 0xc7c7c7, 0x686868,
+        0xf07178, 0xaad94c, 0xffb454, 0x59c2ff, 0xd2a6ff, 0x95e6cb, 0xffffff,
+    ],
+};
+
+/// ayu light (iTerm2-Color-Schemes `ghostty/Ayu Light`).
+const AYU_LIGHT: TerminalPalette = TerminalPalette {
+    background: 0xf8f9fa,
+    foreground: 0x5c6166,
+    cursor: 0xffaa33,
+    selection: 0x035bd6,
+    selection_foreground: 0xf8f9fa,
+    ansi: [
+        0x000000, 0xea6c6d, 0x6cbf43, 0xeca944, 0x3199e1, 0x9e75c7, 0x46ba94, 0xbababa, 0x686868,
+        0xf07171, 0x86b300, 0xf2ae49, 0x399ee6, 0xa37acc, 0x4cbf99, 0xd1d1d1,
+    ],
+};
+
+fn terminal_palette(dark: bool) -> &'static TerminalPalette {
+    if dark {
+        &AYU_DARK
+    } else {
+        &AYU_LIGHT
+    }
+}
+
 const HEADER_HEIGHT: f32 = 38.;
 const PANEL_HEIGHT: f32 = 260.;
 const FALLBACK_CELL_WIDTH: f32 = 8.;
@@ -86,6 +135,44 @@ fn cell_text(cell: &Cell) -> String {
     text
 }
 
+/// Captures the OSC 7 working-directory report the runtime's prompt hook emits.
+///
+/// The PTY splits writes at arbitrary byte boundaries, so a sequence can span
+/// two chunks; `vte::Parser` carries that state across `advance` calls.
+#[derive(Default)]
+struct CwdReport {
+    path: Option<String>,
+}
+
+impl Perform for CwdReport {
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        if params.first().copied() != Some(&b"7"[..]) {
+            return;
+        }
+        let Some(uri) = params.get(1).and_then(|uri| std::str::from_utf8(uri).ok()) else {
+            return;
+        };
+        let Some(rest) = uri.strip_prefix("file://") else {
+            return;
+        };
+        // `file://host/path`: the path starts at the first slash after the host.
+        let Some(slash) = rest.find('/') else {
+            return;
+        };
+        self.path = Some(rest[slash..].to_string());
+    }
+}
+
+/// Vue's tab title shows the directory's own name; `/a/b/c` reads `c`.
+fn directory_name(path: &str) -> String {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    std::path::Path::new(trimmed)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Config, Processor, Term, TermSize, VoidListener};
@@ -98,6 +185,34 @@ mod tests {
         };
         cell.push_zerowidth('\u{301}');
         assert_eq!(super::cell_text(&cell), "e\u{301}");
+    }
+
+    #[test]
+    fn tab_title_uses_the_shells_working_directory() {
+        use super::{directory_name, CwdReport, VteParser};
+
+        let mut parser = VteParser::new();
+        let mut report = CwdReport::default();
+        // The PTY can split an OSC sequence anywhere, including mid-prefix.
+        parser.advance(&mut report, b"\x1b]7;file://localho");
+        assert_eq!(report.path, None);
+        parser.advance(&mut report, b"st/a/b/c\x07");
+        assert_eq!(report.path.as_deref(), Some("/a/b/c"));
+
+        assert_eq!(directory_name("/a/b/c"), "c");
+        assert_eq!(directory_name("/a/b/c/"), "c");
+        assert_eq!(directory_name("/"), "/");
+    }
+
+    #[test]
+    fn terminal_palette_follows_the_ayu_skins() {
+        // Values copied from the `ayu` skin in `src/constants/terminalThemes.js`.
+        assert_eq!(super::terminal_palette(true).background, 0x0b0e14);
+        assert_eq!(super::terminal_palette(true).foreground, 0xbfbdb6);
+        assert_eq!(super::terminal_palette(true).ansi[1], 0xea6c73);
+        assert_eq!(super::terminal_palette(false).background, 0xf8f9fa);
+        assert_eq!(super::terminal_palette(false).foreground, 0x5c6166);
+        assert_eq!(super::terminal_palette(false).ansi[1], 0xea6c6d);
     }
 
     #[test]
@@ -152,11 +267,11 @@ mod tests {
         let dark = gpui_kit::rgb(0x202020).into();
         for (foreground, background) in [(light, dark), (dark, light)] {
             assert_eq!(
-                super::cell_colors(&normal, content.colors, foreground, background),
+                super::cell_colors(&normal, content.colors, foreground, background, &super::AYU_DARK.ansi),
                 (foreground, gpui_kit::transparent_black().into()),
             );
             assert_eq!(
-                super::cell_colors(&reversed, content.colors, foreground, background),
+                super::cell_colors(&reversed, content.colors, foreground, background, &super::AYU_DARK.ansi),
                 (background, foreground),
             );
         }
@@ -181,7 +296,8 @@ mod tests {
             super::terminal_color(
                 suggestion.fg,
                 content.colors,
-                gpui_kit::transparent_black().into()
+                gpui_kit::transparent_black().into(),
+                &super::AYU_DARK.ansi,
             ),
             gpui_kit::transparent_black().into()
         );
@@ -221,24 +337,63 @@ pub struct Panel {
     active: usize,
     /// Input handler that turns IME commits into PTY input.
     input: Option<Entity<TerminalInput>>,
+    /// Bounds of the rows area from the last paint. The grid size, the wheel
+    /// history, and the mouse mapping all derive from this one rect.
     scroll: ScrollHandle,
-    /// Whether the view keeps the cursor line visible as output arrives.
-    follow: bool,
+    /// Horizontal offset of the tab strip. Without it a long tab list is
+    /// clipped at the header's right edge and the hidden tabs cannot be reached.
+    tabs_scroll: ScrollHandle,
+    /// Active tab to reveal on the next frame. Event handlers only know the new
+    /// index; render applies it once the strip has laid out that width.
+    reveal_tab: std::cell::Cell<Option<usize>>,
+    /// Grid size (columns, rows) last applied to the tabs and the PTY.
+    applied_size: std::cell::Cell<Option<(usize, usize)>>,
     /// Vue's fullscreen toggle; the dock keeps its header but uses most of the
     /// workflow column.
     maximized: bool,
     height: Pixels,
-    selection_drag: bool,
+    /// Cell where the current drag began. A plain click only moves the caret,
+    /// so it never leaves a one-cell selection block behind.
+    selection_start: Option<(CellPoint, Side)>,
     resize_start: Option<(Pixels, Pixels)>,
 }
 
 pub struct Tab {
     screen: Term<VoidListener>,
     parser: Processor,
-    label: Option<String>,
+    /// Sniffs OSC 7 out of the same bytes the VT parses, so the tab title can
+    /// follow the shell's working directory.
+    cwd_parser: VteParser,
+    cwd_report: CwdReport,
+    /// Working directory last reported by the prompt.
+    cwd: Option<String>,
+    /// Shell name; stands in for the title until the prompt reports a directory.
+    shell: Option<String>,
     status: &'static str,
     input: Option<tokio::sync::mpsc::Sender<Input>>,
     size: TermSize,
+}
+
+impl Tab {
+    /// The directory's own name, so a tab reads as the folder it is working in;
+    /// the shell name only appears until the prompt reports a directory.
+    fn title(&self) -> String {
+        self.cwd
+            .as_deref()
+            .map(directory_name)
+            .or_else(|| self.shell.clone())
+            .unwrap_or_else(|| t!("terminal").to_string())
+    }
+
+    /// Feeds one PTY chunk to the VT and to the directory sniffer. Both parsers
+    /// keep their own split-sequence state.
+    fn write_output(&mut self, bytes: &[u8]) {
+        self.cwd_parser.advance(&mut self.cwd_report, bytes);
+        if let Some(path) = self.cwd_report.path.take() {
+            self.cwd = Some(path);
+        }
+        self.parser.advance(&mut self.screen, bytes);
+    }
 }
 
 impl Panel {
@@ -251,10 +406,12 @@ impl Panel {
             active: 0,
             input: None,
             scroll: ScrollHandle::new(),
-            follow: true,
+            tabs_scroll: ScrollHandle::new(),
+            reveal_tab: std::cell::Cell::new(None),
+            applied_size: std::cell::Cell::new(None),
             maximized: false,
             height: px(PANEL_HEIGHT),
-            selection_drag: false,
+            selection_start: None,
             resize_start: None,
         }
     }
@@ -277,6 +434,9 @@ impl Panel {
         self.active = (self.active - usize::from(index < self.active))
             .min(self.tabs.len().saturating_sub(1));
         if self.visible {
+            if !self.tabs.is_empty() {
+                self.reveal_tab.set(Some(self.active));
+            }
             self.focus.focus(window, cx);
         }
     }
@@ -298,40 +458,67 @@ impl Panel {
             } else {
                 text
             };
-            tab.update(cx, |tab, _| send(tab, payload));
+            tab.update(cx, |tab, _| {
+                // Typed text replaces any selection, as in a text field, and
+                // returns the view from history to the live prompt.
+                tab.screen.selection = None;
+                tab.screen.scroll_display(Scroll::Bottom);
+                send(tab, payload);
+            });
         }
-        // Typing always returns the view to the prompt line.
-        self.follow = true;
-    }
-
-    fn near_bottom(&self) -> bool {
-        let max = self.scroll.max_offset();
-        let offset = self.scroll.offset();
-        (max.y + offset.y) <= px(48.)
     }
 }
 
-/// Committed text from the platform input method reaches the shell here; the
-/// terminal owns no editable text, so every range query answers empty.
+/// Committed text from the platform input method reaches the shell here.
+///
+/// The terminal owns no editable text, but it still has to report the IME's
+/// uncommitted preedit as marked text: the platform only routes Enter to the
+/// composition commit while it believes text is marked.
 pub struct TerminalInput {
     owner: WeakEntity<Observer>,
+    /// The IME preedit, kept only while the composition is uncommitted.
+    preedit: Option<String>,
 }
 
 impl TerminalInput {
     pub(crate) fn new(owner: WeakEntity<Observer>) -> Self {
-        Self { owner }
+        Self {
+            owner,
+            preedit: None,
+        }
+    }
+
+    /// Whether the IME is composing; typed keys belong to it until it commits.
+    pub(crate) fn composing(&self) -> bool {
+        self.preedit.is_some()
+    }
+
+    fn commit(&mut self, text: &str, cx: &mut Context<Self>) {
+        if text.is_empty() {
+            return;
+        }
+        let _ = self.owner.update(cx, |this, cx| {
+            this.terminal.send_text(text, cx);
+            cx.notify();
+        });
     }
 }
 
 impl EntityInputHandler for TerminalInput {
     fn text_for_range(
         &mut self,
-        _range: Range<usize>,
-        _adjusted_range: &mut Option<Range<usize>>,
+        range: Range<usize>,
+        adjusted_range: &mut Option<Range<usize>>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        None
+        // The preedit is the only text this handler owns; the platform reads it
+        // back to place the candidate window.
+        let utf16: Vec<u16> = self.preedit.as_ref()?.encode_utf16().collect();
+        let start = range.start.min(utf16.len());
+        let end = range.end.clamp(start, utf16.len());
+        *adjusted_range = Some(start..end);
+        Some(String::from_utf16_lossy(&utf16[start..end]))
     }
 
     fn selected_text_range(
@@ -348,10 +535,15 @@ impl EntityInputHandler for TerminalInput {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        None
+        self.preedit
+            .as_ref()
+            .map(|preedit| 0..preedit.encode_utf16().count())
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        // A cancelled composition never becomes shell input.
+        self.preedit = None;
+    }
 
     fn replace_text_in_range(
         &mut self,
@@ -360,31 +552,60 @@ impl EntityInputHandler for TerminalInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = self.owner.update(cx, |this, cx| {
-            this.terminal.send_text(text, cx);
-            cx.notify();
-        });
+        self.preedit = None;
+        self.commit(text, cx);
     }
 
     fn replace_and_mark_text_in_range(
         &mut self,
         _range: Option<Range<usize>>,
-        _new_text: &str,
-        _new_selected_range: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range: Option<Range<usize>>,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
-        // A composition preview is not shell input; only the commit above is.
+        // A marked selection means the text is still a composition preview.
+        // Without one, this call replaced the preedit with committed text.
+        match new_selected_range {
+            Some(_) => self.preedit = Some(new_text.to_string()),
+            None => {
+                self.preedit = None;
+                self.commit(new_text, cx);
+            }
+        }
     }
 
     fn bounds_for_range(
         &mut self,
         _range_utf16: Range<usize>,
         _element_bounds: Bounds<Pixels>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        None
+        // The IME anchors its candidate window to this rect. The terminal has no
+        // text runs, so the caret cell is the only useful answer; without one
+        // the candidate bar can only fall back to a window corner.
+        let owner = self.owner.upgrade()?;
+        let observer = owner.read(cx);
+        let panel = &observer.terminal;
+        let tab = panel.tabs.get(panel.active)?.read(cx);
+        let content = tab.screen.renderable_content();
+        let display_offset = i32::try_from(content.display_offset).ok()?;
+        let row = usize::try_from(content.cursor.point.line.0 + display_offset).ok()?;
+        if row >= tab.size.screen_lines() {
+            return None;
+        }
+        let column = usize::from(content.cursor.point.column.0);
+        let viewport = panel.scroll.bounds();
+        if viewport.size.width <= px(0.) || viewport.size.height <= px(0.) {
+            return None;
+        }
+        let width = cell_advance(window, cx);
+        let origin = point(
+            viewport.origin.x + px(column as f32 * f32::from(width)),
+            viewport.origin.y + px(row as f32 * LINE_HEIGHT),
+        );
+        Some(Bounds::new(origin, Size::new(width, px(LINE_HEIGHT))))
     }
 
     fn character_index_for_point(
@@ -399,19 +620,29 @@ impl EntityInputHandler for TerminalInput {
 
 pub fn toggle(this: &mut Observer, cx: &mut Context<Observer>) {
     this.terminal.visible = !this.terminal.visible;
+    if this.terminal.visible {
+        // Opening the dock returns to the live prompt even if it was scrolled
+        // back into history.
+        if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
+            tab.update(cx, |tab, _| tab.screen.scroll_display(Scroll::Bottom));
+        }
+    }
     if this.terminal.visible && this.terminal.tabs.is_empty() {
         add(this, None, cx);
     }
     cx.notify();
 }
 
+/// Cmd/Ctrl+J toggles the dock and Cmd/Ctrl+K clears the active tab.
+///
+/// Callers pass the raw keystroke so the same rules work from a window-level
+/// interceptor, which sees keys even when no element holds focus.
 pub fn shortcut(
     this: &mut Observer,
-    event: &KeyDownEvent,
+    key: &Keystroke,
     window: &mut Window,
     cx: &mut Context<Observer>,
 ) {
-    let key = &event.keystroke;
     let mods = key.modifiers;
     let command = if cfg!(target_os = "macos") {
         mods.platform && !mods.control
@@ -423,16 +654,20 @@ pub fn shortcut(
     }
     match key.key.as_str() {
         "j" => {
-            toggle(this, cx);
-            if this.terminal.visible {
-                this.terminal.focus.focus(window, cx);
+            // A modal owns the keyboard; moving focus into the dock would take
+            // its Escape/Enter handling away mid-edit. The shortcut is still
+            // consumed so the platform does not beep.
+            if !window.has_active_dialog(cx) {
+                toggle(this, cx);
+                if this.terminal.visible {
+                    this.terminal.focus.focus(window, cx);
+                }
             }
         }
         "k" if this.terminal.visible && this.terminal.focus.is_focused(window) => {
             if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
                 tab.update(cx, |tab, _| clear_keep_input(tab));
             }
-            this.terminal.follow = true;
             cx.notify();
         }
         _ => return,
@@ -458,20 +693,42 @@ fn add_tab(
 ) {
     let options = this.options.clone();
     let cwd = this.roots().first().cloned();
+    // A configured default shell only applies while the runtime still offers it.
+    let shell = shell.or_else(|| {
+        let configured = this.terminal_default_shell.clone()?;
+        this.terminal
+            .shells
+            .iter()
+            .find(|(name, path)| path == &configured || name.eq_ignore_ascii_case(&configured))
+            .map(|(_, path)| path.clone())
+    });
+    let scrolling_history = this.terminal_output_limit;
     let (tx, rx) = tokio::sync::mpsc::channel(128);
     let (out, mut updates) = tokio::sync::mpsc::channel(64);
-    let size = TermSize::new(DEFAULT_ROWS, DEFAULT_COLUMNS);
-    let tab = cx.new(|_| Tab {
+    // A new tab starts at the size the dock last rendered; that size drives the
+    // PTY too, so the shell wraps to the visible rows instead of a hidden grid.
+    let (columns, rows) = this
+        .terminal
+        .applied_size
+        .get()
+        .unwrap_or((DEFAULT_COLUMNS, DEFAULT_ROWS));
+    let size = TermSize::new(rows, columns);
+    let initial_cwd = cwd.clone();
+    let tab = cx.new(move |_| Tab {
         screen: Term::new(
             Config {
                 default_cursor_style: DEFAULT_CURSOR,
+                scrolling_history,
                 ..Config::default()
             },
             &size,
             VoidListener,
         ),
         parser: Processor::new(),
-        label: None,
+        cwd_parser: VteParser::new(),
+        cwd_report: CwdReport::default(),
+        cwd: initial_cwd,
+        shell: None,
         status: "terminal_connecting",
         input: Some(tx),
         size,
@@ -479,6 +736,7 @@ fn add_tab(
     let weak = tab.downgrade();
     this.terminal.active = this.terminal.tabs.len();
     this.terminal.tabs.push(tab);
+    this.terminal.reveal_tab.set(Some(this.terminal.active));
     let launch = std::thread::Builder::new()
         .name("gpui-terminal".into())
         .spawn(move || {
@@ -486,7 +744,8 @@ fn add_tab(
                 .enable_all()
                 .build()
             {
-                runtime.block_on(terminal::run(options, cwd, shell, rx, out));
+                let size = (columns as u16, rows as u16);
+                runtime.block_on(terminal::run(options, cwd, shell, size, rx, out));
             }
         });
     if launch.is_err() {
@@ -533,10 +792,10 @@ fn add_tab(
                 .update(cx, |tab, _| match update {
                     Output::Shells(_) => {}
                     Output::Ready(label) => {
-                        tab.label = Some(label);
+                        tab.shell = Some(label);
                         tab.status = "";
                     }
-                    Output::Bytes(bytes) => tab.parser.advance(&mut tab.screen, &bytes),
+                    Output::Bytes(bytes) => tab.write_output(&bytes),
                     Output::Exit => {
                         tab.input = None;
                         tab.status = "terminal_exited";
@@ -547,9 +806,7 @@ fn add_tab(
                     }
                 })
                 .is_err()
-                || owner
-                    .update(cx, |_, cx| cx.notify())
-                    .is_err()
+                || owner.update(cx, |_, cx| cx.notify()).is_err()
             {
                 return;
             }
@@ -584,10 +841,12 @@ fn clear_keep_input(tab: &mut Tab) {
         .min(rows.saturating_sub(1));
     let cursor_x = usize::from(cursor.column.0);
     // A soft-wrapped row is flagged on the last cell of the row above it.
+    // Displayed rows carry the display offset, so map back to the screen row.
+    let display_offset = i32::try_from(content.display_offset).unwrap_or(0);
     let mut continues = vec![false; rows + 1];
     for cell in content.display_iter {
         if cell.flags.contains(Flags::WRAPLINE) {
-            if let Ok(line) = usize::try_from(cell.point.line.0) {
+            if let Ok(line) = usize::try_from(cell.point.line.0 + display_offset) {
                 if let Some(next) = continues.get_mut(line + 1) {
                     *next = true;
                 }
@@ -616,13 +875,65 @@ fn clear_keep_input(tab: &mut Tab) {
     tab.screen.scroll_display(Scroll::Bottom);
 }
 
+/// Shaped advance of one terminal cell, shared by painting and hit-testing.
+///
+/// The shaped advance is fractional, but the cell boxes are laid out on gpui's
+/// rounded grid. Hit-testing has to use the same whole-pixel advance as the
+/// boxes: a fractional advance drifts one character every few dozen columns,
+/// which reads as the selection starting left of the pointer.
+fn cell_advance(window: &Window, cx: &App) -> Pixels {
+    let font = gpui_kit::font(cx.theme().mono_font_family.clone());
+    let font_id = cx.text_system().resolve_font(&font);
+    let measured = window.text_system().layout_width(font_id, px(FONT_SIZE), '0');
+    if measured > px(0.) && f32::from(measured).is_finite() {
+        px(f32::from(measured).round().max(1.))
+    } else {
+        px(FALLBACK_CELL_WIDTH)
+    }
+}
+
+/// Fits the VT and the PTY to the rows area.
+///
+/// The grid must match the visible cells: otherwise the shell wraps to a size
+/// the dock never shows, the extra rows are unreachable, and the VT scrollback
+/// has nowhere to appear when the user scrolls back.
+fn apply_grid_size(panel: &Panel, cx: &mut Context<Observer>, cell_width: Pixels) {
+    let viewport = panel.scroll.bounds();
+    if viewport.size.width <= px(0.) || viewport.size.height <= px(0.) {
+        return;
+    }
+    let columns =
+        (f32::from(viewport.size.width) / f32::from(cell_width)).floor() as usize;
+    let rows = (f32::from(viewport.size.height) / LINE_HEIGHT).floor() as usize;
+    let size = (columns.max(20), rows.max(4));
+    if panel.applied_size.get() == Some(size) {
+        return;
+    }
+    panel.applied_size.set(Some(size));
+    for tab in &panel.tabs {
+        tab.update(cx, |tab, _| {
+            if (tab.size.columns, tab.size.lines) == size {
+                return;
+            }
+            let grid = TermSize::new(size.1, size.0);
+            tab.size = grid;
+            tab.screen.resize(grid);
+            if let Some(input) = &tab.input {
+                let _ = input.try_send(Input::Resize(size.0 as u16, size.1 as u16));
+            }
+        });
+    }
+}
+
 fn selection_position(
-    scroll: &ScrollHandle,
+    viewport: Bounds<Pixels>,
     position: Point<Pixels>,
     cell_width: Pixels,
     tab: &Tab,
 ) -> (CellPoint, Side) {
-    let local = position - scroll.bounds().origin - scroll.offset();
+    // The rows area shows the VT's current display lines: the top visible row
+    // is content line `-display_offset`, so a click row maps back through it.
+    let local = position - viewport.origin;
     let x = local.x / cell_width;
     let column = (x as usize).min(tab.size.columns - 1);
     let row = ((local.y / px(LINE_HEIGHT)) as usize).min(tab.size.lines - 1);
@@ -686,6 +997,8 @@ fn key(tab: &mut Tab, event: &KeyDownEvent, cx: &mut App) -> bool {
         _ => String::new(),
     };
     if !value.is_empty() {
+        // Typing leaves any history view and returns to the live prompt.
+        tab.screen.scroll_display(Scroll::Bottom);
         send(tab, value);
     }
     true
@@ -695,6 +1008,7 @@ fn terminal_color(
     color: alacritty_terminal::vte::ansi::Color,
     colors: &alacritty_terminal::term::color::Colors,
     fallback: Hsla,
+    ansi: &[u32; 16],
 ) -> Hsla {
     use alacritty_terminal::vte::ansi::Color;
     let index = match color {
@@ -713,12 +1027,8 @@ fn terminal_color(
         )
         .into();
     }
-    const ANSI: [u32; 16] = [
-        0x000000, 0xcd3131, 0x0dbc79, 0xe5e510, 0x2472c8, 0xbc3fbc, 0x11a8cd, 0xe5e5e5, 0x666666,
-        0xf14c4c, 0x23d18b, 0xf5f543, 0x3b8eea, 0xd670d6, 0x29b8db, 0xffffff,
-    ];
     let rgb = match index {
-        0..=15 => ANSI[index],
+        0..=15 => ansi[index],
         16..=231 => {
             let n = index - 16;
             let level = |v: usize| if v == 0 { 0 } else { 55 + 40 * v as u32 };
@@ -736,12 +1046,13 @@ fn cell_colors(
     colors: &alacritty_terminal::term::color::Colors,
     foreground: Hsla,
     background: Hsla,
+    ansi: &[u32; 16],
 ) -> (Hsla, Hsla) {
-    let ink = terminal_color(cell.fg, colors, foreground);
+    let ink = terminal_color(cell.fg, colors, foreground, ansi);
     if cell.flags.contains(Flags::INVERSE) {
-        (terminal_color(cell.bg, colors, background), ink)
+        (terminal_color(cell.bg, colors, background, ansi), ink)
     } else {
-        (ink, terminal_color(cell.bg, colors, transparent_black().into()))
+        (ink, terminal_color(cell.bg, colors, transparent_black().into(), ansi))
     }
 }
 
@@ -775,45 +1086,69 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
     let border = cx.theme().border;
     let background = cx.theme().background;
     let surface = cx.theme().muted;
-    let foreground = cx.theme().foreground;
     let secondary = cx.theme().muted_foreground;
-    let hover = crate::ui::surfaces(this.appearance_dark).hover;
+    let primary = cx.theme().primary;
+    // The canvas follows the ayu skin instead of the app surface so the ANSI
+    // palette reads the way its author intended; the header keeps the chrome.
+    // `terminal_color_scheme` can pin the skin's light or dark palette.
+    let palette = terminal_palette(this.terminal_color_dark.unwrap_or(this.appearance_dark));
+    let terminal_background: Hsla = rgb(palette.background).into();
+    let terminal_foreground: Hsla = rgb(palette.foreground).into();
+    let pressed = crate::ui::surfaces(this.appearance_dark).active;
     let active = panel.tabs.get(panel.active).cloned();
 
     // Match the font and shaped width used to paint the cells. The raw glyph
     // advance can differ from the platform's text layout metrics.
     let font = gpui_kit::font(cx.theme().mono_font_family.clone());
-    let font_id = cx.text_system().resolve_font(&font);
-    let measured_width = window.text_system().layout_width(font_id, px(FONT_SIZE), '0');
-    let cell_width = if measured_width > px(0.) && f32::from(measured_width).is_finite() {
-        measured_width
-    } else {
-        px(FALLBACK_CELL_WIDTH)
-    };
+    let cell_width = cell_advance(window, cx);
+    // Fit the grid to the rows area before drawing it. The PTY, the VT and the
+    // drawn rows share one size, so the shell wraps at the panel edge and the
+    // retained output lives in the VT scrollback rather than a hidden grid.
+    apply_grid_size(panel, cx, cell_width);
 
-    let mut tabs = h_flex().flex_1().min_w_0().h_full().overflow_hidden();
+    // Tabs reuse the chat-hub strip: rounded chips on the panel surface, the
+    // active one filled with the muted chrome surface and its label in the
+    // primary color. Sharing that component is what keeps the terminal from
+    // looking like a second application docked inside the window.
+    let mut tabs = h_flex()
+        .id("terminal-tabs")
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .items_center()
+        .gap(px(4.))
+        .px(px(4.))
+        .overflow_x_scroll()
+        .track_scroll(&panel.tabs_scroll);
     for (index, tab) in panel.tabs.iter().enumerate() {
-        let label = tab
-            .read(cx)
-            .label
-            .clone()
-            .unwrap_or_else(|| t!("terminal").to_string());
+        let label = tab.read(cx).title();
         let selected = index == panel.active;
         tabs = tabs.child(
             h_flex()
                 .id(("terminal-tab", index))
                 .flex_none()
-                .h_full()
+                .h(px(28.))
+                .max_w(px(220.))
+                .min_w_0()
                 .items_center()
-                .gap(px(8.))
-                .px(px(8.))
-                .border_r_1()
-                .border_color(border)
-                .bg(if selected { background } else { surface })
-                .text_size(px(12.))
-                .text_color(if selected { foreground } else { secondary })
+                .gap(px(4.))
+                .rounded(px(8.))
+                .when(selected, |row| row.bg(surface))
+                .when(!selected, |row| row.hover(move |style| style.bg(surface)))
                 .cursor_pointer()
-                .child(div().min_w_0().text_ellipsis().child(label))
+                .child(
+                    div()
+                        .min_w_0()
+                        .pl(px(8.))
+                        .pr(px(4.))
+                        .text_ellipsis()
+                        .text_size(px(12.))
+                        .when(selected, |text| {
+                            text.text_color(primary).font_weight(FontWeight::MEDIUM)
+                        })
+                        .when(!selected, |text| text.text_color(secondary))
+                        .child(label),
+                )
                 .child(
                     div()
                         .id(("terminal-close", index))
@@ -821,9 +1156,11 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(4.))
+                        .size(px(20.))
+                        .mr(px(4.))
+                        .rounded(px(6.))
                         .cursor_pointer()
-                        .hover(move |style| style.bg(hover))
+                        .hover(move |style| style.bg(pressed))
                         .child(Icon::new("close").size(12.).color(secondary))
                         .on_click(cx.listener(move |this, _, _window, cx| {
                             cx.stop_propagation();
@@ -841,13 +1178,17 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.terminal.active = index;
+                    this.terminal.reveal_tab.set(Some(index));
                     this.terminal.focus.focus(window, cx);
                     cx.notify();
                 })),
         );
     }
+    if let Some(index) = panel.reveal_tab.take() {
+        panel.tabs_scroll.scroll_to_item(index);
+    }
 
-    let mut controls = h_flex().flex_none().items_center().gap(px(4.)).px(px(8.));
+    let mut controls = h_flex().flex_none().items_center().gap(px(2.)).px(px(8.));
     controls = controls.child(
         div()
             .id("terminal-add")
@@ -855,10 +1196,10 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
             .flex()
             .items_center()
             .justify_center()
-            .p(px(4.))
-            .rounded(px(4.))
+            .size(px(24.))
+            .rounded(px(6.))
             .cursor_pointer()
-            .hover(move |style| style.bg(hover))
+            .hover(move |style| style.bg(surface))
             .child(Icon::new("add").size(14.).color(secondary))
             .on_click(cx.listener(|this, _, window, cx| {
                 add(this, None, cx);
@@ -870,7 +1211,7 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
     let shells = panel.shells.clone();
     let current_shell = active
         .as_ref()
-        .and_then(|tab| tab.read(cx).label.clone())
+        .and_then(|tab| tab.read(cx).shell.clone())
         .or_else(|| shells.first().map(|(name, _)| name.clone()))
         .unwrap_or_else(|| t!("terminal").to_string());
     let observer_entity = cx.entity();
@@ -884,10 +1225,11 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                         .max_w(px(150.))
                         .items_center()
                         .gap(px(4.))
-                        .p(px(4.))
-                        .rounded(px(4.))
+                        .h(px(24.))
+                        .px(px(6.))
+                        .rounded(px(6.))
                         .cursor_pointer()
-                        .hover(move |style| style.bg(hover))
+                        .hover(move |style| style.bg(surface))
                         .child(Icon::new("bash").size(14.).color(secondary))
                         .child(
                             div()
@@ -949,10 +1291,10 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                 .flex()
                 .items_center()
                 .justify_center()
-                .p(px(4.))
-                .rounded(px(4.))
+                .size(px(24.))
+                .rounded(px(6.))
                 .cursor_pointer()
-                .hover(move |style| style.bg(hover))
+                .hover(move |style| style.bg(surface))
                 .child(Icon::new("minimize").size(14.).color(secondary))
                 .on_click(cx.listener(|this, _, _, cx| toggle(this, cx))),
         )
@@ -963,10 +1305,10 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                 .flex()
                 .items_center()
                 .justify_center()
-                .p(px(4.))
-                .rounded(px(4.))
+                .size(px(24.))
+                .rounded(px(6.))
                 .cursor_pointer()
-                .hover(move |style| style.bg(hover))
+                .hover(move |style| style.bg(surface))
                 .child(
                     Icon::new(if panel.maximized {
                         "fullscreen"
@@ -990,7 +1332,7 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
         .items_center()
         .border_b_1()
         .border_color(border)
-        .bg(surface)
+        .bg(background)
         .child(tabs)
         .child(controls);
 
@@ -1005,7 +1347,7 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
         .w_full()
         .px(px(8.))
         .py(px(8.))
-        .bg(background)
+        .bg(terminal_background)
         .font(font)
         .text_size(px(FONT_SIZE))
         .line_height(px(LINE_HEIGHT));
@@ -1025,9 +1367,15 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
         let rows = state.size.screen_lines();
         let has_input = state.input.is_some();
         let cursor = content.cursor;
-        let cursor_row = usize::try_from(cursor.point.line.0).unwrap_or(0);
+        // Displayed rows start at content line `-display_offset`; the cursor is
+        // in content coordinates, so it only shows while its row is in view.
+        let display_offset = i32::try_from(content.display_offset).unwrap_or(0);
+        let cursor_row = usize::try_from(cursor.point.line.0 + display_offset)
+            .ok()
+            .filter(|row| *row < rows);
         let cursor_column = usize::from(cursor.point.column.0);
-        let show_cursor = has_input && cursor.shape != CursorShape::Hidden && cursor_row < rows;
+        let show_cursor =
+            has_input && cursor.shape != CursorShape::Hidden && cursor_row.is_some();
         // Sample the 1s blink from the shared clock instead of using
         // `with_animation`: a repeating animation is pinned to phase zero under
         // the desktop's reduced-motion preference, which left the caret on
@@ -1038,35 +1386,33 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
         if show_cursor && blinking {
             window.request_animation_frame();
         }
-        let cursor_color: Hsla = rgb(CURSOR_COLOR).into();
-        let cursor_accent: Hsla = rgb(CURSOR_ACCENT).into();
+        let cursor_color: Hsla = rgb(palette.cursor).into();
         let mut lines: Vec<Vec<AnyElement>> = (0..rows).map(|_| Vec::new()).collect();
         for cell in content.display_iter {
             if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                 continue;
             }
-            let Ok(line) = usize::try_from(cell.point.line.0) else {
+            let Ok(cell_row) = usize::try_from(cell.point.line.0 + display_offset) else {
                 continue;
             };
-            let Some(row) = lines.get_mut(line) else {
+            let Some(row) = lines.get_mut(cell_row) else {
                 continue;
             };
-            let (mut fg, mut bg) = cell_colors(&cell, content.colors, foreground, background);
+            let (mut fg, mut bg) =
+                cell_colors(&cell, content.colors, terminal_foreground, terminal_background, &palette.ansi);
             if cell.flags.contains(Flags::DIM) {
                 fg = fg.opacity(0.55);
             }
             if content.selection.is_some_and(|range| range.contains(cell.point)) {
-                bg = cx.theme().primary;
-                fg = cx.theme().primary_foreground;
+                bg = rgb(palette.selection).into();
+                fg = rgb(palette.selection_foreground).into();
             }
             let cursor_here = cursor_on
-                && line == cursor_row
+                && Some(cell_row) == cursor_row
                 && usize::from(cell.point.column.0) == cursor_column;
-            // Leave the glyph readable when the cursor covers the whole cell.
-            if cursor_here && cursor.shape == CursorShape::Block {
-                bg = cursor_color;
-                fg = cursor_accent;
-            }
+            // The caret is always a thin beam. Shells such as fish request a
+            // block cursor, and a filled cell over the last typed character
+            // reads like an autocomplete highlight instead of a caret.
             let width = if cell.flags.contains(Flags::WIDE_CHAR) {
                 cell_width * 2.
             } else {
@@ -1081,19 +1427,11 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                     .text_color(fg)
                     .bg(bg)
                     .child(cell_text(&cell))
-                    .when(cursor_here, |view| match cursor.shape {
-                        CursorShape::Beam => view.child(
+                    .when(cursor_here, |view| {
+                        view.child(
                             div().absolute().top_0().bottom_0().left_0()
                                 .w(px(BEAM_WIDTH)).bg(cursor_color),
-                        ),
-                        CursorShape::Underline => view.child(
-                            div().absolute().bottom_0().left_0().right_0()
-                                .h(px(1.)).bg(cursor_color),
-                        ),
-                        CursorShape::HollowBlock => view.child(
-                            div().absolute().inset_0().border_1().border_color(cursor_color),
-                        ),
-                        CursorShape::Block | CursorShape::Hidden => view,
+                        )
                     })
                     .into_any_element(),
             );
@@ -1109,46 +1447,65 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
             .cursor(CursorStyle::IBeam)
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                 if let Some(tab) = this.terminal.tabs.get(this.terminal.active).cloned() {
-                    let scroll = &this.terminal.scroll;
-                    tab.update(cx, |tab, _| {
-                        let (point, side) = selection_position(scroll, event.position, cell_width, tab);
-                        tab.screen.selection = Some(Selection::new(SelectionType::Simple, point, side));
+                    let viewport = this.terminal.scroll.bounds();
+                    // A new click drops the old selection; a drag is what creates
+                    // the next one, so a click never highlights a single cell.
+                    let start = tab.update(cx, |tab, _| {
+                        tab.screen.selection = None;
+                        selection_position(viewport, event.position, cell_width, tab)
                     });
-                    this.terminal.selection_drag = true;
+                    this.terminal.selection_start = Some(start);
                     cx.notify();
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| {
-                this.terminal.selection_drag = false;
+                this.terminal.selection_start = None;
             }))
             .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _, _, _| {
-                this.terminal.selection_drag = false;
+                this.terminal.selection_start = None;
             }))
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                if !this.terminal.selection_drag || event.pressed_button != Some(MouseButton::Left) {
+                let Some((start, start_side)) = this.terminal.selection_start else {
+                    return;
+                };
+                if event.pressed_button != Some(MouseButton::Left) {
                     return;
                 }
                 if let Some(tab) = this.terminal.tabs.get(this.terminal.active).cloned() {
-                    let scroll = &this.terminal.scroll;
-                    let changed = tab.update(cx, |tab, _| {
-                        let (point, side) = selection_position(scroll, event.position, cell_width, tab);
-                        if let Some(selection) = &mut tab.screen.selection {
-                            selection.update(point, side);
-                            true
-                        } else {
-                            false
+                    let viewport = this.terminal.scroll.bounds();
+                    let dragging = tab.update(cx, |tab, _| {
+                        let (point, side) =
+                            selection_position(viewport, event.position, cell_width, tab);
+                        // A press that never leaves its cell is a click, not a
+                        // drag; it must not leave a one-cell block behind.
+                        if tab.screen.selection.is_none() && point == start && side == start_side {
+                            return false;
                         }
+                        let selection = tab.screen.selection.get_or_insert_with(|| {
+                            Selection::new(SelectionType::Simple, start, start_side)
+                        });
+                        selection.update(point, side);
+                        true
                     });
-                    if changed {
-                        this.terminal.follow = false;
+                    if dragging {
                         cx.notify();
                     }
                 }
             }))
-            .on_scroll(cx.listener(|this, _: &ScrollEvent, _, cx| {
-                let follow = this.terminal.near_bottom();
-                if follow != this.terminal.follow {
-                    this.terminal.follow = follow;
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
+                // The wheel walks the VT's retained output. The rows themselves
+                // never scroll: their content is exactly the visible grid, and
+                // history is addressed by the VT display offset. gpui reports an
+                // upward wheel as a positive delta, and `Scroll::Delta(+)` moves
+                // the display further into history.
+                let delta = event.delta.pixel_delta(px(LINE_HEIGHT)).y;
+                if delta == px(0.) {
+                    return;
+                }
+                let lines = ((f32::from(delta) / LINE_HEIGHT).round() as i32).max(1);
+                let lines = if delta > px(0.) { lines } else { -lines };
+                if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
+                    tab.update(cx, |tab, _| tab.screen.scroll_display(Scroll::Delta(lines)));
                     cx.notify();
                 }
             }));
@@ -1164,20 +1521,32 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
         }
         body = body
             .child(rows_view)
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
-                    this.terminal.follow = tab.update(cx, |tab, cx| key(tab, event, cx));
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                // The IME owns typed keys until it commits. Its Enter commits
+                // the preedit instead of running the command, so forwarding the
+                // key here would send a bare CR to the shell.
+                let composing = this
+                    .terminal
+                    .input
+                    .as_ref()
+                    .is_some_and(|input| input.read(cx).composing());
+                if composing {
+                    cx.stop_propagation();
+                    return;
                 }
-                // Follow the cursor after typing, but not when copying a selection.
+                if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
+                    tab.update(cx, |tab, cx| key(tab, event, cx));
+                    // Tab doubles as the window's focus traversal key, so the
+                    // shell would receive it and the caret would then jump to
+                    // the composer. Consuming the default keeps it in the PTY.
+                    if event.keystroke.key == "tab" {
+                        window.prevent_default();
+                    }
+                }
+                // Keys go to the shell, not to a selection.
                 cx.stop_propagation();
                 cx.notify();
             }));
-        // The cursor row is a direct child of the scroll view, so the scroll
-        // handle can keep exactly that line in view instead of jumping to the
-        // bottom of the 24-row grid (which is mostly empty at startup).
-        if panel.follow && cursor_row < rows {
-            panel.scroll.scroll_to_item(cursor_row);
-        }
     }
 
     // Registering here is what lets the platform IME deliver composed text; the

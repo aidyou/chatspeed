@@ -24,6 +24,7 @@ pub fn dialog<K>(
     request: &ConfirmRequest<K>,
     on_accept: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    reserved_right: Pixels,
     cx: &App,
 ) -> AnyElement {
     let border = cx.theme().border;
@@ -50,6 +51,8 @@ pub fn dialog<K>(
         .flex()
         .items_center()
         .justify_center()
+        // A docked ChatHub page is a native view above GPUI; keep its width free.
+        .pr(reserved_right)
         .bg(black().opacity(0.45))
         .child(
             v_flex()

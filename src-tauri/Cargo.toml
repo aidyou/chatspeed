@@ -5,7 +5,9 @@ resolver = "2"
 
 # The workflow window draws its own frame flush with the toplevel, so the
 # component library must not reserve its 20px shadow gutter around the content.
-# `vendor/gpui-component-frameless.patch` is the only local change; re-apply it
+# The same patch also gives dialogs a right inset, so they center left of the
+# docked ChatHub web view instead of sliding under it.
+# `vendor/gpui-component-frameless.patch` records both local changes; re-apply it
 # after copying a new upstream version into `vendor/gpui-component`.
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }

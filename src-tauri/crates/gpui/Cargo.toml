@@ -9,7 +9,7 @@ default = ["fast", "chat-hub"]
 fast = ["gui", "gpui-kit/gpui-fast"]
 webview-prototype = ["fast", "chat-hub"]
 chat-hub = ["gui", "dep:gtk", "dep:wry"]
-gui = ["dep:alacritty_terminal", "dep:gpui-kit", "dep:image", "dep:rodio", "dep:raw-window-handle", "dep:x11rb", "dep:windows-sys", "dep:objc2-app-kit", "dep:tempfile"]
+gui = ["dep:alacritty_terminal", "dep:gpui-kit", "dep:image", "dep:rodio", "dep:raw-window-handle", "dep:x11rb", "dep:windows-sys", "dep:objc2", "dep:objc2-app-kit", "dep:block2", "dep:tempfile"]
 
 [[bin]]
 name = "chatspeed-gpui"
@@ -44,7 +44,9 @@ raw-window-handle = { version = "0.6.2", features = ["std"], optional = true }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"], optional = true }
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"], optional = true }
+block2 = { version = "0.6", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13.2", optional = true }

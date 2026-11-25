@@ -21,3 +21,94 @@
      }
  }
  
+# ---------------------------------------------------------------------------
+# ChatSpeed local change: dialogs avoid a docked native view
+#
+# The workflow window can dock a ChatHub page on the right. That page is a
+# native child view (a wry web view) composited above the GPUI surface, so a
+# dialog centered in the window is painted underneath it and loses its right
+# part. GPUI cannot paint over the child view, so the dialog layer has to
+# center in the width it can actually cover.
+#
+# The change adds one presentation field to `Theme`:
+#
+#   dialog_reserved_right: Pixels   (serde default 0)
+#
+# and makes `Dialog::render` use `viewport_width - dialog_reserved_right` as
+# the centering width: `props.width` is clamped to that area (minus the
+# existing margin) and `x` centers inside it. The backdrop still spans the
+# whole window, and the zero default reproduces the upstream layout exactly,
+# so every other user of the library is unaffected.
+#
+# ChatSpeed publishes the dock width into that field from `Observer::render`
+# (guarded, so a stable width writes nothing) and passes the same width to its
+# own centered overlays (confirm dialog, new-task dialog, composer config
+# panel). The dock width itself is clamped like the Tauri carrier: at least
+# 375px for the page, at least 480px for the workflow UI.
+#
+# Re-apply this section together with the frameless change whenever
+# `vendor/gpui-component` is copied from a new upstream version.
+# ---------------------------------------------------------------------------
+
+diff --git a/src/theme/mod.rs b/src/theme/mod.rs
+index b37e9b7a..40811b43 100644
+--- a/src/theme/mod.rs
++++ b/src/theme/mod.rs
+@@ -201,8 +201,17 @@ pub struct Theme {
+     /// Radius for the large elements, e.g.: Dialog, Notification border radius.
+     pub radius_lg: Pixels,
+     /// Corner radius of client-decorated windows, default 0 (square).
+     pub window_radius: Pixels,
++    /// Width of a native view docked on the right edge that dialogs must avoid.
++    ///
++    /// GPUI paints below a native child view (an embedded web view, say), so a
++    /// dialog centered in the full viewport can slide under it. The application
++    /// publishes the docked width here and [`Dialog`](crate::dialog::Dialog)
++    /// centers in the remaining area. Zero keeps the whole viewport, which is
++    /// how every caller behaves without a dock.
++    #[serde(default)]
++    pub dialog_reserved_right: Pixels,
+     pub shadow: bool,
+     /// Whether focused controls draw a ring outside their border, default true.
+     ///
+     /// The ring is painted outside the element, so any ancestor that clips its
+@@ -799,8 +808,9 @@ impl From<&ThemeColor> for Theme {
+             mono_font_size: px(13.),
+             radius: px(6.),
+             radius_lg: px(8.),
+             window_radius: px(0.),
++            dialog_reserved_right: px(0.),
+             shadow: true,
+             focus_ring: true,
+             scrollbar_mode: ScrollbarMode::default(),
+             notification: NotificationSettings::default(),
+diff --git a/src/dialog/dialog.rs b/src/dialog/dialog.rs
+index b8055105..2d6469ee 100644
+--- a/src/dialog/dialog.rs
++++ b/src/dialog/dialog.rs
+@@ -661,8 +661,14 @@ impl RenderOnce for Dialog {
+             - gpui::size(
+                 window_paddings.left + window_paddings.right,
+                 window_paddings.top + window_paddings.bottom,
+             );
++        // A native view docked on the right edge (an embedded web view) paints
++        // above GPUI, so center in the width the dialog layer can cover. The
++        // backdrop below still spans the whole window. Zero is the default and
++        // keeps the previous full-width centering.
++        let reserved_right = cx.theme().dialog_reserved_right.min(view_size.width);
++        let available_width = (view_size.width - reserved_right).max(px(0.));
+         // The dialog keeps this much of the viewport clear around its edges,
+         // so a small window shrinks the surface instead of letting it run off
+         // the window. A dialog that fits keeps `margin_top` (a tenth of the
+         // viewport by default); an overflowing one is snapped up to this edge
+@@ -686,10 +692,10 @@ impl RenderOnce for Dialog {
+         let travel = motion.distance_short.to_pixels(window.rem_size());
+         let width = self
+             .props
+             .width
+-            .min((view_size.width - margin * 2.).max(px(0.)));
+-        let x = (view_size.width - width) / 2.;
++            .min((available_width - margin * 2.).max(px(0.)));
++        let x = (available_width - width) / 2.;
+         let max_height = (view_size.height - margin * 2. - layer_offset).max(px(0.));
+ 

@@ -54,6 +54,8 @@ pub fn overlay(observer: &Observer, window: &mut Window, cx: &mut Context<Observ
         .flex()
         .items_center()
         .justify_center()
+        // The docked ChatHub page is a native view above GPUI; keep it clear.
+        .pr(observer.dialog_reserved_right())
         .bg(black().opacity(0.32))
         .on_mouse_down(
             MouseButton::Left,
@@ -67,6 +69,8 @@ pub fn overlay(observer: &Observer, window: &mut Window, cx: &mut Context<Observ
                 } else {
                     600.
                 }))
+                // Shrink inside the area left of a docked ChatHub page.
+                .max_w(relative(0.92))
                 .max_h(px(560.))
                 .min_h_0()
                 .rounded(px(12.))

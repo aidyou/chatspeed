@@ -822,6 +822,9 @@ fn quick_actions(
     let auto_approve_plan = observer.agent_bool("autoApprovePlan", "auto_approve_plan", false);
     let auto_compress = observer.auto_compress_enabled();
     let final_audit = observer.final_audit_enabled();
+    // The runtime ignores the toggle when no final-reviewer child agent can run
+    // it; the row has to read as disabled instead of swallowing the click.
+    let can_final_audit = observer.can_toggle_final_audit();
     let active_count = usize::from(planning)
         + usize::from(planning && auto_approve_plan)
         + usize::from(final_audit)
@@ -1031,7 +1034,7 @@ fn quick_actions(
                     "check-circle",
                     t!("final_audit_label").to_string(),
                     t!("final_audit_hint").to_string(),
-                    MenuRowStyle::new(colors, final_audit, false),
+                    MenuRowStyle::new(colors, final_audit, false).disabled(!can_final_audit),
                     toggle_final_audit,
                 ))
                 .child(menu_row(

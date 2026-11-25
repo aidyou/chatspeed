@@ -10,6 +10,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 use gpui_kit::{canvas, div, prelude::*, AnyElement, Context, Window};
@@ -18,6 +19,54 @@ use raw_window_handle::HasWindowHandle;
 use wry::{NewWindowResponse, Rect, WebView, WebViewBuilder};
 
 pub(crate) const DOCK_WIDTH: f32 = 600.;
+/// Narrowest docked page. 375 is the logical width of a common phone, so a page
+/// still renders its mobile layout when the splitter is dragged all the way in.
+pub(crate) const DOCK_MIN_WIDTH: f32 = 375.;
+/// Width the workflow UI always keeps beside the page, mirroring the Tauri
+/// carrier's `CHAT_HUB_MIN_HOST_WIDTH`.
+pub(crate) const DOCK_MIN_HOST_WIDTH: f32 = 480.;
+/// How long the docked column takes to slide in or out.
+const SLIDE: Duration = Duration::from_millis(180);
+
+/// Clamps a requested page width the way the Tauri carrier does.
+pub(crate) fn clamp_width(window_width: f32, requested: f32) -> f32 {
+    if !window_width.is_finite() || !requested.is_finite() {
+        return DOCK_WIDTH;
+    }
+    let maximum = (window_width - DOCK_MIN_HOST_WIDTH).max(DOCK_MIN_WIDTH);
+    requested.clamp(DOCK_MIN_WIDTH, maximum)
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn dock_width_keeps_a_phone_page_and_the_workflow_ui_visible() {
+    assert_eq!(clamp_width(1600., 900.), 900.);
+    assert_eq!(clamp_width(1600., 2000.), 1120.);
+    assert_eq!(clamp_width(1600., 100.), DOCK_MIN_WIDTH);
+    // A narrow window cannot honor both limits; the page floor wins.
+    assert_eq!(clamp_width(700., 900.), DOCK_MIN_WIDTH);
+    assert_eq!(clamp_width(f32::NAN, 640.), DOCK_WIDTH);
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn dock_slide_eases_from_closed_to_open() {
+    let running = Reveal {
+        started: Instant::now(),
+        from: 0.,
+        to: 600.,
+        closing: false,
+    };
+    assert!((0. ..=600.).contains(&running.width()));
+    let landed = Reveal {
+        started: Instant::now() - SLIDE,
+        from: 0.,
+        to: 600.,
+        closing: false,
+    };
+    assert!(landed.done());
+    assert_eq!(landed.width(), 600.);
+}
 
 // Wry's navigation handler cannot distinguish a link click from a redirect.
 // Route external anchors through the native new-window handler instead, without
@@ -70,6 +119,9 @@ pub(crate) fn install_edit_menu(cx: &mut gpui_kit::App) {
         cx.stop_propagation();
         paste_into_webview(&view);
     }).detach();
+    // The menu wins the key equivalent before GPUI sees it, so Cmd+V needs the
+    // native monitor installed above to reach the page with the full pasteboard.
+    install_paste_monitor();
 }
 
 #[cfg(target_os = "macos")]
@@ -108,6 +160,122 @@ fn paste_into_webview(view: &WebView) {
         // SAFETY: AppKit resolved this target for the same selector and sender.
         unsafe { app.sendAction_to_from(action, Some(&target), Some(&sender)) };
     }
+}
+
+/// Intercepts Cmd+V before AppKit's menu handles it, while a docked page owns
+/// the keyboard.
+///
+/// The menu key equivalent runs before the window sees the key, so Cmd+V went
+/// through the app's GPUI Paste action: the pasteboard stayed inside GPUI focus
+/// and the page never received it, which is why a screenshot only pasted from
+/// the page's own context menu. A local event monitor runs before dispatch, so
+/// the page can be given the native `paste:` selector with the original
+/// pasteboard. Every other case (GPUI inputs, dialogs, other shortcuts) is left
+/// to the menu unchanged.
+#[cfg(target_os = "macos")]
+pub(crate) fn install_paste_monitor() {
+    use block2::RcBlock;
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{NSEvent, NSEventMask};
+    use std::cell::RefCell;
+    use std::ptr::NonNull;
+
+    thread_local! {
+        /// AppKit calls the block until the monitor is removed; the token has to
+        /// outlive the install call for the whole app run.
+        static PASTE_MONITOR: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
+    }
+
+    PASTE_MONITOR.with(|slot| {
+        if slot.borrow().is_some() {
+            return;
+        }
+        let handler = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+            // SAFETY: AppKit passes the key event this monitor was installed for.
+            let event_ref = unsafe { event.as_ref() };
+            if is_command_v(event_ref) && paste_into_focused_webview() {
+                // The page consumed the paste; the menu must not also run it.
+                return std::ptr::null_mut();
+            }
+            event.as_ptr()
+        });
+        // SAFETY: The mask and block are valid, and app setup runs on the main thread.
+        let monitor = unsafe {
+            NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &handler)
+        };
+        *slot.borrow_mut() = monitor;
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn is_command_v(event: &objc2_app_kit::NSEvent) -> bool {
+    use objc2_app_kit::NSEventModifierFlags;
+
+    let flags = event.modifierFlags();
+    if !flags.contains(NSEventModifierFlags::Command) {
+        return false;
+    }
+    let blocking = NSEventModifierFlags::Control
+        | NSEventModifierFlags::Option
+        | NSEventModifierFlags::Shift;
+    if flags.intersects(blocking) {
+        return false;
+    }
+    event
+        .charactersIgnoringModifiers()
+        .is_some_and(|characters| characters.to_string().eq_ignore_ascii_case("v"))
+}
+
+/// Sends the native `paste:` selector to the focused web page.
+///
+/// This is the path the page's context menu uses: WebKit reads the original
+/// pasteboard, so screenshots paste, while a GPUI Paste action can only feed
+/// GPUI elements. Returns false when the key window's first responder is not
+/// inside a web view or refuses the action, so the menu path still runs.
+#[cfg(target_os = "macos")]
+fn paste_into_focused_webview() -> bool {
+    use objc2::runtime::AnyClass;
+    use objc2_app_kit::{NSApplication, NSView};
+
+    let Some(marker) = objc2::MainThreadMarker::new() else {
+        return false;
+    };
+    let Some(webview) = AnyClass::get(c"WKWebView") else {
+        return false;
+    };
+    let app = NSApplication::sharedApplication(marker);
+    let Some(window) = app.keyWindow() else { return false; };
+    let Some(responder) = window.firstResponder() else { return false; };
+    let Ok(view) = responder.clone().downcast::<NSView>() else { return false; };
+    if !belongs_to_webview(&view, webview) {
+        return false;
+    }
+    // SAFETY: `paste:` is AppKit's own responder action and the responder is
+    // the key window's current first responder.
+    unsafe { app.sendAction_to_from(objc2::sel!(paste:), Some(&responder), None) }
+}
+
+#[cfg(target_os = "macos")]
+fn belongs_to_webview(
+    view: &objc2_app_kit::NSView,
+    webview: &objc2::runtime::AnyClass,
+) -> bool {
+    use objc2::runtime::NSObjectProtocol;
+
+    if view.isKindOfClass(webview) {
+        return true;
+    }
+    // SAFETY: Walking the superview chain of the key window's first responder
+    // is the documented way to find the view that hosts it.
+    let mut parent = unsafe { view.superview() };
+    while let Some(current) = parent {
+        if current.isKindOfClass(webview) {
+            return true;
+        }
+        parent = unsafe { current.superview() };
+    }
+    false
 }
 
 #[cfg(target_os = "macos")]
@@ -243,11 +411,46 @@ struct Page {
     applied_bounds: Option<Rect>,
 }
 
+/// One slide of the docked column, sampled from the monotonic clock.
+///
+/// `with_animation` is avoided for the reason the loading spinner avoids it:
+/// the animation element renders at phase zero under the desktop's
+/// reduced-motion preference, and gpui-fast only repaints an animated layer
+/// while a frame is requested during the frame that changes it.
+struct Reveal {
+    started: Instant,
+    from: f32,
+    to: f32,
+    /// A closing slide hides the native page once the column reaches zero.
+    closing: bool,
+}
+
+impl Reveal {
+    fn progress(&self) -> f32 {
+        let elapsed = self.started.elapsed().as_secs_f32() / SLIDE.as_secs_f32();
+        let t = elapsed.clamp(0., 1.);
+        // Ease-out cubic: quick departure, settled arrival.
+        1. - (1. - t).powi(3)
+    }
+
+    fn width(&self) -> f32 {
+        self.from + (self.to - self.from) * self.progress()
+    }
+
+    fn done(&self) -> bool {
+        self.started.elapsed() >= SLIDE
+    }
+}
+
 /// The docked column: one native page per chat site, at most one visible.
 pub(crate) struct Dock {
     pages: Vec<Page>,
     active: Option<i64>,
     visible: bool,
+    /// User-chosen width of the docked column; the splitter writes it.
+    width: f32,
+    /// Running open or close slide of the column, `None` when it is at rest.
+    reveal: Option<Reveal>,
     growth: Option<(gpui_kit::Pixels, gpui_kit::Pixels)>,
     /// The page paints this before the site has loaded, instead of black.
     background: wry::RGBA,
@@ -341,7 +544,9 @@ impl Dock {
         let dock = Self {
             pages: Vec::new(),
             active: None,
-            visible: true,
+            visible: false,
+            width: DOCK_WIDTH,
+            reveal: None,
             growth: None,
             background,
             proxy,
@@ -369,6 +574,84 @@ impl Dock {
 
     pub(crate) fn visible(&self) -> bool {
         self.visible && self.active.is_some()
+    }
+
+    /// Width of the docked column, already clamped when it was last set.
+    ///
+    /// This is the width the slide is heading for; `column_width` is the width
+    /// the frame actually gives it.
+    pub(crate) fn width(&self) -> f32 {
+        self.width
+    }
+
+    /// Width the column takes in this frame.
+    pub(crate) fn column_width(&self) -> f32 {
+        match (&self.reveal, self.visible) {
+            (Some(reveal), _) => reveal.width(),
+            (None, true) => self.width,
+            (None, false) => 0.,
+        }
+    }
+
+    /// Whether the column still needs frames to finish its slide.
+    pub(crate) fn sliding(&self) -> bool {
+        self.reveal.is_some()
+    }
+
+    /// Window width the slide asks for, so the workflow column keeps its size
+    /// while the page grows or shrinks. `None` once the window is already there.
+    ///
+    /// The share is taken from the column itself, not from the animation
+    /// direction, so a slide interrupted halfway resumes where it stopped.
+    pub(crate) fn slide_window_width(&self, window_width: f32) -> Option<f32> {
+        let (base, requested) = self.growth?;
+        if self.reveal.is_none() {
+            return None;
+        }
+        let share = (self.column_width() / self.width.max(1.)).clamp(0., 1.);
+        let target = f32::from(base) + f32::from(requested) * share;
+        ((target - window_width).abs() >= 1.).then_some(target)
+    }
+
+    pub(crate) fn set_width(&mut self, width: f32) {
+        self.width = width;
+        // A splitter drag during the opening slide retargets it instead of
+        // snapping once the slide lands on the old width.
+        if let Some(reveal) = self.reveal.as_mut().filter(|reveal| !reveal.closing) {
+            reveal.to = width;
+        }
+    }
+
+    /// Starts a slide from wherever the column is now, so an interrupted
+    /// animation continues from its current width.
+    fn slide_to(&mut self, to: f32, closing: bool) {
+        self.reveal = Some(Reveal {
+            started: Instant::now(),
+            from: self.column_width(),
+            to,
+            closing,
+        });
+    }
+
+    /// Samples the running slide. Returns true when it just finished, so the
+    /// frame can be laid out and painted with the column already gone.
+    pub(crate) fn advance_reveal(&mut self) -> bool {
+        let Some(closing) = self
+            .reveal
+            .as_ref()
+            .filter(|reveal| reveal.done())
+            .map(|reveal| reveal.closing)
+        else {
+            return false;
+        };
+        self.reveal = None;
+        if closing {
+            self.visible = false;
+            // The slide already handed the window width back frame by frame.
+            self.growth = None;
+            self.sync_visibility();
+        }
+        true
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -408,6 +691,18 @@ impl Dock {
             });
         }
         self.active = Some(site.id);
+        // A page opened while the column is still closing slides back out from
+        // wherever the close got to.
+        let opening = !self.visible
+            || self
+                .reveal
+                .as_ref()
+                .is_some_and(|reveal| reveal.closing);
+        // The slide starts before the dock claims its column, so a hidden dock
+        // slides out from zero instead of from the width it is heading to.
+        if opening {
+            self.slide_to(self.width, false);
+        }
         self.visible = true;
         if self.growth.is_none() {
             self.expand(window, cx);
@@ -423,12 +718,27 @@ impl Dock {
         self.sync_visibility();
     }
 
-    pub(crate) fn toggle_visible(&mut self) {
+    /// Flips the dock and reports whether the column is opening.
+    ///
+    /// A closing slide already reads as hidden, so a second press reopens it
+    /// instead of hiding it twice.
+    pub(crate) fn toggle_visible(&mut self) -> bool {
         if self.active.is_none() {
-            return;
+            return false;
         }
-        self.visible = !self.visible;
-        self.sync_visibility();
+        let hidden = self
+            .reveal
+            .as_ref()
+            .map_or(!self.visible, |reveal| reveal.closing);
+        if hidden {
+            self.slide_to(self.width, false);
+            self.visible = true;
+            self.sync_visibility();
+            true
+        } else {
+            self.slide_to(0., true);
+            false
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -466,6 +776,8 @@ impl Dock {
             self.active = self.pages.last().map(|page| page.site.id);
         }
         if self.pages.is_empty() {
+            // The last page is gone, so there is nothing left to slide out.
+            self.reveal = None;
             self.visible = false;
         }
         self.sync_visibility();
@@ -598,10 +910,15 @@ impl Dock {
         let area = display.visible_bounds();
         let growth = (area.origin.x + area.size.width - bounds.origin.x - bounds.size.width)
             .max(px(0.))
-            .min(px(DOCK_WIDTH));
+            // Do not grow the window past the width the dock actually uses.
+            .min(px(self.width));
         if growth > px(0.) {
             self.growth = Some((bounds.size.width, growth));
-            window.resize(size(bounds.size.width + growth, bounds.size.height));
+            // A running slide grows the window frame by frame so the workflow
+            // column keeps its size; otherwise hand the space over now.
+            if self.reveal.is_none() {
+                window.resize(size(bounds.size.width + growth, bounds.size.height));
+            }
         }
     }
 
@@ -613,6 +930,11 @@ impl Dock {
 
     /// Hands back the width the dock took from the screen.
     pub(crate) fn release(&mut self, window: &mut Window) {
+        // A closing slide gives the width back frame by frame and forgets the
+        // growth when it finishes.
+        if self.reveal.is_some() {
+            return;
+        }
         let Some((base, requested)) = self.growth else {
             return;
         };
@@ -633,7 +955,7 @@ impl Dock {
     }
 
     pub(crate) fn needs_release(&self) -> bool {
-        self.is_empty() && self.growth.is_some()
+        self.is_empty() && self.growth.is_some() && self.reveal.is_none()
     }
 
     #[cfg(target_os = "linux")]
@@ -683,6 +1005,7 @@ impl Dock {
     /// The active page's canvas; the other pages stay hidden until selected.
     #[cfg(target_os = "linux")]
     pub(crate) fn dock(&self, cx: &Context<crate::Observer>) -> AnyElement {
+        let sliding = self.reveal.is_some();
         let Some(page) = self
             .pages
             .iter()
@@ -696,6 +1019,11 @@ impl Dock {
         canvas(
             |_, _, _| (),
             move |bounds, (), window, cx| {
+                if sliding {
+                    // gpui-fast keeps an animated layer repainting only while a
+                    // frame is requested during paint, like the loading spinner.
+                    window.request_animation_frame();
+                }
                 let Some(bounds_cell) = bounds_cell.upgrade() else {
                     return;
                 };
@@ -724,6 +1052,7 @@ impl Dock {
 
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn dock(&self, _: &Context<crate::Observer>) -> AnyElement {
+        let sliding = self.reveal.is_some();
         let active = self.active.and_then(|id| {
             let page = self.pages.iter().find(|page| page.site.id == id)?;
             Some((Rc::downgrade(page.view.as_ref()?), page.bounds.clone()))
@@ -733,7 +1062,12 @@ impl Dock {
         };
         canvas(
             |_, _, _| (),
-            move |bounds, (), _, _| {
+            move |bounds, (), window, _| {
+                if sliding {
+                    // gpui-fast keeps an animated layer repainting only while a
+                    // frame is requested during paint, like the loading spinner.
+                    window.request_animation_frame();
+                }
                 let Some(view) = view.upgrade() else {
                     return;
                 };

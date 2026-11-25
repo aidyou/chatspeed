@@ -662,6 +662,12 @@ impl RenderOnce for Dialog {
                 window_paddings.left + window_paddings.right,
                 window_paddings.top + window_paddings.bottom,
             );
+        // A native view docked on the right edge (an embedded web view) paints
+        // above GPUI, so center in the width the dialog layer can cover. The
+        // backdrop below still spans the whole window. Zero is the default and
+        // keeps the previous full-width centering.
+        let reserved_right = cx.theme().dialog_reserved_right.min(view_size.width);
+        let available_width = (view_size.width - reserved_right).max(px(0.));
         // The dialog keeps this much of the viewport clear around its edges,
         // so a small window shrinks the surface instead of letting it run off
         // the window. A dialog that fits keeps `margin_top` (a tenth of the
@@ -687,8 +693,8 @@ impl RenderOnce for Dialog {
         let width = self
             .props
             .width
-            .min((view_size.width - margin * 2.).max(px(0.)));
-        let x = (view_size.width - width) / 2.;
+            .min((available_width - margin * 2.).max(px(0.)));
+        let x = (available_width - width) / 2.;
         let max_height = (view_size.height - margin * 2. - layer_offset).max(px(0.));
 
         let base_size = window.text_style().font_size;

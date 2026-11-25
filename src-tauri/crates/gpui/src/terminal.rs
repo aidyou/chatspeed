@@ -26,10 +26,11 @@ pub async fn run(
     options: Options,
     cwd: Option<String>,
     shell_path: Option<String>,
+    size: (u16, u16),
     mut input: mpsc::Receiver<Input>,
     output: mpsc::Sender<Output>,
 ) {
-    let result = connect(&options, cwd, shell_path, &mut input, &output).await;
+    let result = connect(&options, cwd, shell_path, size, &mut input, &output).await;
     if result.is_err() {
         let _ = output.send(Output::Lost).await;
     }
@@ -39,6 +40,7 @@ async fn connect(
     options: &Options,
     cwd: Option<String>,
     shell_path: Option<String>,
+    size: (u16, u16),
     input: &mut mpsc::Receiver<Input>,
     output: &mpsc::Sender<Output>,
 ) -> Result<(), ()> {
@@ -65,7 +67,7 @@ async fn connect(
         let _ = output.send(Output::Shells(shells.iter().map(|shell| (shell.name.clone(), shell.path.clone())).collect())).await;
         if input.is_closed() { return Ok(()); }
         if shell_path.as_ref().is_some_and(|path| !shells.iter().any(|shell| &shell.path == path)) { return Err(()); }
-        let tab = client.terminal_create(&id, &proof, &TerminalCreateRequest { cwd, cols: Some(80), rows: Some(24), shell_path }).await.map_err(|_| ())?;
+        let tab = client.terminal_create(&id, &proof, &TerminalCreateRequest { cwd, cols: Some(size.0), rows: Some(size.1), shell_path }).await.map_err(|_| ())?;
         let session = tab.session_id;
         let result = async {
             let mut stream = tokio::time::timeout(Duration::from_secs(5), client.terminal_stream(&id, &proof, &session)).await.map_err(|_| ())?.map_err(|_| ())?;

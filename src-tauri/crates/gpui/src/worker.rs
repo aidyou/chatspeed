@@ -55,6 +55,7 @@ pub struct Worker {
     pub commands: mpsc::Sender<Command>,
     pub updates: mpsc::Receiver<Update>,
     sidebar_collapsed: Option<watch::Sender<Option<bool>>>,
+    chat_hub_width: Option<watch::Sender<Option<f32>>>,
     geometry: Option<watch::Sender<Vec<(&'static str, Value)>>>,
     child: watch::Sender<Option<(u64, u64, String)>>,
     stop: watch::Sender<bool>,
@@ -75,6 +76,13 @@ impl Worker {
         self.sidebar_collapsed.as_ref().is_some_and(|tx| tx.send(Some(collapsed)).is_ok())
     }
 
+    /// Persists the splitter width after a drag ends.
+    pub fn save_chat_hub_width(&self, width: f32) -> bool {
+        self.chat_hub_width
+            .as_ref()
+            .is_some_and(|tx| tx.send(Some(width)).is_ok())
+    }
+
     pub fn start(options: Options) -> std::io::Result<Self> {
         if let Some(path) = &options.metrics {
             crate::metrics::Metrics::prepare(path)?;
@@ -89,11 +97,13 @@ impl Worker {
         let (stop, mut stopped) = watch::channel(false);
         let stop_on_exit = stop.clone();
         let (sidebar_collapsed, mut sidebar) = watch::channel(None);
+        let (chat_hub_width, mut chat_hub_width_rx) = watch::channel::<Option<f32>>(None);
         let (geometry, mut bounds) = watch::channel(Vec::<(&'static str, Value)>::new());
         let (child, mut child_target) = watch::channel::<Option<(u64, u64, String)>>(None);
         let child_options = options.clone();
         let child_tx = tx.clone();
         let geometry_options = options.clone();
+        let width_options = options.clone();
         let prefs_options = options.clone();
         let prefs_tx = tx.clone();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -131,6 +141,28 @@ impl Worker {
                                     )).await;
                                 }
                             }
+                        }
+                    });
+                    let width_writer = tokio::spawn(async move {
+                        while chat_hub_width_rx.changed().await.is_ok() {
+                            // The splitter reports its final width once per drag,
+                            // so this writes one row instead of one per frame.
+                            let value = *chat_hub_width_rx.borrow_and_update();
+                            let Some(width) = value.filter(|_| !width_options.demo) else {
+                                continue;
+                            };
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs(2),
+                                native::data_command(
+                                    &width_options,
+                                    "set_config",
+                                    json!({
+                                        "key": crate::prefs::CHAT_HUB_WIDTH_KEY,
+                                        "value": f64::from(width),
+                                    }),
+                                ),
+                            )
+                            .await;
                         }
                     });
                     let mut child_stopped = stopped.clone();
@@ -172,6 +204,7 @@ impl Worker {
                     let _ = child_follower.await;
                     let _ = writer.await;
                     let _ = geometry_writer.await;
+                    let _ = width_writer.await;
                 });
                 // Runtime drop cancels every selected-session and list task as well.
             })?;
@@ -179,6 +212,7 @@ impl Worker {
             commands,
             updates,
             sidebar_collapsed: Some(sidebar_collapsed),
+            chat_hub_width: Some(chat_hub_width),
             geometry: Some(geometry),
             child,
             stop,
@@ -190,6 +224,7 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.sidebar_collapsed.take();
+        self.chat_hub_width.take();
         self.geometry.take();
         let _ = self.stop.send(true);
         if let Some(thread) = self.thread.take() {

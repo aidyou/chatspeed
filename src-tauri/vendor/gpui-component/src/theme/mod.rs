@@ -202,6 +202,15 @@ pub struct Theme {
     pub radius_lg: Pixels,
     /// Corner radius of client-decorated windows, default 0 (square).
     pub window_radius: Pixels,
+    /// Width of a native view docked on the right edge that dialogs must avoid.
+    ///
+    /// GPUI paints below a native child view (an embedded web view, say), so a
+    /// dialog centered in the full viewport can slide under it. The application
+    /// publishes the docked width here and [`Dialog`](crate::dialog::Dialog)
+    /// centers in the remaining area. Zero keeps the whole viewport, which is
+    /// how every caller behaves without a dock.
+    #[serde(default)]
+    pub dialog_reserved_right: Pixels,
     pub shadow: bool,
     /// Whether focused controls draw a ring outside their border, default true.
     ///
@@ -800,6 +809,7 @@ impl From<&ThemeColor> for Theme {
             radius: px(6.),
             radius_lg: px(8.),
             window_radius: px(0.),
+            dialog_reserved_right: px(0.),
             shadow: true,
             focus_ring: true,
             scrollbar_mode: ScrollbarMode::default(),

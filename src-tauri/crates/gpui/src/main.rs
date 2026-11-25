@@ -22,6 +22,7 @@ use chatspeed_gpui::{
     worker::Worker,
 };
 use clap::Parser;
+use gpui_kit::base::{GlobalState, TextSelection};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     component::{
@@ -585,6 +586,14 @@ struct Observer {
     last_tick: Instant,
     /// `theme` runtime setting: `system`, `light`, or `dark`.
     theme_setting: String,
+    /// `terminal_color_scheme`: `None` follows the window, else forces the
+    /// terminal skin's light or dark palette.
+    terminal_color_dark: Option<bool>,
+    /// `terminal_output_line_limit`: scrollback lines each tab retains.
+    terminal_output_limit: usize,
+    /// `terminal_default_shell`: a configured shell path, or `None` for the
+    /// runtime's default.
+    terminal_default_shell: Option<String>,
     /// Last appearance the theme was resolved against, to catch system switches.
     appearance_dark: bool,
     applied_primary: u32,
@@ -642,7 +651,15 @@ struct Observer {
     /// Draggable width of the expanded panel, matching Vue's 200px floor.
     sidebar_width: f32,
     /// Pointer that started dragging the sidebar edge, while it is held.
-    sidebar_drag: Option<SidebarDrag>,
+    sidebar_drag: Option<ResizeDrag>,
+    /// ChatHub splitter drag, when the docked page is being resized.
+    dock_drag: Option<ResizeDrag>,
+    /// Set once this session moved the ChatHub splitter, so a delayed config
+    /// poll cannot put the stored width back over the live one.
+    dock_width_touched: bool,
+    /// Remembered splitter width. The dock is created lazily, so this holds the
+    /// restored value until a page opens and the layout clamp has run.
+    chat_hub_width: f32,
     show_menu_button: bool,
     sound_enabled: BTreeSet<Chime>,
     sound_pending: BTreeMap<Chime, bool>,
@@ -748,6 +765,10 @@ struct Observer {
     /// The `@` query the file panel answered, so a stale list is never shown.
     suggestions: ui::composer::suggestions::State,
     _completion_keys: Subscription,
+    /// Window-wide terminal shortcuts. Registered as keystroke interceptors
+    /// because element handlers only run along the focused element's path, and
+    /// the window can have no focused element at all.
+    _terminal_keys: Subscription,
     file_results: Vec<serde_json::Value>,
     task: Task<()>,
 }
@@ -759,9 +780,10 @@ struct CopyFlash {
     at: Instant,
 }
 
-/// Sidebar edge drag: where the pointer went down and the width it started at.
+/// Horizontal resize drag: where the pointer went down and the width it started
+/// at. Shared by the sidebar edge and the ChatHub splitter.
 #[derive(Clone, Copy)]
-struct SidebarDrag {
+struct ResizeDrag {
     start_x: Pixels,
     start_width: f32,
 }
@@ -823,7 +845,9 @@ impl Observer {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder(t!("composer_placeholder").to_string())
-                .auto_grow(1, 10)
+                // Two visible lines at rest: with the footer row kept separate,
+                // the box settles around 100px instead of collapsing to one line.
+                .auto_grow(2, 10)
         });
         // Enter sends, like the Vue input; Shift+Enter keeps the newline the
         // textarea just inserted.
@@ -903,6 +927,14 @@ impl Observer {
                 }
             });
         });
+        let terminal_keys = {
+            let owner = cx.entity().downgrade();
+            cx.intercept_keystrokes(move |event, window, cx| {
+                let _ = owner.update(cx, |this, cx| {
+                    ui::terminal::shortcut(this, &event.keystroke, window, cx);
+                });
+            })
+        };
         let session_search =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("search_sessions").to_string()));
         let skill_search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("search_skills").to_string()));
@@ -1011,6 +1043,9 @@ impl Observer {
             last_metrics: Instant::now(),
             last_tick: Instant::now(),
             theme_setting: "system".into(),
+            terminal_color_dark: None,
+            terminal_output_limit: 2000,
+            terminal_default_shell: None,
             appearance_dark: false,
             applied_primary: DEFAULT_PRIMARY,
             palette_applied: false,
@@ -1059,6 +1094,9 @@ impl Observer {
             session_root_filter: None,
             sidebar_width: ui::SIDEBAR_WIDTH,
             sidebar_drag: None,
+            dock_drag: None,
+            dock_width_touched: false,
+            chat_hub_width: chat_hub::DOCK_WIDTH,
             show_menu_button: true,
             sound_enabled: BTreeSet::new(),
             sound_pending: BTreeMap::new(),
@@ -1131,6 +1169,7 @@ impl Observer {
             attachments: Vec::new(),
             suggestions: Default::default(),
             _completion_keys: completion_keys,
+            _terminal_keys: terminal_keys,
             file_results: Vec::new(),
             task,
         };
@@ -1336,7 +1375,7 @@ impl Observer {
     }
 
     fn begin_sidebar_drag(&mut self, start_x: Pixels, cx: &mut Context<Self>) {
-        self.sidebar_drag = Some(SidebarDrag {
+        self.sidebar_drag = Some(ResizeDrag {
             start_x,
             start_width: self.sidebar_width,
         });
@@ -2287,6 +2326,8 @@ impl Observer {
             .flex()
             .items_center()
             .justify_center()
+            // Keep the docked ChatHub page's native view clear of the card.
+            .pr(self.dialog_reserved_right())
             .bg(gpui_kit::black().opacity(0.32))
             .on_mouse_down(
                 MouseButton::Left,
@@ -2296,6 +2337,8 @@ impl Observer {
                 v_flex()
                     .id("new-task-dialog")
                     .w(px(420.))
+                    // Shrink inside the area left of a docked ChatHub page.
+                    .max_w(relative(0.9))
                     .min_w_0()
                     .gap_3()
                     .p_4()
@@ -3761,6 +3804,30 @@ impl Observer {
         self.send_with_shift = config["send_message_key"].as_str() == Some("Shift+Enter");
         self.show_menu_button = config["show_menu_button"].as_bool().unwrap_or(true);
         self.show_today_cost = config["show_today_cost_stats"].as_bool().unwrap_or(false);
+        // Terminal settings mirror General → Terminal in the web settings.
+        self.terminal_color_dark = match config["terminal_color_scheme"].as_str() {
+            Some("light") => Some(false),
+            Some("dark") => Some(true),
+            _ => None,
+        };
+        self.terminal_output_limit = config["terminal_output_line_limit"]
+            .as_u64()
+            .map_or(2000, |limit| (limit as usize).clamp(100, 20_000));
+        self.terminal_default_shell = config["terminal_default_shell"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "system")
+            .map(str::to_owned);
+        // Restore the splitter width until this session has dragged it, so a poll
+        // that was in flight during a drag cannot revert the live width.
+        if !self.dock_width_touched {
+            if let Some(width) = config[prefs::CHAT_HUB_WIDTH_KEY].as_f64() {
+                self.chat_hub_width = width as f32;
+                if let Some(dock) = self.chat_hub.as_mut() {
+                    dock.set_width(self.chat_hub_width);
+                }
+            }
+        }
         if !self.show_today_cost {
             self.today_cost = 0.;
         }
@@ -3928,6 +3995,19 @@ impl Observer {
         (max.y + offset.y) <= px(60.)
     }
 
+    /// Width the docked ChatHub page covers on the right edge.
+    ///
+    /// The page is a native child view, so GPUI cannot paint over it. Dialogs,
+    /// centered overlays and the kit's dialog layer keep this much room free
+    /// instead of sliding under the page.
+    fn dialog_reserved_right(&self) -> Pixels {
+        match self.chat_hub.as_ref().filter(|dock| dock.visible()) {
+            // The column width follows the slide, so dialogs re-centre with it.
+            Some(dock) => px(dock.column_width()),
+            None => px(0.),
+        }
+    }
+
     /// The centre column the status panel may cover: everything right of the
     /// sidebar and left of the docked ChatHub page, below the titlebar.
     fn status_panel_area(&self, window: &Window) -> Option<Bounds<Pixels>> {
@@ -3938,15 +4018,16 @@ impl Observer {
             px(ui::RAIL_WIDTH + self.sidebar_width + 4.)
         };
         #[cfg(feature = "chat-hub")]
-        let dock = if self
+        let dock = self
             .chat_hub
             .as_ref()
-            .is_some_and(|dock| dock.visible())
-        {
-            (viewport.width * 0.45).min(px(chat_hub::DOCK_WIDTH))
-        } else {
-            px(0.)
-        };
+            .filter(|dock| dock.visible())
+            .map_or(px(0.), |dock| {
+                px(chat_hub::clamp_width(
+                    f32::from(viewport.width),
+                    dock.column_width(),
+                ))
+            });
         #[cfg(not(feature = "chat-hub"))]
         let dock = px(0.);
         let width = (viewport.width - sidebar - dock).max(px(0.));
@@ -4012,7 +4093,12 @@ impl Observer {
                 255,
             );
             match chat_hub::Dock::new(cx, background, self.chat_hub_proxy.clone()) {
-                Ok(dock) => self.chat_hub = Some(dock),
+                Ok(mut dock) => {
+                    // The dock is created on demand; start it at the width the
+                    // splitter last recorded, not the built-in default.
+                    dock.set_width(self.chat_hub_width);
+                    self.chat_hub = Some(dock);
+                }
                 Err(error) => {
                     self.show_toast(ToastKind::Error, error, cx);
                     return;
@@ -4052,10 +4138,9 @@ impl Observer {
         let Some(dock) = self.chat_hub.as_mut() else {
             return;
         };
-        dock.toggle_visible();
-        // Hiding the page hands its width back to the screen so the transcript
-        // keeps its size instead of stretching into the freed column.
-        if dock.visible() {
+        // Opening hands the page room from the screen; closing gives it back.
+        // Both follow the column slide instead of resizing in one step.
+        if dock.toggle_visible() {
             dock.expand(window, cx);
         } else {
             dock.release(window);
@@ -5927,6 +6012,47 @@ impl Render for Observer {
             });
         }
 
+        // The ChatHub splitter owns the press; like the sidebar edge, the frame
+        // follows the pointer while the button stays held.
+        if let Some(drag) = self.dock_drag {
+            let entity = cx.entity().downgrade();
+            window.on_mouse_event(
+                move |event: &MouseMoveEvent, _phase, window, cx: &mut App| {
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        return;
+                    }
+                    let window_width = f32::from(window.viewport_size().width);
+                    let _ = entity.update(cx, |this, cx| {
+                        let Some(dock) = this.chat_hub.as_mut() else {
+                            return;
+                        };
+                        let width = chat_hub::clamp_width(
+                            window_width,
+                            drag.start_width - f32::from(event.position.x - drag.start_x),
+                        );
+                        this.chat_hub_width = width;
+                        if (dock.width() - width).abs() > 0.5 {
+                            dock.set_width(width);
+                            cx.notify();
+                        }
+                    });
+                },
+            );
+            let entity = cx.entity().downgrade();
+            window.on_mouse_event(move |_: &MouseUpEvent, _phase, _window, cx: &mut App| {
+                let _ = entity.update(cx, |this, cx| {
+                    if this.dock_drag.take().is_some() {
+                        // One write per gesture, so the next launch reopens at
+                        // the width the user left the page at.
+                        if let Some(dock) = this.chat_hub.as_ref() {
+                            this.worker.save_chat_hub_width(dock.width());
+                        }
+                        cx.notify();
+                    }
+                });
+            });
+        }
+
         let mut content = v_flex()
             .id("history")
             .flex_1()
@@ -6125,12 +6251,53 @@ impl Render for Observer {
         // strip drawn after the body instead of a shadow on the bar itself.
         let shadow = ui::surfaces(self.appearance_dark).titlebar_border;
         #[cfg(feature = "chat-hub")]
+        if let Some(dock) = self.chat_hub.as_mut() {
+            // A shrunken window can leave the remembered dock width too wide.
+            // The clamp waits for a running slide: it would otherwise measure
+            // the page against a window the slide has not grown yet.
+            if !dock.sliding() {
+                let width =
+                    chat_hub::clamp_width(f32::from(window.viewport_size().width), dock.width());
+                dock.set_width(width);
+                self.chat_hub_width = width;
+            }
+            // The slide moves the window edge with the column, so the workflow
+            // column keeps its size instead of jumping when the window snaps.
+            // The platform resize lands after this frame.
+            let window_width = f32::from(window.bounds().size.width);
+            if !window.is_maximized() && !window.is_fullscreen() {
+                if let Some(target) = dock.slide_window_width(window_width) {
+                    window.request_animation_frame();
+                    window.on_next_frame(move |window, _| {
+                        let height = window.bounds().size.height;
+                        window.resize(gpui_kit::size(px(target), height));
+                    });
+                }
+            }
+            dock.advance_reveal();
+            if dock.sliding() {
+                // Sample the slide from the shared clock and keep the frames
+                // coming the way the loading spinner does: `with_animation`
+                // stalls under the desktop's reduced-motion preference, and
+                // gpui-fast only repaints an animated layer while a frame is
+                // requested.
+                window.request_animation_frame();
+            }
+        }
+        // The ChatHub page is a native view above the GPUI surface. Publish its
+        // clamped width so the kit's dialog layer centres in the space we can
+        // paint; the guard keeps a stable width from refreshing every window.
+        let reserved_right = self.dialog_reserved_right();
+        if Theme::global(cx).dialog_reserved_right != reserved_right {
+            Theme::update(cx, |theme| theme.dialog_reserved_right = reserved_right);
+        }
         let hub_dock = self
             .chat_hub
             .as_ref()
             .filter(|dock| dock.visible())
             .map(|dock| {
                 let active = dock.active().map(|site| site.id);
+                let dock_width = dock.column_width();
                 let mut strip = h_flex()
                     .id("chat-hub-tabs")
                     .w_full()
@@ -6188,11 +6355,13 @@ impl Render for Observer {
                 }
                 v_flex()
                     .flex_none()
-                    .w(px(chat_hub::DOCK_WIDTH))
-                    .max_w(relative(0.45))
+                    .w(px(dock_width))
                     .min_w_0()
                     .h_full()
                     .min_h_0()
+                    // The tab strip keeps its size while the column closes, so
+                    // clip it instead of letting it paint into the transcript.
+                    .overflow_hidden()
                     .border_l_1()
                     .border_color(border)
                     .bg(background)
@@ -6246,7 +6415,45 @@ impl Render for Observer {
                                 }))
                                 .children(ui::terminal::render(self, window, cx)),
                         )
-                        .children(hub_dock),
+        // The splitter sits between the workflow UI and the native page. The
+        // page is a child view, so its width is reported by this drag instead
+        // of a layout gap.
+        .when(hub_dock.is_some(), |row| {
+            row.child(
+                div()
+                    .id("chat-hub-resize")
+                    .flex_none()
+                    .h_full()
+                    .w(px(5.))
+                    .cursor_col_resize()
+                    .hover(move |band| band.bg(primary.opacity(0.18)))
+                    .when(self.dock_drag.is_some(), |band| {
+                        band.bg(primary.opacity(0.35))
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            let width = this
+                                .chat_hub
+                                .as_ref()
+                                .map_or(chat_hub::DOCK_WIDTH, |dock| dock.column_width());
+                            this.dock_drag = Some(ResizeDrag {
+                                start_x: event.position.x,
+                                start_width: width,
+                            });
+                            // From here on the live width wins over config polls.
+                            this.dock_width_touched = true;
+                            window.prevent_default();
+                            // A drag that starts on the divider must not seed a
+                            // selection in the transcript beside it.
+                            GlobalState::suppress_text_selection(cx);
+                            TextSelection::clear(window, cx);
+                            cx.notify();
+                        }),
+                    ),
+            )
+        })
+        .children(hub_dock),
                 )
                 .child(
                     div()
@@ -6283,9 +6490,6 @@ impl Render for Observer {
             }
         }));
         let mut shell = shell
-            .capture_key_down(cx.listener(|this, event, window, cx| {
-                ui::terminal::shortcut(this, event, window, cx);
-            }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
                 if let Some((start, height, minimum)) = this.composer_resize {
                     if event.pressed_button == Some(MouseButton::Left) {
@@ -6323,6 +6527,7 @@ impl Render for Observer {
                 &request,
                 cx.listener(|this, _, window, cx| this.accept_confirm(window, cx)),
                 cx.listener(|this, _, _, cx| this.cancel_confirm(cx)),
+                self.dialog_reserved_right(),
                 cx,
             ));
         }
