@@ -3824,7 +3824,11 @@ impl Observer {
             if let Some(width) = config[prefs::CHAT_HUB_WIDTH_KEY].as_f64() {
                 self.chat_hub_width = width as f32;
                 if let Some(dock) = self.chat_hub.as_mut() {
-                    dock.set_width(self.chat_hub_width);
+                    // A poll landing mid-slide would retarget an animation that
+                    // already resolved its width against the expanded window.
+                    if !dock.sliding() {
+                        dock.set_width(self.chat_hub_width);
+                    }
                 }
             }
         }
@@ -6255,7 +6259,10 @@ impl Render for Observer {
             // A shrunken window can leave the remembered dock width too wide.
             // The clamp waits for a running slide: it would otherwise measure
             // the page against a window the slide has not grown yet.
-            if !dock.sliding() {
+            // A hidden dock keeps the width it was asked for, so the next open
+            // can resolve it against the expanded window instead of inheriting
+            // a clamp from a window it no longer has.
+            if !dock.sliding() && dock.visible() {
                 let width =
                     chat_hub::clamp_width(f32::from(window.viewport_size().width), dock.width());
                 dock.set_width(width);

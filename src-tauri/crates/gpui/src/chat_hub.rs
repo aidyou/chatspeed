@@ -37,6 +37,37 @@ pub(crate) fn clamp_width(window_width: f32, requested: f32) -> f32 {
     requested.clamp(DOCK_MIN_WIDTH, maximum)
 }
 
+/// Resolves the page width and the window growth together.
+///
+/// The width is clamped against the window the dock is about to get, not the
+/// one it has now, so a slide can target the final width and the clamp after
+/// the expansion has nothing left to change.
+fn expand_plan(window_width: f32, available: f32, requested: f32) -> (f32, f32) {
+    let available = available.max(0.);
+    let width = clamp_width(window_width + available.min(requested), requested);
+    (width, available.min(width))
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn dock_expands_to_the_width_the_slide_targets() {
+    for (window_width, available, requested) in [
+        (1600., 900., 900.),
+        (1600., 2000., 900.),
+        (1000., 300., 900.),
+        (1000., 0., 900.),
+        (700., 200., 900.),
+    ] {
+        let (width, growth) = expand_plan(window_width, available, requested);
+        // The clamp after the expansion must be a no-op, or the page would
+        // visibly change width once the slide has already finished.
+        assert_eq!(clamp_width(window_width + growth, width), width);
+        assert!(width >= DOCK_MIN_WIDTH);
+        assert!(growth <= available.max(0.));
+        assert!(growth <= width);
+    }
+}
+
 #[cfg(test)]
 #[::core::prelude::v1::test]
 fn dock_width_keeps_a_phone_page_and_the_workflow_ui_visible() {
@@ -901,18 +932,33 @@ impl Dock {
     pub(crate) fn expand(&mut self, window: &mut Window, cx: &gpui_kit::App) {
         use gpui_kit::{px, size};
         if window.is_maximized() || window.is_fullscreen() {
+            // There is no room to grow, so the page must already fit the
+            // window it has when the slide starts.
+            self.set_width(clamp_width(
+                f32::from(window.viewport_size().width),
+                self.width,
+            ));
             return;
         }
         let Some(display) = window.display(cx) else {
+            self.set_width(clamp_width(
+                f32::from(window.viewport_size().width),
+                self.width,
+            ));
             return;
         };
         let bounds = window.bounds();
         let area = display.visible_bounds();
-        let growth = (area.origin.x + area.size.width - bounds.origin.x - bounds.size.width)
-            .max(px(0.))
-            // Do not grow the window past the width the dock actually uses.
-            .min(px(self.width));
-        if growth > px(0.) {
+        let available = f32::from(
+            (area.origin.x + area.size.width - bounds.origin.x - bounds.size.width).max(px(0.)),
+        );
+        let (width, growth) =
+            expand_plan(f32::from(window.viewport_size().width), available, self.width);
+        // The page must already be heading for the width it will keep after the
+        // window grows, otherwise the post-expansion clamp visibly corrects it.
+        self.set_width(width);
+        if growth > 0. {
+            let growth = px(growth);
             self.growth = Some((bounds.size.width, growth));
             // A running slide grows the window frame by frame so the workflow
             // column keeps its size; otherwise hand the space over now.
