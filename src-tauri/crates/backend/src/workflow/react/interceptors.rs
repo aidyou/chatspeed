@@ -436,14 +436,12 @@ impl WorkflowExecutor {
     }
 
     fn durable_current_task_messages(&self) -> Result<Vec<WorkflowMessage>, WorkflowEngineError> {
-        let snapshot = self
+        let messages = self
             .context
             .main_store
-            .get_workflow_snapshot(&self.session_id)
+            .get_workflow_context_history(&self.session_id)
             .map_err(WorkflowEngineError::Db)?;
-        Ok(Self::current_task_messages_from_durable_history(
-            snapshot.messages,
-        ))
+        Ok(Self::current_task_messages_from_durable_history(messages))
     }
 
     fn strip_embedded_system_reminders(content: &str) -> String {

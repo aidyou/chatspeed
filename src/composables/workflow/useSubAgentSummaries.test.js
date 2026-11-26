@@ -176,6 +176,27 @@ test('legacy summary survives when no safe projection exists', () => {
   )
 })
 
+test('sub-agent progress ignores late and unversioned events without blocking a newer resume', () => {
+  const storeSource = readFileSync(new URL('../../stores/workflow.js', import.meta.url), 'utf8')
+  const start = storeSource.indexOf('const upsertSubAgentProgress =')
+  const end = storeSource.indexOf('\n  };', start)
+  assert.ok(start >= 0 && end > start)
+  const currentWorkflowId = { value: 'parent' }
+  const subAgentProgress = { value: new Map() }
+  const upsert = runInNewContext(`${storeSource.slice(start, end + 5)}\nupsertSubAgentProgress`, {
+    currentWorkflowId,
+    subAgentProgress
+  })
+  const child = { sub_agent_id: 'child', parent_session_id: 'parent' }
+  assert.equal(upsert({ ...child, status: 'completed', updated_at_ms: 20 }), true)
+  for (const timestamp of [19, 20, undefined]) {
+    assert.equal(upsert({ ...child, status: 'running', updated_at_ms: timestamp }), false)
+    assert.equal(subAgentProgress.value.get('child').status, 'completed')
+  }
+  assert.equal(upsert({ ...child, status: 'running', updated_at_ms: 21 }), true)
+  assert.equal(subAgentProgress.value.get('child').status, 'running')
+})
+
 test('summary assembly applies the safe projection after legacy overrides', () => {
   const progressSummary = source.indexOf('summary = truncateSummary(progress.summary) || summary')
   const safeProjection = source.indexOf(

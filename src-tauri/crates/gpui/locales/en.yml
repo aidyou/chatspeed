@@ -100,6 +100,7 @@ clear_context_divider: Start new session
 clear_context_failed: "Failed to clear the context frame"
 clear_context_frame_done: "Context cleared for subsequent AI turns"
 clear_context_no_session: "No task session available to clear"
+clear_context_pending: "Clearing context…"
 click_to_expand: (click to expand)
 close_window: Close window
 collapse: Collapse
@@ -177,6 +178,10 @@ live_running_write: "Creating file: %{path}"
 live_thinking: Thinking...
 live_tool_completed: "Tool completed: %{tool}"
 manual_compress: Compress context
+manual_compress_failed: "Manual compression failed: %{detail}"
+manual_compress_not_sent: "Could not send the manual compression request. Please try again."
+manual_compress_unconfirmed: "Could not confirm the compression result. The runtime may still be processing it. (%{detail})"
+manual_compress_waiting: Waiting for compression response
 mcp_auto_approve: "Auto approve"
 mcp_auto_expand: "Expand arguments"
 mcp_available: "Available"
@@ -187,6 +192,8 @@ menu_agent: Agent
 menu_assistant: Assistant
 menu_chat: Chat
 menu_chat_hub: Chat Hub
+menu_copy: Copy
+menu_cut: Cut
 menu_edit: Edit
 menu_mcp: MCP
 menu_model: AI Provider
@@ -196,6 +203,7 @@ menu_proxy: Proxy
 menu_proxy_switcher: Proxy Switcher
 menu_quit: Quit
 menu_scraper: Scraper Test
+menu_select_all: Select All
 menu_settings: Settings
 menu_skill: Skill
 menu_workflow: Task
@@ -261,9 +269,11 @@ pin: Pin
 planning_mode: "Planning mode"
 planning_mode_hint: "Research and design before execution"
 plugin_panel: Plugins
+queued_message_already_applied: "The message was already processed and could not be edited."
 queued_message_empty: "Message without text"
+queued_message_removal_unconfirmed: "Removal was not confirmed. Check the queue before sending again."
 queued_message_remove_failed: "Could not remove the queued message"
-queued_message_removing: "Sending request…"
+queued_message_removing: "Waiting for removal confirmation…"
 queued_message_send_failed: "Could not send the queued message"
 queued_message_sending: "Waiting for confirmation…"
 queued_messages: "Queued messages"
@@ -447,6 +457,7 @@ sub_agent_loading: Loading the delegated transcript...
 sub_agent_mode: Mode
 sub_agent_result_section: Result
 sub_agent_running: Running
+sub_agent_starting: Starting
 sub_agent_task_section: Task
 sub_agent_tools: Tools
 submit_answer: Submit
@@ -496,4 +507,8 @@ unpin: Unpin
 untitled: Untitled workflow
 window_error: Cannot open GPUI window
 worker_error: Cannot start observer worker
+workflow_resume_pending: Resuming workflow…
+workflow_rewind_pending: Rewinding conversation…
+workflow_start_pending: Starting workflow…
+workflow_vision_pending: Processing image attachments…
 written: Written

@@ -188,6 +188,12 @@ mod tests {
     }
 
     #[test]
+    fn terminal_tab_keeps_forward_and_reverse_completion_distinct() {
+        assert_eq!(super::tab_input(false).as_bytes(), b"\t");
+        assert_eq!(super::tab_input(true).as_bytes(), b"\x1b[Z");
+    }
+
+    #[test]
     fn tab_title_uses_the_shells_working_directory() {
         use super::{directory_name, CwdReport, VteParser};
 
@@ -618,19 +624,29 @@ impl EntityInputHandler for TerminalInput {
     }
 }
 
-pub fn toggle(this: &mut Observer, cx: &mut Context<Observer>) {
+pub(crate) fn toggle(this: &mut Observer, window: &mut Window, cx: &mut Context<Observer>) {
+    if window.has_active_dialog(cx) {
+        return;
+    }
     this.terminal.visible = !this.terminal.visible;
     if this.terminal.visible {
-        // Opening the dock returns to the live prompt even if it was scrolled
-        // back into history.
+        // Give both the shortcut and the sidebar button the same focus handoff.
+        this.terminal.focus.focus(window, cx);
         if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
             tab.update(cx, |tab, _| tab.screen.scroll_display(Scroll::Bottom));
+        } else if this.terminal.tabs.is_empty() {
+            add(this, None, cx);
         }
     }
-    if this.terminal.visible && this.terminal.tabs.is_empty() {
-        add(this, None, cx);
-    }
     cx.notify();
+}
+
+fn tab_input(shift: bool) -> &'static str {
+    if shift {
+        "\x1b[Z"
+    } else {
+        "\t"
+    }
 }
 
 /// Cmd/Ctrl+J toggles the dock and Cmd/Ctrl+K clears the active tab.
@@ -659,7 +675,7 @@ pub fn shortcut(
             tab.update(cx, |tab, _| {
                 tab.screen.selection = None;
                 tab.screen.scroll_display(Scroll::Bottom);
-                send(tab, "\t".into());
+                send(tab, tab_input(mods.shift).into());
             });
         }
         window.prevent_default();
@@ -676,17 +692,7 @@ pub fn shortcut(
         return;
     }
     match key.key.as_str() {
-        "j" => {
-            // A modal owns the keyboard; moving focus into the dock would take
-            // its Escape/Enter handling away mid-edit. The shortcut is still
-            // consumed so the platform does not beep.
-            if !window.has_active_dialog(cx) {
-                toggle(this, cx);
-                if this.terminal.visible {
-                    this.terminal.focus.focus(window, cx);
-                }
-            }
-        }
+        "j" => toggle(this, window, cx),
         "k" if this.terminal.visible && this.terminal.focus.is_focused(window) => {
             if let Some(tab) = this.terminal.tabs.get(this.terminal.active) {
                 tab.update(cx, |tab, _| clear_keep_input(tab));
@@ -998,7 +1004,7 @@ fn key(tab: &mut Tab, event: &KeyDownEvent, cx: &mut App) -> bool {
     let value = match key.key.as_str() {
         "enter" => "\r".into(),
         "backspace" => "\x7f".into(),
-        "tab" => "\t".into(),
+        "tab" => tab_input(mods.shift).into(),
         "escape" => "\x1b".into(),
         "up" => format!("{cursor}A"),
         "down" => format!("{cursor}B"),
@@ -1319,7 +1325,7 @@ pub fn render(this: &Observer, window: &mut Window, cx: &mut Context<Observer>) 
                 .cursor_pointer()
                 .hover(move |style| style.bg(surface))
                 .child(Icon::new("minimize").size(14.).color(secondary))
-                .on_click(cx.listener(|this, _, _, cx| toggle(this, cx))),
+                .on_click(cx.listener(|this, _, window, cx| toggle(this, window, cx))),
         )
         .child(
             div()

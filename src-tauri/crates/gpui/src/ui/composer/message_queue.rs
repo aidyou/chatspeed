@@ -113,7 +113,7 @@ pub(crate) fn render(observer: &Observer, cx: &mut Context<Observer>) -> AnyElem
                                 |column| column.child(t!("queued_message_empty").to_string()),
                             ),
                     )
-                    .when(!removing, |row| {
+                    .when(!removing && !item.provisional, |row| {
                         row.child(
                             h_flex()
                                 .flex_none()
@@ -141,7 +141,7 @@ pub(crate) fn render(observer: &Observer, cx: &mut Context<Observer>) -> AnyElem
                                     foreground,
                                     button_hover,
                                     cx.listener(move |this, _, _, cx| {
-                                        this.remove_queued_message(generation, &id, cx);
+                                        this.remove_queued_message(generation, &id, false, cx);
                                     }),
                                 )),
                         )

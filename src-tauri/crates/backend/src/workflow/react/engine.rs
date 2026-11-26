@@ -985,9 +985,9 @@ impl WorkflowExecutor {
         let snapshot_config = self
             .context
             .main_store
-            .get_workflow_snapshot(&self.session_id)
+            .get_workflow_for_ui(&self.session_id)
             .ok()
-            .and_then(|snapshot| snapshot.workflow.agent_config)
+            .and_then(|workflow| workflow.agent_config)
             .and_then(|config_json| crate::db::agent::AgentConfig::from_json(&config_json));
 
         if let Some(config) = snapshot_config.as_ref() {
@@ -1284,18 +1284,6 @@ impl WorkflowExecutor {
             )
             .await;
 
-        self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
-            is_compressing: false,
-            message: String::new(),
-        })
-        .await?;
-
-        self.dispatch_ui_payload(GatewayPayload::Notification {
-            message: String::new(),
-            category: Some("info".to_string()),
-        })
-        .await?;
-
         log::info!(
             "[Workflow][session={}][phase=compression] Blocking compression call returned reason={} boundary={} succeeded={}",
             self.session_id,
@@ -1304,22 +1292,17 @@ impl WorkflowExecutor {
             compression_result.is_ok()
         );
 
-        match compression_result {
-            Ok(result) => {
-                self.persist_compression_summary(
+        // Do not retire the in-progress UI while the handoff is still being
+        // persisted. On success CompressionApplied lets clients refresh it.
+        let result = match compression_result {
+            Ok(result) => self
+                .persist_compression_summary(
                     result.summary,
                     result.task_goal_state,
                     compressed_until_message_id,
                 )
-                .await?;
-                log::info!(
-                    "[Workflow][session={}][phase=compression] Blocking compression completed through boundary {} ({})",
-                    self.session_id,
-                    compressed_until_message_id,
-                    reason
-                );
-                Ok(true)
-            }
+                .await
+                .map(|()| true),
             Err(err) => {
                 log::info!(
                     "[Workflow][session={}][phase=compression] Blocking compression failed through boundary {} ({}): display_error={}; debug_error={:?}",
@@ -1331,7 +1314,27 @@ impl WorkflowExecutor {
                 );
                 Ok(false)
             }
+        };
+        let status = self.dispatch_ui_payload(GatewayPayload::CompressionStatus {
+            is_compressing: false,
+            message: String::new(),
+        }).await;
+        let notification = self.dispatch_ui_payload(GatewayPayload::Notification {
+            message: String::new(),
+            category: Some("info".to_string()),
+        }).await;
+        let applied = result?;
+        status?;
+        notification?;
+        if applied {
+            log::info!(
+                "[Workflow][session={}][phase=compression] Blocking compression completed through boundary {} ({})",
+                self.session_id,
+                compressed_until_message_id,
+                reason
+            );
         }
+        Ok(applied)
     }
 
     /// Tracks the goal structure of the compression window with the compressor's resolved
@@ -1371,15 +1374,14 @@ impl WorkflowExecutor {
     ) -> Result<bool, WorkflowEngineError> {
         let terminal_state = {
             let store = self.context.main_store.as_ref();
-            let snapshot = store.get_workflow_snapshot(&self.session_id)?;
-            snapshot
-                .workflow
+            let workflow = store.get_workflow_for_ui(&self.session_id)?;
+            workflow
                 .status
                 .parse::<WorkflowState>()
                 .map_err(|_| {
                     WorkflowEngineError::General(format!(
                         "Cannot manually compress workflow with invalid persisted state '{}'",
-                        snapshot.workflow.status
+                        workflow.status
                     ))
                 })?
         };
@@ -2118,13 +2120,17 @@ impl WorkflowExecutor {
         &self,
         payload: GatewayPayload,
     ) -> Result<(), WorkflowEngineError> {
-        let parent_payload = {
+        let parent_payload = if matches!(
+            &payload,
+            GatewayPayload::Confirm { .. } | GatewayPayload::ApprovalResolved { .. }
+        ) {
             let parent_session_id = self
                 .context
                 .main_store
-                .get_workflow_snapshot(&self.session_id)
+                .get_workflow(&self.session_id)
                 .ok()
-                .and_then(|snapshot| snapshot.workflow.parent_session_id);
+                .flatten()
+                .and_then(|workflow| workflow.parent_session_id);
 
             parent_session_id.and_then(|parent_session_id| match &payload {
                 GatewayPayload::Confirm {
@@ -2170,6 +2176,8 @@ impl WorkflowExecutor {
                 )),
                 _ => None,
             })
+        } else {
+            None
         };
 
         if let Some(ref dispatcher) = self.dispatcher {
@@ -2221,8 +2229,8 @@ impl WorkflowExecutor {
         let parent_session_id = {
             let store = self.context.main_store.as_ref();
 
-            match store.get_workflow_snapshot(&self.session_id) {
-                Ok(snapshot) => snapshot.workflow.parent_session_id,
+            match store.get_workflow_for_ui(&self.session_id) {
+                Ok(workflow) => workflow.parent_session_id,
                 Err(e) => {
                     log::warn!(
                         "[Workflow][session={}][phase=sub_agent_progress] Cannot read sub-agent workflow: {}",
@@ -2360,16 +2368,16 @@ impl WorkflowExecutor {
 
         // Load current state and the latest persisted workflow config from database.
         {
-            let snapshot = {
+            let workflow = {
                 let store = self.context.main_store.as_ref();
-                store.get_workflow_snapshot(&self.session_id).ok()
+                store.get_workflow_for_ui(&self.session_id).ok()
             };
-            if let Some(snapshot) = snapshot {
-                if let Some(config_str) = snapshot.workflow.agent_config.as_deref() {
+            if let Some(workflow) = workflow {
+                if let Some(config_str) = workflow.agent_config.as_deref() {
                     self.agent_config.merge_config(config_str);
                     self.sync_runtime_models_from_agent_config();
                 }
-                if let Ok(state) = snapshot.workflow.status.parse::<WorkflowState>() {
+                if let Ok(state) = workflow.status.parse::<WorkflowState>() {
                     self.state = state;
                     crate::workflow::react::idle_sleep::WORKFLOW_IDLE_SLEEP_INHIBITOR
                         .sync_workflow_state(&self.session_id, &self.state);
@@ -2606,9 +2614,9 @@ impl WorkflowExecutor {
                 let title = self
                     .context
                     .main_store
-                    .get_workflow_snapshot(&self.session_id)
+                    .get_workflow_for_ui(&self.session_id)
                     .ok()
-                    .and_then(|snapshot| snapshot.workflow.title);
+                    .and_then(|workflow| workflow.title);
                 Self::should_generate_workflow_title(None, title.as_deref())
             };
 
@@ -3542,9 +3550,9 @@ impl WorkflowExecutor {
             let updated_config = {
                 let store = self.context.main_store.as_ref();
                 store
-                    .get_workflow_snapshot(&self.session_id)
+                    .get_workflow_for_ui(&self.session_id)
                     .ok()
-                    .and_then(|snapshot| snapshot.workflow.agent_config)
+                    .and_then(|workflow| workflow.agent_config)
                     .and_then(|config| serde_json::from_str::<Value>(&config).ok())
                     .and_then(|mut agent_config| {
                         let updated = Self::add_mcp_auto_approve_to_agent_config(
@@ -3568,9 +3576,8 @@ impl WorkflowExecutor {
         self.auto_approve.insert(tool_name.to_string());
         let tools = self.get_auto_approved_tools();
         let store = self.context.main_store.as_ref();
-        if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+        if let Ok(snapshot) = store.get_workflow_for_ui(&self.session_id) {
             let mut agent_config: serde_json::Value = snapshot
-                .workflow
                 .agent_config
                 .and_then(|config| serde_json::from_str(&config).ok())
                 .unwrap_or(serde_json::json!({}));
@@ -4018,11 +4025,10 @@ impl WorkflowExecutor {
                                                 if !wildcard_patterns.is_empty() {
                                                     let store = self.context.main_store.as_ref();
                                                     if let Ok(snapshot) = store
-                                                        .get_workflow_snapshot(&self.session_id)
+                                                        .get_workflow_for_ui(&self.session_id)
                                                     {
                                                         let mut agent_config: serde_json::Value =
                                                             snapshot
-                                                                .workflow
                                                                 .agent_config
                                                                 .and_then(|s| {
                                                                     serde_json::from_str(&s).ok()
@@ -4570,11 +4576,10 @@ impl WorkflowExecutor {
                                             {
                                                 let store = self.context.main_store.as_ref();
                                                 if let Ok(snapshot) =
-                                                    store.get_workflow_snapshot(&self.session_id)
+                                                    store.get_workflow_for_ui(&self.session_id)
                                                 {
                                                     let mut agent_config: serde_json::Value =
                                                         snapshot
-                                                            .workflow
                                                             .agent_config
                                                             .and_then(|s| {
                                                                 serde_json::from_str(&s).ok()
@@ -8646,9 +8651,9 @@ impl WorkflowExecutor {
         let snapshot_config_json = self
             .context
             .main_store
-            .get_workflow_snapshot(&self.session_id)
+            .get_workflow_for_ui(&self.session_id)
             .ok()
-            .and_then(|snapshot| snapshot.workflow.agent_config);
+            .and_then(|workflow| workflow.agent_config);
 
         let Some(config_json) = snapshot_config_json else {
             return Ok(());
@@ -8703,9 +8708,8 @@ impl WorkflowExecutor {
     fn persist_workflow_agent_config_value(&self, key: &str, value: Value) {
         {
             let store = self.context.main_store.as_ref();
-            if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+            if let Ok(snapshot) = store.get_workflow_for_ui(&self.session_id) {
                 let mut agent_config: serde_json::Value = snapshot
-                    .workflow
                     .agent_config
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or(serde_json::json!({}));
@@ -8836,9 +8840,8 @@ impl WorkflowExecutor {
                 );
                 {
                     let store = self.context.main_store.as_ref();
-                    if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                    if let Ok(snapshot) = store.get_workflow_for_ui(&self.session_id) {
                         let mut agent_config: serde_json::Value = snapshot
-                            .workflow
                             .agent_config
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or(serde_json::json!({}));
@@ -8880,9 +8883,8 @@ impl WorkflowExecutor {
 
             {
                 let store = self.context.main_store.as_ref();
-                if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                if let Ok(snapshot) = store.get_workflow_for_ui(&self.session_id) {
                     let mut agent_config: serde_json::Value = snapshot
-                        .workflow
                         .agent_config
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or(serde_json::json!({}));
@@ -8902,9 +8904,9 @@ impl WorkflowExecutor {
             let updated_agent_config = self
                 .context
                 .main_store
-                .get_workflow_snapshot(&self.session_id)
+                .get_workflow_for_ui(&self.session_id)
                 .ok()
-                .and_then(|snapshot| snapshot.workflow.agent_config)
+                .and_then(|workflow| workflow.agent_config)
                 .and_then(|s| serde_json::from_str::<Value>(&s).ok());
 
             if let Some(agent_config) = updated_agent_config {
@@ -8978,9 +8980,8 @@ impl WorkflowExecutor {
                 self.llm_processor.agent_config.final_audit = Some(audit);
                 {
                     let store = self.context.main_store.as_ref();
-                    if let Ok(snapshot) = store.get_workflow_snapshot(&self.session_id) {
+                    if let Ok(snapshot) = store.get_workflow_for_ui(&self.session_id) {
                         let mut agent_config: serde_json::Value = snapshot
-                            .workflow
                             .agent_config
                             .and_then(|s| serde_json::from_str(&s).ok())
                             .unwrap_or(serde_json::json!({}));
@@ -9331,19 +9332,10 @@ impl WorkflowExecutor {
         &self,
         queued_user_message_id: &str,
     ) -> Result<bool, WorkflowEngineError> {
-        let store = self.context.main_store.as_ref();
-        let snapshot = store
-            .get_workflow_snapshot(&self.session_id)
-            .map_err(WorkflowEngineError::Db)?;
-        Ok(snapshot.messages.iter().any(|message| {
-            message.role == "user"
-                && message
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.get("queued_user_message_id"))
-                    .and_then(|value| value.as_str())
-                    == Some(queued_user_message_id)
-        }))
+        self.context
+            .main_store
+            .has_persisted_user_message_id(&self.session_id, queued_user_message_id)
+            .map_err(WorkflowEngineError::Db)
     }
 
     async fn enqueue_user_message(
@@ -9365,9 +9357,10 @@ impl WorkflowExecutor {
             .any(|(existing_id, _, _, _)| existing_id == &queued_id);
         let already_persisted = self.applied_queued_user_message_ids.contains(&queued_id)
             || self.queued_user_message_was_persisted(&queued_id)?;
+        if already_persisted {
+            self.applied_queued_user_message_ids.insert(queued_id.clone());
+        }
         if self.removed_queued_user_message_ids.contains(&queued_id) || already_persisted {
-            self.applied_queued_user_message_ids
-                .insert(queued_id.clone());
             log::info!(
                 "[Workflow][session={}][phase=queue] Ignoring duplicate queued user message queued_id={}",
                 self.session_id,
@@ -9426,24 +9419,39 @@ impl WorkflowExecutor {
         &mut self,
         queued_user_message_id: &str,
     ) -> Result<bool, WorkflowEngineError> {
-        self.removed_queued_user_message_ids
-            .insert(queued_user_message_id.to_string());
+        // A late removal must not certify cancellation after the same input
+        // has already become a durable user turn.
+        let already_applied = self.applied_queued_user_message_ids.contains(queued_user_message_id)
+            || self.queued_user_message_was_persisted(queued_user_message_id)?;
+        if already_applied {
+            self.dispatch_ui_payload(GatewayPayload::QueuedUserMessageRemoved {
+                queued_user_message_id: queued_user_message_id.to_string(),
+                cancelled_before_apply: false,
+            })
+            .await?;
+            return Ok(false);
+        }
         let before = self.queued_user_messages.len();
         self.queued_user_messages
             .retain(|(queued_id, _, _, _)| queued_id != queued_user_message_id);
-        let removed_from_stash =
-            remove_stashed_user_message(&self.session_id, queued_user_message_id);
-        let removed = self.queued_user_messages.len() != before || removed_from_stash;
+        let removed_from_stash = remove_stashed_user_message(&self.session_id, queued_user_message_id);
+        let removed = self.queued_user_messages.len() < before || removed_from_stash;
+        // Absence alone does not establish cancellation. A retry can confirm
+        // a previously removed ID only after checking durable user history.
+        if !removed && !self.removed_queued_user_message_ids.contains(queued_user_message_id) {
+            return Ok(false);
+        }
+        self.removed_queued_user_message_ids
+            .insert(queued_user_message_id.to_string());
         self.save_snapshot().await?;
 
-        if removed {
-            self.dispatch_ui_payload(GatewayPayload::QueuedUserMessageRemoved {
-                queued_user_message_id: queued_user_message_id.to_string(),
-            })
-            .await?;
-        }
+        self.dispatch_ui_payload(GatewayPayload::QueuedUserMessageRemoved {
+            queued_user_message_id: queued_user_message_id.to_string(),
+            cancelled_before_apply: true,
+        })
+        .await?;
 
-        Ok(removed)
+        Ok(true)
     }
 
     async fn flush_queued_user_messages(&mut self) -> Result<bool, WorkflowEngineError> {
@@ -12813,6 +12821,33 @@ mod recovery_tests {
             })
             .count();
         assert_eq!(queued_messages, 1);
+
+        // Apply wins even after recovery loses the in-memory deduplication set.
+        executor.applied_queued_user_message_ids.clear();
+        assert!(!executor.remove_queued_user_message("queued-message-1").await
+            .expect("a late removal should settle without cancelling"));
+        assert!(!executor.removed_queued_user_message_ids.contains("queued-message-1"));
+
+        executor.state = WorkflowState::Executing;
+        executor.enqueue_user_message("withdraw".into(), None, None, Some("canonical".into()))
+            .await.expect("queue the message before withdrawing it");
+        assert!(crate::workflow::react::signals::stash_user_message(
+            session_id, "stashed".into(), "withdraw".into(), None, None,
+        ));
+        for id in ["canonical", "stashed"] {
+            assert!(executor.remove_queued_user_message(id).await
+                .expect("queued message should be removed"));
+            executor.enqueue_user_message("late delivery".into(), None, None, Some(id.into()))
+                .await.expect("removed ID must not be enqueued again");
+            assert!(executor.remove_queued_user_message(id).await
+                .expect("removal receipt should be idempotent"));
+        }
+        assert!(!executor.flush_queued_user_messages().await.expect("flush after removal"));
+        let context = store.get_execution_context(session_id)
+            .expect("read removal snapshot").expect("removal snapshot exists");
+        assert!(context.queued_user_messages.is_empty());
+        assert!(context.removed_queued_user_message_ids.contains(&"canonical".to_owned()));
+        assert!(context.removed_queued_user_message_ids.contains(&"stashed".to_owned()));
     }
 
     #[tokio::test]

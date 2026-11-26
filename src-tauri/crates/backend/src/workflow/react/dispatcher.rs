@@ -80,6 +80,7 @@ fn dispatch_event_requires_reliable_delivery(event: &DispatchEvent) -> bool {
                 | GatewayPayload::ApprovalResolved { .. }
                 | GatewayPayload::SubAgentApprovalRequested { .. }
                 | GatewayPayload::SubAgentApprovalResolved { .. }
+                | GatewayPayload::QueuedUserMessageRemoved { .. }
                 | GatewayPayload::ToolCompleted { .. }
                 | GatewayPayload::ToolFailed { .. }
                 | GatewayPayload::TaskCompleted { .. }

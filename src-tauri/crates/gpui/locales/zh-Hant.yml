@@ -100,6 +100,7 @@ clear_context_divider: 開始新會話
 clear_context_failed: "清空上下文失敗"
 clear_context_frame_done: "已為後續 AI 回合清空上下文"
 clear_context_no_session: "沒有可清空上下文的會話"
+clear_context_pending: "正在清空上下文…"
 click_to_expand: （點擊展開）
 close_window: 關閉窗口
 collapse: 收合
@@ -177,6 +178,10 @@ live_running_write: "正在建立檔案：%{path}"
 live_thinking: 思考中...
 live_tool_completed: "工具已完成：%{tool}"
 manual_compress: 壓縮上下文
+manual_compress_failed: "手動壓縮失敗：%{detail}"
+manual_compress_not_sent: "無法傳送手動壓縮請求，請重試。"
+manual_compress_unconfirmed: "無法確認壓縮結果，執行階段可能仍在處理。（%{detail}）"
+manual_compress_waiting: 正在等待壓縮請求回應
 mcp_auto_approve: "自動審批"
 mcp_auto_expand: "展開參數"
 mcp_available: "可用"
@@ -187,6 +192,8 @@ menu_agent: 智能體
 menu_assistant: 助手
 menu_chat: 聊天
 menu_chat_hub: 聊天入口
+menu_copy: 拷貝
+menu_cut: 剪下
 menu_edit: 編輯
 menu_mcp: MCP
 menu_model: AI供應商
@@ -196,6 +203,7 @@ menu_proxy: 代理
 menu_proxy_switcher: 代理切換
 menu_quit: 退出
 menu_scraper: 爬蟲測試
+menu_select_all: 全選
 menu_settings: 設定
 menu_skill: 技能
 menu_workflow: 任務
@@ -261,9 +269,11 @@ pin: 置頂
 planning_mode: "規劃模式"
 planning_mode_hint: "規劃模式：在執行前進行 AI 調研和方案設計"
 plugin_panel: 外掛
+queued_message_already_applied: "這則訊息已被處理，無法編輯。"
 queued_message_empty: "無正文的訊息"
+queued_message_removal_unconfirmed: "未收到移除確認，請先檢查佇列再重送。"
 queued_message_remove_failed: "無法刪除排隊中的訊息"
-queued_message_removing: "正在傳送請求…"
+queued_message_removing: "等待移除確認…"
 queued_message_send_failed: "無法傳送排隊訊息"
 queued_message_sending: "等待入隊確認…"
 queued_messages: "排隊中的訊息"
@@ -447,6 +457,7 @@ sub_agent_loading: 正在載入子代理會話...
 sub_agent_mode: 模式
 sub_agent_result_section: 結果
 sub_agent_running: 執行中
+sub_agent_starting: 啟動中
 sub_agent_task_section: 任務
 sub_agent_tools: 工具
 submit_answer: 提交
@@ -496,4 +507,8 @@ unpin: 取消置頂
 untitled: 未命名工作流
 window_error: 無法打開 GPUI 窗口
 worker_error: 無法啟動觀察器後臺線程
+workflow_resume_pending: 正在繼續工作流…
+workflow_rewind_pending: 正在回退會話…
+workflow_start_pending: 正在啟動工作流…
+workflow_vision_pending: 正在處理圖片附件…
 written: 已寫入

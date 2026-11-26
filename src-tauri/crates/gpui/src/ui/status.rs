@@ -35,9 +35,20 @@ struct Live {
     warning: bool,
 }
 
-/// The runtime state line between the transcript and the box.
-pub fn status(model: &Model, running: bool, answered: bool, cx: &App) -> AnyElement {
-    render_status(live_state(model, running, answered), cx)
+/// The status line above the composer, including local requests awaiting the runtime.
+pub fn status(
+    model: &Model,
+    running: bool,
+    answered: bool,
+    pending: Option<String>,
+    cx: &App,
+) -> AnyElement {
+    let live = pending.map(|text| Live {
+        text,
+        icon: "loading",
+        warning: false,
+    });
+    render_status(live.or_else(|| live_state(model, running, answered)), cx)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -895,7 +906,7 @@ fn child_card(
 ) -> AnyElement {
     use crate::presentation::SubAgentStatus;
     let color = match card.status {
-        SubAgentStatus::Running => Hsla::from(accent()),
+        SubAgentStatus::Starting | SubAgentStatus::Running => Hsla::from(accent()),
         SubAgentStatus::Completed => Hsla::from(success()),
         SubAgentStatus::Failed | SubAgentStatus::Cancelled => Hsla::from(danger()),
     };

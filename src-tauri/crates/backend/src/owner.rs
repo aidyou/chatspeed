@@ -251,6 +251,12 @@ impl RuntimeOwner {
         &self.workflow_manager
     }
 
+    /// Recovers child workflows left by the previous owner. The caller must
+    /// hold exclusive database authority and not have admitted any new work.
+    pub fn recover_interrupted_child_workflows(&self) -> Result<(), crate::db::StoreError> {
+        crate::commands::workflow::reconcile_interrupted_child_workflows(&self.main_store)
+    }
+
     /// Classifies the operations a previous process left in flight.
     ///
     /// The runtime runs this before discovery is published and before any lease

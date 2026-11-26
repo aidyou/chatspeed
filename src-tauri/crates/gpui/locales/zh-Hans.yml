@@ -100,6 +100,7 @@ clear_context_divider: 开始新会话
 clear_context_failed: "清空上下文失败"
 clear_context_frame_done: "已为后续 AI 回合清空上下文"
 clear_context_no_session: "没有可清空上下文的会话"
+clear_context_pending: "正在清空上下文…"
 click_to_expand: （点击展开）
 close_window: 关闭窗口
 collapse: 收起
@@ -177,6 +178,10 @@ live_running_write: "正在创建文件：%{path}"
 live_thinking: 思考中...
 live_tool_completed: "工具已完成：%{tool}"
 manual_compress: 压缩上下文
+manual_compress_failed: "手动压缩失败：%{detail}"
+manual_compress_not_sent: "无法发送手动压缩请求，请重试。"
+manual_compress_unconfirmed: "无法确认压缩结果，运行时可能仍在处理。（%{detail}）"
+manual_compress_waiting: 正在等待压缩请求响应
 mcp_auto_approve: "自动审批"
 mcp_auto_expand: "展开参数"
 mcp_available: "可用"
@@ -187,6 +192,8 @@ menu_agent: 智能体
 menu_assistant: 助手
 menu_chat: 聊天
 menu_chat_hub: 聊天入口
+menu_copy: 复制
+menu_cut: 剪切
 menu_edit: 编辑
 menu_mcp: MCP
 menu_model: AI供应商
@@ -196,6 +203,7 @@ menu_proxy: 代理
 menu_proxy_switcher: 代理切换
 menu_quit: 退出
 menu_scraper: 爬虫测试
+menu_select_all: 全选
 menu_settings: 设置
 menu_skill: 技能
 menu_workflow: 任务
@@ -261,9 +269,11 @@ pin: 置顶
 planning_mode: "规划模式"
 planning_mode_hint: "计划模式：在执行前进行 AI 调研和方案设计"
 plugin_panel: 插件
+queued_message_already_applied: "这条消息已被处理，无法编辑。"
 queued_message_empty: "无正文的消息"
+queued_message_removal_unconfirmed: "未收到移除确认，请先检查队列再重发。"
 queued_message_remove_failed: "无法删除排队中的消息"
-queued_message_removing: "正在发送请求…"
+queued_message_removing: "等待移除确认…"
 queued_message_send_failed: "无法发送排队消息"
 queued_message_sending: "等待入队确认…"
 queued_messages: "排队中的消息"
@@ -447,6 +457,7 @@ sub_agent_loading: 正在加载子代理会话...
 sub_agent_mode: 模式
 sub_agent_result_section: 结果
 sub_agent_running: 执行中
+sub_agent_starting: 启动中
 sub_agent_task_section: 任务
 sub_agent_tools: 工具
 submit_answer: 提交
@@ -496,4 +507,8 @@ unpin: 取消置顶
 untitled: 未命名工作流
 window_error: 无法打开 GPUI 窗口
 worker_error: 无法启动观察器后台线程
+workflow_resume_pending: 正在继续工作流…
+workflow_rewind_pending: 正在回退会话…
+workflow_start_pending: 正在启动工作流…
+workflow_vision_pending: 正在处理图片附件…
 written: 已写入

@@ -227,7 +227,7 @@ impl WorkflowManager {
             session.status = status.clone();
             session.touch();
 
-            log::info!(
+            log::debug!(
                 "[WorkflowManager][session={}][event=status_updated] Status updated to {:?}",
                 session_id,
                 status

@@ -430,14 +430,21 @@ export const useWorkflowStore = defineStore('workflow', () => {
 
   const upsertSubAgentProgress = (progress = {}) => {
     const subAgentId = progress.subAgentId ?? progress.sub_agent_id;
-    if (!subAgentId) return;
+    if (!subAgentId) return false;
 
     const currentWorkflow = currentWorkflowId.value;
     const parentSessionId = progress.parentSessionId ?? progress.parent_session_id ?? currentWorkflow;
-    if (currentWorkflow && parentSessionId && parentSessionId !== currentWorkflow) return;
+    if (currentWorkflow && parentSessionId && parentSessionId !== currentWorkflow) return false;
 
+    const existing = subAgentProgress.value.get(subAgentId) || {};
+    const updatedAtMs = progress.updatedAtMs ?? progress.updated_at_ms;
+    if (Number.isFinite(existing.updatedAtMs)) {
+      if (!Number.isFinite(updatedAtMs) || updatedAtMs < existing.updatedAtMs) return false;
+      const isTerminal = value => ['completed', 'failed', 'cancelled', 'interrupted', 'error']
+        .includes(value.status || value.workflowState || value.workflow_state);
+      if (updatedAtMs === existing.updatedAtMs && isTerminal(existing) && !isTerminal(progress)) return false;
+    }
     const nextProgress = new Map(subAgentProgress.value);
-    const existing = nextProgress.get(subAgentId) || {};
     nextProgress.set(subAgentId, {
       ...existing,
       ...progress,
@@ -452,10 +459,11 @@ export const useWorkflowStore = defineStore('workflow', () => {
       currentContextTokens: progress.currentContextTokens ?? progress.current_context_tokens ?? existing.currentContextTokens ?? null,
       maxContextTokens: progress.maxContextTokens ?? progress.max_context_tokens ?? existing.maxContextTokens ?? null,
       isError: progress.isError ?? progress.is_error ?? existing.isError ?? false,
-      updatedAtMs: progress.updatedAtMs ?? progress.updated_at_ms ?? Date.now(),
-      createdAtMs: existing.createdAtMs ?? progress.createdAtMs ?? progress.created_at_ms ?? progress.updatedAtMs ?? progress.updated_at_ms ?? Date.now()
+      updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : null,
+      createdAtMs: existing.createdAtMs ?? progress.createdAtMs ?? progress.created_at_ms ?? updatedAtMs ?? Date.now()
     });
     subAgentProgress.value = nextProgress;
+    return true;
   };
 
   const clearSubAgentProgress = () => {

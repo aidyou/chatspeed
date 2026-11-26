@@ -42,10 +42,24 @@ pub fn composer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
         .awaiting_user_tool_call_id
         .as_deref()
         .is_some_and(|id| observer.ask_user_answered.contains_key(id));
+    let pending = if observer.clear_pending {
+        Some(rust_i18n::t!("clear_context_pending"))
+    } else if observer.start_pending {
+        Some(rust_i18n::t!("workflow_start_pending"))
+    } else if observer.resume_pending() && !observer.workflow_running() {
+        Some(rust_i18n::t!("workflow_resume_pending"))
+    } else if observer.vision_task.is_some() {
+        Some(rust_i18n::t!("workflow_vision_pending"))
+    } else if observer.rewind_pending {
+        Some(rust_i18n::t!("workflow_rewind_pending"))
+    } else {
+        None
+    };
     column = column.child(status::status(
         &observer.model,
         observer.workflow_running(),
         answered,
+        pending.map(|label| label.into_owned()),
         cx,
     ));
     let panel = suggestions::panel(observer, cx);
@@ -165,6 +179,7 @@ fn box_body(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     // lines that passed it were hidden behind the buttons.
     let owner = cx.entity().downgrade();
     let textarea = Textarea::new(&observer.composer)
+        .disabled(observer.queued_edit.is_some())
         .on_paste(move |clipboard, _, cx| {
             #[cfg(all(target_os = "macos", feature = "chat-hub"))]
             if owner.upgrade().is_some_and(|owner| {

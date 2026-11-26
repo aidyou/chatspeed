@@ -1468,6 +1468,7 @@ export function useWorkflowCore({
                         payload.max_context_tokens
                     )
                 } else if (payload.type === 'sub_agent_progress') {
+                    if (!workflowStore.upsertSubAgentProgress(payload)) return
                     const status = String(payload.status || payload.workflow_state || '').toLowerCase()
                     const isTerminal = ['completed', 'failed', 'cancelled', 'interrupted', 'error'].includes(status)
                     if (payload.wait_reason === WORKFLOW_WAIT_REASONS.USER_INPUT) {
@@ -1478,7 +1479,6 @@ export function useWorkflowCore({
                     if (isTerminal) {
                         clearPendingApprovalEntriesBySubAgent(payload.sub_agent_id)
                     }
-                    workflowStore.upsertSubAgentProgress(payload)
                 } else if (payload.type === 'notification') {
                     markSessionLiveFromNonTerminalEvent()
                     workflowStore.setNotification(payload.message, payload.category)

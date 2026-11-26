@@ -113,6 +113,7 @@ pub enum GatewayPayload {
     },
     QueuedUserMessageRemoved {
         queued_user_message_id: String,
+        cancelled_before_apply: bool,
     },
     ToolStarted {
         tool_call_id: String,

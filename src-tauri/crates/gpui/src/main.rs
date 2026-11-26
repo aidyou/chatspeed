@@ -579,6 +579,8 @@ struct Observer {
     diff_scroll: BTreeMap<String, ScrollHandle>,
     expanded: BTreeSet<String>,
     compression_started: Option<Instant>,
+    manual_compression_requests: BTreeMap<String, Instant>,
+    manual_compression_errors: BTreeMap<String, ManualCompressionError>,
     metrics: Metrics,
     switched: Option<Instant>,
     last_metrics: Instant,
@@ -692,6 +694,7 @@ struct Observer {
     draft_save: Option<Task<()>>,
     vision_task: Option<Task<()>>,
     restore_composer: Option<String>,
+    queued_edit: Option<(String, String, Vec<Attachment>)>,
     show_today_cost: bool,
     today_cost: f64,
     rewind_pending: bool,
@@ -1035,6 +1038,8 @@ impl Observer {
             diff_scroll: BTreeMap::new(),
             expanded: BTreeSet::new(),
             compression_started: None,
+            manual_compression_requests: BTreeMap::new(),
+            manual_compression_errors: BTreeMap::new(),
             metrics: Metrics {
                 started: Some(Instant::now()),
                 ..Metrics::default()
@@ -1119,6 +1124,7 @@ impl Observer {
             draft_save: None,
             vision_task: None,
             restore_composer: None,
+            queued_edit: None,
             show_today_cost: false,
             today_cost: 0.,
             rewind_pending: false,
@@ -1269,6 +1275,7 @@ impl Observer {
         if self.selected.as_deref() != Some(id.as_str()) {
             self.switch_draft(Some(id), cx);
         }
+        self.queued_edit = None;
         self.model.select();
         self.models_saved_at = None;
         self.models_pending = None;
@@ -2411,6 +2418,7 @@ impl Observer {
             self.switch_draft(None, cx);
         }
         self.rewind_pending = false;
+        self.queued_edit = None;
         self.model.select();
         self.models_saved_at = None;
         self.models_pending = None;
@@ -2444,6 +2452,8 @@ impl Observer {
         self.restore_draft(window, cx);
         let text = self.composer.read(cx).value().trim().to_string();
         if self.rewind_pending
+            || self.queued_edit.is_some()
+            || self.clear_pending
             || (text.is_empty() && self.attachments.is_empty())
             || self.start_pending
             || self.vision_task.is_some()
@@ -2496,6 +2506,9 @@ impl Observer {
     }
 
     fn dispatch_message(&mut self, text: String, attachments: Vec<Attachment>, attached_context: Option<String>, agent_id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.queued_edit.is_some() || self.clear_pending {
+            return;
+        }
         let metadata = attachment_metadata(&attachments);
         match self.selected.clone() {
             Some(id) => {
@@ -2542,9 +2555,7 @@ impl Observer {
                                     provisional: true,
                                 });
                         })
-                } else if !self.options.demo
-                    && matches!(self.model.state.as_str(), "completed" | "failed" | "cancelled" | "error")
-                {
+                } else if !self.options.demo && self.model.accepts_idle_turn() {
                     static NEXT_TURN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
                     let sequence = NEXT_TURN.fetch_add(1, Ordering::Relaxed);
                     let nanos = std::time::SystemTime::now()
@@ -2699,6 +2710,9 @@ impl Observer {
     }
 
     fn add_attachments(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if self.queued_edit.is_some() {
+            return;
+        }
         for path in paths {
             if !is_image_path(&path) {
                 self.show_toast(
@@ -2721,36 +2735,31 @@ impl Observer {
         cx.notify();
     }
 
-    fn remove_queued_message(&mut self, generation: u64, id: &str, cx: &mut Context<Self>) -> bool {
-        if !self.model.accepts(generation)
-            || !self.model.queued_messages.iter().any(|item| item.id == id)
-        {
+    fn remove_queued_message(&mut self, generation: u64, id: &str, edit: bool, cx: &mut Context<Self>) -> bool {
+        if !self.model.accepts(generation) || !self.model.can_remove_queued_message(id) {
             return false;
         }
         let Some(session) = self.selected.clone() else {
             return false;
         };
-        // Leave the row visible until the runtime confirms removal or applies it.
-        if self.worker.commands.try_send(Command::Signal {
-            id: session,
-            signal: serde_json::json!({"type": "remove_queued_user_message", "queued_user_message_id": id}),
+        let requested = Instant::now();
+        if self.worker.commands.try_send(Command::RemoveQueuedMessage {
+            generation,
+            session,
+            queue_id: id.to_owned(),
+            requested,
         }).is_err() {
             self.show_toast(ToastKind::Error, t!("queued_message_remove_failed").to_string(), cx);
             return false;
         }
         // Keep the row visible with its pending label until the runtime drops
         // it, so a slow acknowledgement never reads as a lost click.
-        self.model.mark_queue_removal(id);
+        self.model.mark_queue_removal(id, requested, edit);
         cx.notify();
         true
     }
 
-    /// Reopens a queued message in the composer so the user can revise it.
-    ///
-    /// The queue is the only pending send, so the row is removed through the
-    /// same runtime signal as the delete action, and the composer is filled
-    /// only when that signal is accepted: a transport failure must not leave
-    /// the text in the composer while the message is still queued.
+    /// Wait for the old message to be withdrawn before making it a sendable draft.
     fn edit_queued_message(
         &mut self,
         generation: u64,
@@ -2758,7 +2767,13 @@ impl Observer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.model.accepts(generation) {
+        self.restore_draft(window, cx);
+        if !self.model.accepts(generation)
+            || self.queued_edit.is_some()
+            || self.vision_task.is_some()
+            || !self.composer.read(cx).value().trim().is_empty()
+            || !self.attachments.is_empty()
+        {
             return;
         }
         let Some(item) = self
@@ -2792,22 +2807,31 @@ impl Observer {
                 Some(Attachment { path, name })
             })
             .collect::<Vec<_>>();
-        if !self.remove_queued_message(generation, id, cx) {
+        if !self.remove_queued_message(generation, id, true, cx) {
             return;
         }
-        // The pending draft wins over the composer on the next render, so clear
-        // it before the queued text replaces whatever the composer held.
-        self.restore_composer = None;
-        self.attachments = attachments;
-        self.composer
-            .update(cx, |state, cx| state.set_value(content, window, cx));
-        self.suggestions.file_request = None;
-        self.file_results.clear();
+        self.queued_edit = Some((id.to_owned(), content, attachments));
         self.composer.update(cx, |state, cx| {
             let focus = state.focus_handle(cx);
             focus.focus(window, cx);
         });
-        self.schedule_draft_save(cx);
+        cx.notify();
+    }
+
+    fn settle_queue_edit(&mut self, cx: &mut Context<Self>) {
+        let Some((id, _, _)) = &self.queued_edit else { return; };
+        let result = self.model.take_queue_removal_result(id);
+        if result.is_none() && self.model.queue_removal_pending(id) {
+            return;
+        }
+        let Some((_, content, attachments)) = self.queued_edit.take() else { return; };
+        if result == Some(true) {
+            self.restore_composer = Some(content);
+            self.attachments = attachments;
+            self.schedule_draft_save(cx);
+        } else if result == Some(false) {
+            self.show_toast(ToastKind::Warning, t!("queued_message_already_applied").into_owned(), cx);
+        }
         cx.notify();
     }
 
@@ -2930,7 +2954,12 @@ impl Observer {
     /// Vue's "Continue" is offered for paused, failed, cancelled and errored
     /// workflows; the runtime resumes from that signal.
     fn can_continue(&self) -> bool {
-        self.selected.is_some() && !self.options.demo && self.model.can_continue()
+        self.selected.is_some()
+            && !self.options.demo
+            && !self.start_pending
+            && !self.clear_pending
+            && self.vision_task.is_none()
+            && self.model.can_continue()
     }
 
     fn resume_pending(&self) -> bool {
@@ -2970,13 +2999,21 @@ impl Observer {
     }
 
     fn manual_compress(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected.clone() {
-            let _ = self.worker.commands.try_send(Command::Signal {
-                id,
-                signal: serde_json::json!({"type": "manual_compress"}),
-            });
-            cx.notify();
+        let Some(session) = self.selected.clone() else { return };
+        if self.model.compressing || self.manual_compression_requests.contains_key(&session) {
+            return;
         }
+        let requested = Instant::now();
+        self.manual_compression_errors.remove(&session);
+        if self.worker.commands.try_send(Command::ManualCompress {
+            session: session.clone(),
+            requested,
+        }).is_ok() {
+            self.manual_compression_requests.insert(session, requested);
+        } else {
+            self.manual_compression_errors.insert(session, ManualCompressionError::NotSent);
+        }
+        cx.notify();
     }
 
     /// Answers the approval the runtime is waiting on (`id` is the tool call).
@@ -3376,6 +3413,8 @@ impl Observer {
                         } else {
                             self.sessions.retain(|entry| entry.id != session);
                             self.pending_decisions.remove(&session);
+                            self.manual_compression_requests.remove(&session);
+                            self.manual_compression_errors.remove(&session);
                             if self.selected.as_ref() == Some(&session) {
                                 self.reset_new_session(cx);
                                 if let Some(id) = self.sessions.first().map(|entry| entry.id.clone()) {
@@ -3534,6 +3573,18 @@ impl Observer {
                     cx.notify();
                     continue;
                 }
+                UpdateKind::ManualCompressionResponse { session, requested, result } => {
+                    if self.manual_compression_requests.get(&session) != Some(&requested) {
+                        continue;
+                    }
+                    self.manual_compression_requests.remove(&session);
+                    if let Err(error) = result {
+                        if self.selected.as_ref() == Some(&session) {
+                            self.model.clear_compression_hint();
+                        }
+                        self.manual_compression_errors.insert(session, error);
+                    }
+                }
                 UpdateKind::Error(message) => {
                     // A failed batch signal must not leave its cards hidden
                     // forever; the runtime still lists them as pending.
@@ -3562,13 +3613,17 @@ impl Observer {
                     self.clear_pending = false;
                     match result {
                         Ok(value) => {
-                            if self.model.apply_context_clear(&value) && value["noop"] != true {
+                            if self.model.apply_context_clear(&value) {
                                 self.timeline_scroll.scroll_pending = self.timeline_scroll.follow;
-                                self.show_toast(
-                                    ToastKind::Success,
-                                    t!("clear_context_frame_done").into_owned(),
-                                    cx,
-                                );
+                                if value["noop"] != true {
+                                    self.show_toast(
+                                        ToastKind::Success,
+                                        t!("clear_context_frame_done").into_owned(),
+                                        cx,
+                                    );
+                                }
+                            } else {
+                                self.show_toast(ToastKind::Error, t!("clear_context_failed").into_owned(), cx);
                             }
                         }
                         Err(error) => self.show_toast(ToastKind::Error, error, cx),
@@ -3629,6 +3684,11 @@ impl Observer {
                         self.show_toast(ToastKind::Error, message, cx);
                     }
                 }
+                UpdateKind::QueueRemovalUnconfirmed { queue_id, requested, message } => {
+                    if self.model.reject_queue_removal(&queue_id, requested) {
+                        self.show_toast(ToastKind::Warning, message, cx);
+                    }
+                }
                 UpdateKind::QueueSubmissionFailed { queue_id, message } => {
                     if self.model.reject_queue_submission(&queue_id) {
                         self.show_toast(ToastKind::Error, message, cx);
@@ -3684,12 +3744,24 @@ impl Observer {
                     self.metrics.events += 1;
                     self.metrics.event_bytes +=
                         serde_json::to_vec(&event).map_or(0, |v| v.len() as u64);
+                    if event["type"] == "compression_applied" {
+                        if let Some(session) = &self.selected {
+                            if matches!(self.manual_compression_errors.get(session), Some(ManualCompressionError::Unconfirmed(_))) {
+                                self.manual_compression_errors.remove(session);
+                            }
+                        }
+                    }
                     self.model.event(event);
                 }
             }
             self.prune_hidden_approvals();
             dirty = true;
         }
+        if self.model.expire_queue_removals(Instant::now()) {
+            self.show_toast(ToastKind::Warning, t!("queued_message_removal_unconfirmed").into_owned(), cx);
+            dirty = true;
+        }
+        self.settle_queue_edit(cx);
         if self.model.compressing && self.compression_started.is_none() {
             self.compression_started = Some(Instant::now());
         }
@@ -3721,7 +3793,11 @@ impl Observer {
         }
         // The live status line counts seconds; a running task needs a repaint
         // even when no event arrives.
-        if self.workflow_running() && self.last_tick.elapsed() >= Duration::from_secs(1) {
+        let compression_pending = self.selected.as_ref()
+            .is_some_and(|session| self.manual_compression_requests.contains_key(session));
+        if (self.workflow_running() || self.model.compressing || compression_pending)
+            && self.last_tick.elapsed() >= Duration::from_secs(1)
+        {
             self.last_tick = Instant::now();
             cx.notify();
         }
@@ -6210,17 +6286,17 @@ impl Render for Observer {
                     .child(t!("live_overflow").to_string()),
             );
         }
-        if self.model.compressing {
-            let seconds = self
-                .compression_started
+        let compression_request = self.selected.as_ref()
+            .and_then(|session| self.manual_compression_requests.get(session).copied());
+        if self.model.compressing || compression_request.is_some() {
+            let seconds = compression_request.or(self.compression_started)
                 .map(|started| started.elapsed().as_secs())
                 .unwrap_or(0);
-            let hint = self
-                .model
-                .compression_message
-                .trim_end_matches(['.', '…'])
-                .trim()
-                .to_owned();
+            let hint = if self.model.compressing && !self.model.compression_message.is_empty() {
+                self.model.compression_message.trim_end_matches(['.', '…']).trim().to_owned()
+            } else {
+                t!("manual_compress_waiting").into_owned()
+            };
             content = content.child(
                 h_flex().w_full().justify_center().py_3().child(
                     h_flex()
@@ -6244,6 +6320,15 @@ impl Render for Observer {
                         ),
                 ),
             );
+        }
+
+        if let Some(error) = self.selected.as_ref().and_then(|session| self.manual_compression_errors.get(session)) {
+            let message = match error {
+                ManualCompressionError::NotSent => t!("manual_compress_not_sent").into_owned(),
+                ManualCompressionError::Rejected(detail) => t!("manual_compress_failed", detail = detail).into_owned(),
+                ManualCompressionError::Unconfirmed(detail) => t!("manual_compress_unconfirmed", detail = detail).into_owned(),
+            };
+            content = content.child(div().px_4().py_2().text_size(px(12.)).text_color(cx.theme().danger).child(message));
         }
 
         // The kit's root plugin owns the hairline outline, the gutter shadow and
@@ -6481,7 +6566,10 @@ impl Render for Observer {
         );
         // Configuration dialogs float above the whole frame instead of growing
         // the composer, like Vue's appended-to-body popovers.
-        let status_overlay = if self.active_child.is_none() {
+        let status_overlay = if self.active_child.is_none()
+            && !ui::terminal::expanded(self)
+            && !self.file_editor.is_open()
+        {
             self.status_panel_area(window)
                 .and_then(|area| ui::status::overlay(self, area, cx))
         } else {

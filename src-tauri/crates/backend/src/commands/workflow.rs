@@ -1118,9 +1118,8 @@ fn inject_at_mentions(prompt: &str, allowed_paths: &[String]) -> (String, String
 }
 
 #[cfg(not(feature = "desktop"))]
-fn allowed_paths_from_workflow_snapshot(snapshot: &WorkflowSnapshot) -> Vec<String> {
-    snapshot
-        .workflow
+fn allowed_paths_from_workflow(workflow: &Workflow) -> Vec<String> {
+    workflow
         .agent_config
         .as_deref()
         .and_then(AgentConfig::from_json)
@@ -2166,11 +2165,12 @@ fn reconcile_durable_child_completion(
                 .then(|| durable_child_terminal_user_error(store, child_id))
                 .flatten()
         });
-    let should_signal = matches!(&parent_context.state, RuntimeState::Waiting)
-        && matches!(
-            parent_context.wait_reason.as_ref(),
-            Some(WaitReason::SubAgent)
-        )
+    let parent_workflow_is_terminal = store
+        .get_workflow(parent_session_id)?
+        .is_some_and(|workflow| compat_is_terminal_snapshot_status(&workflow.status));
+    let should_signal = !parent_workflow_is_terminal
+        && matches!(&parent_context.state, RuntimeState::Waiting)
+        && matches!(parent_context.wait_reason, Some(WaitReason::SubAgent))
         && parent_context.waiting_on_sub_agent_id.as_deref() == Some(child_id)
         && existing_completion.is_none_or(|completion| !completion.consumed);
     parent_context
@@ -2226,13 +2226,16 @@ fn reconcile_durable_child_completion(
             summary
         }
     };
-    let result = json!({
-        "status": status,
-        "task_id": child_id,
-        "summary": "Sub-agent terminal completion recovered after restart",
-        "tool_calls_count": 0,
-        "usage_summary": usage_summary,
-    });
+    let result = existing_completion
+        .filter(|_| already_projected)
+        .map(SubAgentCompletion::to_signal_result)
+        .unwrap_or_else(|| json!({
+            "status": status,
+            "task_id": child_id,
+            "summary": "Sub-agent terminal completion recovered after restart",
+            "tool_calls_count": 0,
+            "usage_summary": usage_summary,
+        }));
 
     if !already_projected {
         parent_context
@@ -2340,9 +2343,17 @@ fn reconcile_durable_child_completion(
 }
 
 #[cfg(not(feature = "desktop"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChildRecovery {
+    OwnerStartup,
+    DurableTerminalOnly,
+}
+
+#[cfg(not(feature = "desktop"))]
 fn reconcile_child_workflows(
     store: &MainStore,
     child_workflows: Vec<Workflow>,
+    recovery: ChildRecovery,
 ) -> Result<(), crate::db::StoreError> {
     let mut decisions = Vec::new();
     let mut detached_children_by_parent = HashMap::new();
@@ -2355,6 +2366,15 @@ fn reconcile_child_workflows(
             continue;
         }
 
+        let terminal_status = durable_child_terminal_state(store, &child_id)?;
+        if terminal_status.is_none()
+            && (recovery == ChildRecovery::DurableTerminalOnly
+                || compat_is_terminal_snapshot_status(&child.status))
+        {
+            // A child is persisted before its executor is registered. Absence
+            // from the live map is not evidence of a restart during a refresh.
+            continue;
+        }
         let detached_by_manual_clear = match child.parent_session_id.as_deref() {
             Some(parent_session_id) => {
                 let detached_children =
@@ -2368,7 +2388,6 @@ fn reconcile_child_workflows(
             }
             None => false,
         };
-        let terminal_status = durable_child_terminal_state(store, &child_id)?;
         decisions.push((child, child_id, terminal_status, detached_by_manual_clear));
     }
 
@@ -2507,11 +2526,19 @@ fn reconcile_child_workflows(
                 &usage_summary,
             )?;
             let usage_summary = Some(usage_summary);
-            let event = WorkflowEvent::sub_agent_interrupted(
+            let result = json!({
+                "status": "interrupted",
+                "task_id": child_id,
+                "error": "Sub-agent interrupted by application restart",
+                "tool_calls_count": 0,
+                "usage_summary": usage_summary,
+            });
+            let mut event = WorkflowEvent::sub_agent_interrupted(
                 parent_session_id.clone(),
                 child_id.clone(),
                 "application_restart".to_string(),
             );
+            event.event_data["result"] = result.clone();
             store.append_workflow_event(&event)?;
 
             let message = format!(
@@ -2534,24 +2561,12 @@ fn reconcile_child_workflows(
                         json!({
                             "sub_agent_id": child_id.clone(),
                             "summary": "Sub-agent interrupted",
-                            "result": {
-                                "status": "interrupted",
-                                "task_id": child_id.clone(),
-                                "error": "Sub-agent interrupted by application restart",
-                                "tool_calls_count": context.pending_tools.len(),
-                                "usage_summary": usage_summary.clone()
-                            },
+                            "result": result.clone(),
                         }),
                     );
                     metadata["sub_agent_id"] = json!(child_id.clone());
                     metadata["summary"] = json!("Sub-agent interrupted");
-                    metadata["result"] = json!({
-                        "status": "interrupted",
-                        "task_id": child_id.clone(),
-                        "error": "Sub-agent interrupted by application restart",
-                        "tool_calls_count": context.pending_tools.len(),
-                        "usage_summary": usage_summary.clone()
-                    });
+                    metadata["result"] = result;
                     metadata["execution_status"] = json!("interrupted");
                     metadata["is_error"] = json!(true);
                     metadata["error_type"] = json!("SubAgentInterrupted");
@@ -2569,18 +2584,21 @@ fn reconcile_child_workflows(
             if let Some(mut parent_context) = store.get_execution_context(&parent_session_id)? {
                 let parent_workflow_is_terminal = store
                     .get_workflow(&parent_session_id)?
-                    .and_then(|workflow| workflow.status.parse::<WorkflowState>().ok())
-                    .is_some_and(|state| compat_is_terminal_snapshot_status(&state.to_string()))
+                    .is_some_and(|workflow| compat_is_terminal_snapshot_status(&workflow.status))
                     || terminal_workflow_state(&parent_context.state).is_some();
+                // A matching cold wait (including final review) must consume the
+                // structured outcome through the same path as a live completion.
+                let waiting_for_child = !parent_workflow_is_terminal
+                    && parent_context.state == RuntimeState::Waiting
+                    && parent_context.wait_reason == Some(WaitReason::SubAgent)
+                    && parent_context.waiting_on_sub_agent_id.as_deref() == Some(child_id.as_str());
                 parent_context
                     .sub_agent_sessions
                     .retain(|existing| existing != &child_id);
-                if parent_context.waiting_on_sub_agent_id.as_deref() == Some(&child_id) {
+                if !waiting_for_child
+                    && parent_context.waiting_on_sub_agent_id.as_deref() == Some(child_id.as_str())
+                {
                     parent_context.waiting_on_sub_agent_id = None;
-                    parent_context.wait_reason = None;
-                    if !parent_workflow_is_terminal {
-                        parent_context.state = RuntimeState::Pending;
-                    }
                 }
                 parent_context
                     .pending_sub_agent_completions
@@ -2597,16 +2615,10 @@ fn reconcile_child_workflows(
                         tool_calls_count: 0,
                         usage_summary,
                         completed_at_ms: chrono::Utc::now().timestamp_millis(),
-                        consumed: true,
+                        consumed: !waiting_for_child,
                         user_error: None,
                     });
                 store.upsert_execution_context(&parent_context)?;
-                if !parent_workflow_is_terminal {
-                    store.update_workflow_status(
-                        &parent_session_id,
-                        &WorkflowState::Pending.to_string(),
-                    )?;
-                }
             }
         }
     }
@@ -2614,12 +2626,26 @@ fn reconcile_child_workflows(
     Ok(())
 }
 
+/// Only the exclusive runtime owner may run this before admitting any work.
 #[cfg(not(feature = "desktop"))]
 pub(crate) fn reconcile_interrupted_child_workflows(
     store: &MainStore,
 ) -> Result<(), crate::db::StoreError> {
-    let child_workflows = store.list_child_workflows()?;
-    reconcile_child_workflows(store, child_workflows)
+    let child_workflows = store.list_child_workflows_for_startup_recovery()?;
+    reconcile_child_workflows(store, child_workflows, ChildRecovery::OwnerStartup)
+}
+
+#[cfg(not(feature = "desktop"))]
+pub(crate) fn reconcile_terminal_child_workflow(
+    store: &MainStore,
+    child_id: &str,
+) -> Result<(), crate::db::StoreError> {
+    let child = store.get_workflow(child_id)?;
+    reconcile_child_workflows(
+        store,
+        child.into_iter().filter(|child| child.parent_session_id.is_some()).collect(),
+        ChildRecovery::DurableTerminalOnly,
+    )
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -2646,7 +2672,7 @@ fn reconcile_child_workflows_for_parent(
     }
 
     let child_workflows = store.list_child_workflows_for_parent(parent_session_id)?;
-    reconcile_child_workflows(store, child_workflows)
+    reconcile_child_workflows(store, child_workflows, ChildRecovery::DurableTerminalOnly)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2660,25 +2686,6 @@ pub struct WorkflowContextFrameResult {
     pub state: WorkflowState,
     pub wait_reason: Option<WaitReason>,
     pub has_live_session: bool,
-}
-
-#[cfg(not(feature = "desktop"))]
-fn newest_persisted_segment_id(messages: &[WorkflowMessage]) -> i32 {
-    messages
-        .iter()
-        .map(|message| message.segment_id)
-        .max()
-        .unwrap_or(1)
-}
-
-#[cfg(not(feature = "desktop"))]
-fn effective_segment_id_from_snapshot(
-    messages: &[WorkflowMessage],
-    execution_context_segment_id: Option<i32>,
-) -> i32 {
-    newest_persisted_segment_id(messages)
-        .max(execution_context_segment_id.unwrap_or(1))
-        .max(1)
 }
 
 #[cfg(not(feature = "desktop"))]
@@ -3824,10 +3831,9 @@ pub(crate) async fn workflow_start_core(
         workflow_status,
     ) = {
         let store = &*main_store_arc;
-        let snapshot = store
-            .get_workflow_snapshot(&session_id)
+        let wf = store
+            .get_workflow_for_ui(&session_id)
             .map_err(|e| e.to_string())?;
-        let wf = snapshot.workflow;
 
         let agent_cfg = wf
             .agent_config
@@ -3887,9 +3893,8 @@ pub(crate) async fn workflow_start_core(
     // Load agent_config JSON for easier access to overrides like 'phase'
     let agent_config_json: Value = {
         let store = &*main_store_arc;
-        if let Ok(snapshot) = store.get_workflow_snapshot(&session_id) {
-            snapshot
-                .workflow
+        if let Ok(workflow) = store.get_workflow_for_ui(&session_id) {
+            workflow
                 .agent_config
                 .as_ref()
                 .and_then(|s| serde_json::from_str(s).ok())
@@ -4253,28 +4258,21 @@ async fn run_terminal_manual_compression(
     gateway: Arc<WorkflowRuntimeHub>,
     factory: Arc<dyn SubAgentFactory>,
     session_id: &str,
-    workflow_snapshot: &WorkflowSnapshot,
+    workflow: &Workflow,
 ) -> Result<bool, ApplicationError> {
     let mut agent_config = main_store
-        .get_agent(&workflow_snapshot.workflow.agent_id)
+        .get_agent(&workflow.agent_id)
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("Agent {} not found", workflow_snapshot.workflow.agent_id))?;
-    let agent_config_value = workflow_snapshot
-        .workflow
+        .ok_or_else(|| format!("Agent {} not found", workflow.agent_id))?;
+    let agent_config_value = workflow
         .agent_config
         .as_ref()
         .and_then(|config| serde_json::from_str::<Value>(config).ok())
         .unwrap_or_else(|| json!({}));
-    if let Some(config) = workflow_snapshot.workflow.agent_config.as_deref() {
+    if let Some(config) = workflow.agent_config.as_deref() {
         agent_config.merge_config(config);
     }
-    let allowed_paths = workflow_snapshot
-        .workflow
-        .agent_config
-        .as_deref()
-        .and_then(AgentConfig::from_json)
-        .and_then(|config| config.allowed_paths)
-        .unwrap_or_default()
+    let allowed_paths = allowed_paths_from_workflow(workflow)
         .into_iter()
         .map(|path| {
             let path = PathBuf::from(path);
@@ -4379,16 +4377,10 @@ pub(crate) async fn workflow_signal_core(
     let workflow_manager_arc = svc.workflow_manager.clone();
     let gateway_arc = svc.gateway.clone();
     let main_store_arc = svc.main_store.clone();
-    let workflow_snapshot = {
-        let store = &*main_store_arc;
-        store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?
-    };
-    let signal = inject_at_mentions_into_signal(
-        &signal,
-        &allowed_paths_from_workflow_snapshot(&workflow_snapshot),
-    );
+    let workflow = main_store_arc
+        .get_workflow_for_ui(&session_id)
+        .map_err(|e| e.to_string())?;
+    let signal = inject_at_mentions_into_signal(&signal, &allowed_paths_from_workflow(&workflow));
     let recovery_context = restore_context_for_signal(main_store_arc.clone(), &session_id);
     let workflow_signal = WorkflowSignal::parse(&signal);
 
@@ -4401,7 +4393,7 @@ pub(crate) async fn workflow_signal_core(
     // A still-live executor continues through the existing signal path to avoid concurrent compression.
     if should_bypass_manager_for_terminal_manual_compression(
         workflow_signal.as_ref(),
-        &workflow_snapshot.workflow.status,
+        &workflow.status,
         reconciled_managed_status.as_ref(),
     ) {
         log::info!(
@@ -4416,7 +4408,7 @@ pub(crate) async fn workflow_signal_core(
             gateway_arc.clone(),
             svc.factory.clone(),
             &session_id,
-            &workflow_snapshot,
+            &workflow,
         )
         .await?;
         return Ok(if applied {
@@ -4438,7 +4430,7 @@ pub(crate) async fn workflow_signal_core(
             .flatten();
 
         let snapshot_is_terminal =
-            compat_is_terminal_snapshot_status(&workflow_snapshot.workflow.status);
+            compat_is_terminal_snapshot_status(&workflow.status);
         let should_force_recovery_for_terminal_user_message = snapshot_is_terminal
             && matches!(
                 signal_type_enum,
@@ -4491,12 +4483,12 @@ pub(crate) async fn workflow_signal_core(
             log::info!(
                 "[Workflow][session={}][phase=signal] Live session is completed and snapshot is terminal (status={}). Treating user message as completed-session resume request.",
                 session_id,
-                workflow_snapshot.workflow.status
+                workflow.status
             );
             workflow_start_core(
                 svc,
                 session_id.clone(),
-                workflow_snapshot.workflow.agent_id.clone(),
+                workflow.agent_id.clone(),
                 signal_json_content(&signal),
                 signal_json_metadata(&signal),
                 signal_json_attached_context(&signal),
@@ -4620,7 +4612,7 @@ pub(crate) async fn workflow_signal_core(
                 .as_ref()
                 .and_then(|ctx| ctx.wait_reason.clone())
                 .or_else(|| {
-                    compat_wait_reason_from_snapshot_status(&workflow_snapshot.workflow.status)
+                    compat_wait_reason_from_snapshot_status(&workflow.status)
                 });
 
             // Handle user_message signal (Phase 3 unified signal type)
@@ -4633,7 +4625,7 @@ pub(crate) async fn workflow_signal_core(
                     should_reinject_user_message_after_recovery(effective_wait_reason.as_ref())
                         || (recovery_context.is_none()
                             && matches!(
-                                compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                                compat_snapshot_workflow_state(&workflow.status),
                                 Some(
                                     WorkflowState::AwaitingUser
                                         | WorkflowState::AwaitingApproval
@@ -4645,7 +4637,7 @@ pub(crate) async fn workflow_signal_core(
                 // persisted execution history yet), fall back to the durable workflow status.
                 let is_resumable = can_resume_user_message_from_recovery(
                     recovery_context.as_ref(),
-                    &workflow_snapshot.workflow.status,
+                    &workflow.status,
                 );
 
                 if !is_resumable {
@@ -4654,11 +4646,11 @@ pub(crate) async fn workflow_signal_core(
                         session_id,
                         recovery_context.as_ref().map(|ctx| &ctx.state),
                         effective_wait_reason,
-                        workflow_snapshot.workflow.status
+                        workflow.status
                     );
                     return Err(ApplicationError::state(format!(
                         "Cannot resume: workflow is in '{}' state",
-                        workflow_snapshot.workflow.status
+                        workflow.status
                     )));
                 }
 
@@ -4667,13 +4659,13 @@ pub(crate) async fn workflow_signal_core(
                     session_id,
                     recovery_context.as_ref().map(|ctx| &ctx.state),
                     effective_wait_reason,
-                    workflow_snapshot.workflow.status
+                    workflow.status
                 );
 
                 workflow_start_core(
                     svc,
                     session_id.clone(),
-                    workflow_snapshot.workflow.agent_id.clone(),
+                    workflow.agent_id.clone(),
                     if should_reinject_after_recovery {
                         None
                     } else {
@@ -4727,7 +4719,7 @@ pub(crate) async fn workflow_signal_core(
                 let can_rebroadcast = effective_wait_reason == Some(WaitReason::Approval)
                     || (recovery_context.is_none()
                         && matches!(
-                            compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                            compat_snapshot_workflow_state(&workflow.status),
                             Some(
                                 WorkflowState::AwaitingApproval
                                     | WorkflowState::AwaitingAutoApproval
@@ -4739,7 +4731,7 @@ pub(crate) async fn workflow_signal_core(
                         session_id,
                         recovery_context.as_ref().map(|ctx| &ctx.state),
                         effective_wait_reason,
-                        workflow_snapshot.workflow.status
+                        workflow.status
                     );
                     return Ok("Workflow is not awaiting approval".to_string());
                 }
@@ -4752,7 +4744,7 @@ pub(crate) async fn workflow_signal_core(
                 workflow_start_core(
                     svc,
                     session_id.clone(),
-                    workflow_snapshot.workflow.agent_id.clone(),
+                    workflow.agent_id.clone(),
                     None,
                     None,
                     None,
@@ -4777,7 +4769,7 @@ pub(crate) async fn workflow_signal_core(
                     || effective_wait_reason == Some(WaitReason::Confirmation)
                     || (recovery_context.is_none()
                         && matches!(
-                            compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                            compat_snapshot_workflow_state(&workflow.status),
                             Some(WorkflowState::Paused)
                         ));
                 if !can_resume {
@@ -4787,7 +4779,7 @@ pub(crate) async fn workflow_signal_core(
                         signal_type,
                         recovery_context.as_ref().map(|ctx| &ctx.state),
                         effective_wait_reason,
-                        workflow_snapshot.workflow.status
+                        workflow.status
                     );
                     return Ok(format!(
                         "Workflow is not paused, ignoring {} signal",
@@ -4815,7 +4807,7 @@ pub(crate) async fn workflow_signal_core(
                 workflow_start_core(
                     svc,
                     session_id.clone(),
-                    workflow_snapshot.workflow.agent_id.clone(),
+                    workflow.agent_id.clone(),
                     None,
                     None,
                     None,
@@ -4868,7 +4860,7 @@ pub(crate) async fn workflow_signal_core(
                 let can_resume = effective_wait_reason == Some(WaitReason::Approval)
                     || (recovery_context.is_none()
                         && matches!(
-                            compat_snapshot_workflow_state(&workflow_snapshot.workflow.status),
+                            compat_snapshot_workflow_state(&workflow.status),
                             Some(
                                 WorkflowState::AwaitingApproval
                                     | WorkflowState::AwaitingAutoApproval
@@ -4877,7 +4869,7 @@ pub(crate) async fn workflow_signal_core(
                 if !can_resume {
                     return Err(ApplicationError::state(format!(
                         "Cannot process approval: Workflow is in '{}' state, not awaiting approval.",
-                        workflow_snapshot.workflow.status
+                        workflow.status
                     )));
                 }
 
@@ -4889,7 +4881,7 @@ pub(crate) async fn workflow_signal_core(
                 workflow_start_core(
                     svc,
                     session_id.clone(),
-                    workflow_snapshot.workflow.agent_id.clone(),
+                    workflow.agent_id.clone(),
                     None,
                     None,
                     None,
@@ -4936,14 +4928,14 @@ pub(crate) async fn workflow_signal_core(
                 if effective_wait_reason != Some(WaitReason::SubAgent) {
                     return Err(ApplicationError::state(format!(
                         "Cannot process sub-agent completion: Workflow is in '{}' state.",
-                        workflow_snapshot.workflow.status
+                        workflow.status
                     )));
                 }
 
                 workflow_start_core(
                     svc,
                     session_id.clone(),
-                    workflow_snapshot.workflow.agent_id.clone(),
+                    workflow.agent_id.clone(),
                     None,
                     None,
                     None,
@@ -5528,27 +5520,29 @@ pub(crate) async fn begin_new_context_frame_core(
     let gateway = svc.gateway.clone();
     let tsid_generator = svc.tsid_generator.clone();
 
-    let snapshot = {
-        let store = &*main_store;
-        store
-            .get_workflow_snapshot(&session_id)
-            .map_err(|e| e.to_string())?
-    };
+    let workflow = main_store
+        .get_workflow_for_ui(&session_id)
+        .map_err(|e| e.to_string())?;
+    let last_message = main_store
+        .get_last_workflow_message(&session_id)
+        .map_err(|e| e.to_string())?;
+    let persisted_segment_id = main_store
+        .latest_workflow_message_segment_id(&session_id)
+        .map_err(|e| e.to_string())?;
 
     let execution_context = hydrate_execution_context_for_snapshot(
         main_store.clone(),
         &session_id,
-        Some(snapshot.workflow.status.as_str()),
+        Some(workflow.status.as_str()),
         restore_context_for_signal(main_store.clone(), &session_id),
     )
     .await;
-    let effective_segment_id = effective_segment_id_from_snapshot(
-        &snapshot.messages,
-        execution_context.as_ref().map(|ctx| ctx.current_segment_id),
-    );
-    if snapshot
-        .messages
-        .last()
+    let effective_segment_id = persisted_segment_id
+        .unwrap_or(1)
+        .max(execution_context.as_ref().map_or(1, |ctx| ctx.current_segment_id))
+        .max(1);
+    if last_message
+        .as_ref()
         .is_some_and(ContextManager::is_manual_clear_context_message)
     {
         {
@@ -5562,7 +5556,7 @@ pub(crate) async fn begin_new_context_frame_core(
         return Ok(WorkflowContextFrameResult {
             noop: true,
             segment_id: effective_segment_id,
-            marker_message: snapshot.messages.last().cloned(),
+            marker_message: last_message,
             current_context_tokens: execution_context
                 .as_ref()
                 .and_then(|ctx| ctx.current_context_tokens)
@@ -5635,11 +5629,8 @@ pub(crate) async fn begin_new_context_frame_core(
         let (marker_message, segment_id, current_context_tokens, max_context_tokens) = {
             let store = &*main_store;
             let marker_message = store
-                .get_workflow_snapshot(&session_id)
-                .map_err(|e| e.to_string())?
-                .messages
-                .last()
-                .cloned();
+                .get_last_workflow_message(&session_id)
+                .map_err(|e| e.to_string())?;
             let current_context = store
                 .get_execution_context(&session_id)
                 .map_err(|e| e.to_string())?;
@@ -7713,7 +7704,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_child_workflows_for_parent_skips_terminal_parent_snapshot() {
+    fn reconcile_child_workflows_for_parent_does_not_cancel_children_of_terminal_parent() {
         let store = create_test_store();
         seed_agent(&store, "agent-test");
         store
@@ -7747,7 +7738,7 @@ mod tests {
             .get_workflow("terminal-parent-child")
             .expect("failed to load child workflow")
             .expect("child workflow should exist");
-        assert_eq!(child.status, "cancelled");
+        assert_eq!(child.status, "pending");
         let parent = store
             .get_workflow("terminal-parent")
             .expect("failed to load parent workflow")
@@ -7759,6 +7750,45 @@ mod tests {
             .expect("parent context should exist");
         assert_eq!(parent_context.state, RuntimeState::Cancelled);
         assert!(parent_context.wait_reason.is_none());
+    }
+
+    #[test]
+    fn reconcile_running_owner_leaves_unregistered_child_and_parent_wait_intact() {
+        let store = create_test_store();
+        seed_agent(&store, "agent-test");
+        for (id, parent) in [("race-parent", None), ("starting-child", Some("race-parent")), ("finished-child", Some("race-parent"))] {
+            store.create_workflow(id, id, "agent-test", None, parent).expect("seed workflow");
+        }
+        let mut parent = ExecutionContext::new("race-parent".to_string());
+        parent.state = RuntimeState::Waiting;
+        parent.wait_reason = Some(WaitReason::SubAgent);
+        parent.waiting_on_sub_agent_id = Some("starting-child".to_string());
+        store.upsert_execution_context(&parent).expect("persist parent wait");
+        store.update_workflow_status("race-parent", "awaiting_sub_agent").expect("persist parent status");
+        store.append_workflow_event(&WorkflowEvent::workflow_completed("finished-child".to_string(), None)).expect("finish sibling");
+
+        // Both callers observe the deterministic gap after insert, before child registration.
+        reconcile_terminal_child_workflow(&store, "finished-child").expect("project sibling");
+        reconcile_child_workflows_for_parent(&store, "race-parent").expect("refresh parent");
+        assert_eq!(store.get_workflow("starting-child").unwrap().unwrap().status, "pending");
+        assert!(store.get_execution_context("starting-child").unwrap().is_none());
+        assert!(store.list_workflow_events("race-parent").unwrap().iter().all(|event| event.event_type != "sub_agent_interrupted"));
+        assert!(store.get_workflow_snapshot("race-parent").unwrap().messages.is_empty());
+
+        // With a new exclusive owner, the same persisted gap is a real interruption.
+        reconcile_interrupted_child_workflows(&store).expect("recover orphan at startup");
+        reconcile_interrupted_child_workflows(&store).expect("repeat startup recovery");
+        assert_eq!(store.get_workflow("starting-child").unwrap().unwrap().status, "cancelled");
+        assert_eq!(store.get_workflow("race-parent").unwrap().unwrap().status, "awaiting_sub_agent");
+        let parent = store.get_execution_context("race-parent").unwrap().unwrap();
+        assert_eq!(parent.waiting_on_sub_agent_id.as_deref(), Some("starting-child"));
+        let completion = parent.pending_sub_agent_completions.iter().find(|completion| completion.sub_agent_id == "starting-child").expect("durable outcome for parent resume");
+        assert_eq!(completion.status, "interrupted");
+        assert!(!completion.consumed);
+        let events = store.list_workflow_events("race-parent").unwrap();
+        let interruptions = events.iter().filter(|event| event.event_type == "sub_agent_interrupted").collect::<Vec<_>>();
+        assert_eq!(interruptions.len(), 1);
+        assert_eq!(interruptions[0].event_data["reason"], "application_restart");
     }
 
     #[test]
@@ -7777,6 +7807,11 @@ mod tests {
                 Some("signal-parent"),
             )
             .expect("failed to create child workflow");
+        let mut parent_context = ExecutionContext::new("signal-parent".to_string());
+        parent_context.state = RuntimeState::Waiting;
+        parent_context.wait_reason = Some(WaitReason::SubAgent);
+        parent_context.waiting_on_sub_agent_id = Some("signal-child".to_string());
+        store.upsert_execution_context(&parent_context).expect("persist parent wait");
         let mut child_context = ExecutionContext::new("signal-child".to_string());
         child_context.state = RuntimeState::Completed;
         store
@@ -7799,7 +7834,7 @@ mod tests {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         WorkflowManager::register_session_signal_tx("signal-parent".to_string(), tx);
-        reconcile_interrupted_child_workflows(&store)
+        reconcile_terminal_child_workflow(&store, "signal-child")
             .expect("failed to re-deliver terminal child completion");
         let signal: Value = serde_json::from_str(
             &rx.try_recv()

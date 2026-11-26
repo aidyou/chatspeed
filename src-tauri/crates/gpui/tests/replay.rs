@@ -178,10 +178,12 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
     let done_server = done.clone();
     let (saved_tx, saved_rx) = std::sync::mpsc::channel();
     let (signal_tx, signal_rx) = std::sync::mpsc::channel();
+    let (compression_tx, compression_rx) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         let mut held_streams = Vec::new();
         let mut streams = 0;
         let mut snapshots = 0;
+        let mut handoff_persisted = false;
         while !done_server.load(Ordering::Relaxed) {
             let Ok((mut socket, _)) = listener.accept() else {
                 std::thread::sleep(Duration::from_millis(5));
@@ -218,6 +220,10 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                 // A stalled settings response must not hold up the first sidebar list.
                 held_streams.push(socket);
                 continue;
+            } else if path.starts_with("/control/v1/workflows/compress-") && path.ends_with("/signal") {
+                assert!(request.to_lowercase().contains("idempotency-key: gpui-manual-compress-"));
+                compression_tx.send((path.to_owned(), socket)).unwrap();
+                continue;
             } else if path.ends_with("/signal") {
                 signal_tx.send(path.to_owned()).unwrap();
                 ("application/json", "{}".to_owned())
@@ -240,6 +246,26 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                     "application/json",
                     json!({"workflow":{"status":"awaiting_user"}}).to_string(),
                 )
+            } else if path == "/control/v1/workflows/compress-other?limit=500" {
+                let messages = if handoff_persisted {
+                    json!([{"id":8,"role":"system","messageKind":"summary","messageSubtype":"compression","message":"## Previous Context Snapshot\n<state_snapshot>handoff</state_snapshot>"}])
+                } else {
+                    json!([])
+                };
+                ("application/json", json!({"messages":messages, "workflow":{"status":"completed"}}).to_string())
+            } else if path == "/control/v1/workflows/compress-other/stream" {
+                let event = |sequence, payload| format!("data: {}\n\n", json!({
+                    "schema_version":1, "server_instance_id":"mock", "session_id":"compress-other", "sequence":sequence, "payload":payload
+                }));
+                let body = format!("{}{}{}",
+                    event(1, json!({"type":"compression_status", "is_compressing":true, "message":"Compressing"})),
+                    event(2, json!({"type":"compression_applied", "compressed_until_message_id":7, "current_context_tokens":100})),
+                    event(3, json!({"type":"compression_status", "is_compressing":false})),
+                );
+                handoff_persisted = true;
+                let _ = write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n", body.len());
+                held_streams.push(socket);
+                continue;
             } else if path.ends_with("/stream") {
                 streams += 1;
                 let body = match streams {
@@ -381,6 +407,68 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
         .map(|_| signal_rx.recv_timeout(Duration::from_secs(4)))
         .collect();
     worker.set_child(None);
+
+    let requested = Instant::now();
+    worker.commands.try_send(Command::ManualCompress {
+        session: "compress-first".into(), requested,
+    }).unwrap();
+    let (path, mut response) = compression_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+    assert_eq!(path, "/control/v1/workflows/compress-first/signal");
+    worker.commands.try_send(Command::Select {
+        generation: generation + 1, id: "compress-other".into(),
+    }).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        assert!(Instant::now() < deadline, "compression must not block selection");
+        if let Ok(update) = worker.updates.try_recv() {
+            if update.generation == generation + 1 && matches!(update.kind, UpdateKind::Snapshot(_)) {
+                break;
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    // Complete the request after the selection has already changed.
+    let error = r#"{"error":{"code":"fixture_error","message":"compression rejected"}}"#;
+    write!(response, "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{error}", error.len()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut other_model = Model::default();
+    let mut rejected = false;
+    let mut handoff_visible = false;
+    while !rejected || !handoff_visible {
+        assert!(Instant::now() < deadline, "expected the late error and the refreshed handoff");
+        if let Ok(update) = worker.updates.try_recv() {
+            match update.kind {
+                UpdateKind::ManualCompressionResponse { session, requested: at, result } => {
+                    assert_eq!(update.generation, 0);
+                    assert_eq!(session, "compress-first");
+                    assert_eq!(at, requested);
+                    assert!(matches!(result, Err(chatspeed_gpui::types::ManualCompressionError::Rejected(message)) if message == "compression rejected"));
+                    rejected = true;
+                }
+                UpdateKind::Snapshot(page) if update.generation == generation + 1 => {
+                    other_model.page(page, false);
+                }
+                UpdateKind::Event(event) if update.generation == generation + 1 => {
+                    let applied = event["type"] == "compression_applied";
+                    if applied {
+                        assert!(other_model.compressing);
+                        let rows = chatspeed_gpui::presentation::project(other_model.visible().cloned().collect(), &[]);
+                        assert!(matches!(rows.as_slice(), [chatspeed_gpui::presentation::Row::Snapshot(_)]));
+                        handoff_visible = true;
+                    }
+                    other_model.event(event);
+                    if applied {
+                        assert!(!other_model.compressing);
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     assert!(worker.save_sidebar(false));
     assert!(worker.save_sidebar(true));
     worker.save_geometry(vec![("workflow_window_size", json!({"width": 1100, "height": 700}))]);

@@ -28,6 +28,8 @@ pub fn footer(observer: &Observer, cx: &mut Context<Observer>) -> AnyElement {
     let can_send = (!observer.composer.read(cx).value().trim().is_empty()
         || !observer.attachments.is_empty())
         && !observer.start_pending
+        && !observer.clear_pending
+        && observer.queued_edit.is_none()
         && observer.vision_task.is_none();
 
     h_flex()

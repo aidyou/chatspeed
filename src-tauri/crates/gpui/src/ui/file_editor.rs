@@ -268,6 +268,7 @@ fn save(this: &mut Observer, cx: &mut Context<Observer>) {
                         doc.baseline = value;
                         doc.original = text;
                     }
+                    this.refresh_authorized_dirs(cx);
                 }
                 Err(error) => {
                     editor.error = Some(if error.kind() == io::ErrorKind::AlreadyExists {
@@ -284,13 +285,15 @@ fn save(this: &mut Observer, cx: &mut Context<Observer>) {
     cx.notify();
 }
 
+impl FileEditor {
+    pub(crate) fn is_open(&self) -> bool {
+        self.loading || self.document.is_some() || self.preview.is_some() || self.error.is_some()
+    }
+}
+
 pub(crate) fn panel(this: &Observer, cx: &mut Context<Observer>) -> Option<AnyElement> {
     let editor = &this.file_editor;
-    if !editor.loading
-        && editor.document.is_none()
-        && editor.preview.is_none()
-        && editor.error.is_none()
-    {
+    if !editor.is_open() {
         return None;
     }
     let busy = editor.loading || editor.saving;

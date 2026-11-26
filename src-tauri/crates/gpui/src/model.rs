@@ -25,6 +25,7 @@ pub struct Model {
     tail_rewind_kind: String,
     pub can_rewind_tail: bool,
     pub has_live_session: bool,
+    lifecycle_observed_at: Option<Instant>,
     /// Backend-owned compression hint, mirrored from `compression_status` events.
     pub compressing: bool,
     pub compression_message: String,
@@ -53,7 +54,8 @@ pub struct Model {
     context_usage_from_event: bool,
     pub queued_messages: Vec<QueuedMessage>,
     /// Queue rows whose removal signal is in flight to the runtime.
-    removing_queue_ids: BTreeSet<String>,
+    removing_queue_ids: BTreeMap<String, (Instant, bool)>,
+    queue_removal_results: BTreeMap<String, bool>,
     finished_queue_ids: BTreeSet<String>,
     snapshot_queue_ids: BTreeSet<String>,
 }
@@ -88,6 +90,7 @@ impl Model {
         self.execution_state = self.state.clone();
         self.tail_rewind_kind.clear();
         self.has_live_session = response["hasLiveSession"].as_bool().unwrap_or(false);
+        self.lifecycle_observed_at = Some(Instant::now());
         self.wait_reason.clear();
         self.pending_tool_ids.clear();
         self.awaiting_user_tool_call_id = None;
@@ -97,6 +100,10 @@ impl Model {
     }
 
     pub fn can_clear_context(&self) -> bool {
+        self.accepts_idle_turn()
+    }
+
+    pub fn accepts_idle_turn(&self) -> bool {
         matches!(self.state.as_str(), "completed" | "error" | "failed" | "cancelled")
             || (self.state == "pending"
                 && !self.has_live_session
@@ -104,8 +111,14 @@ impl Model {
                 && !matches!(self.wait_reason.as_str(), "approval" | "user_input" | "confirmation" | "sub_agent"))
     }
 
+    pub fn turn_submission_pending(&self) -> bool {
+        self.pending_turns.iter().any(|row| row.metadata["gpui_turn_status"] == "pending")
+            || self.queued_messages.iter().any(|item| item.provisional)
+    }
+
     pub fn can_continue(&self) -> bool {
         !self.has_live_session
+            && !self.turn_submission_pending()
             && !matches!(self.tail_rewind_kind.as_str(), "ask_user_wait" | "ask_user_answered")
             && matches!(self.state.as_str(), "thinking" | "executing" | "auditing" | "running" | "paused" | "awaiting_sub_agent" | "error" | "failed" | "cancelled")
     }
@@ -132,7 +145,11 @@ impl Model {
         if let Some(status) = page.workflow["status"].as_str() {
             page.status = status.to_owned();
         }
-        if !page.status.is_empty() {
+        // A snapshot begun before a live state event can still reconcile history,
+        // but it must not replace the newer lifecycle state used by the footer.
+        let stale_lifecycle = page.fetched_from.zip(self.lifecycle_observed_at)
+            .is_some_and(|(started, observed)| started <= observed);
+        if !stale_lifecycle && !page.status.is_empty() {
             self.state = page.status.clone();
         }
         if !page.workflow.is_null() {
@@ -166,21 +183,23 @@ impl Model {
             self.current_context_tokens = snapshot_current;
             self.max_context_tokens = snapshot_max;
         }
-        self.execution_state = context["state"].as_str().unwrap_or("pending").to_ascii_lowercase();
-        self.tail_rewind_kind = page.tail_rewind_kind.unwrap_or_default();
-        self.can_rewind_tail = page.can_rewind_tail;
-        self.has_live_session = page.has_live_session;
+        if !stale_lifecycle {
+            self.execution_state = context["state"].as_str().unwrap_or("pending").to_ascii_lowercase();
+            self.tail_rewind_kind = page.tail_rewind_kind.unwrap_or_default();
+            self.can_rewind_tail = page.can_rewind_tail;
+            self.has_live_session = page.has_live_session;
+            self.wait_reason = context["waitReason"]
+                .as_str()
+                .or_else(|| context["wait_reason"].as_str())
+                .unwrap_or("")
+                .to_owned();
+            self.awaiting_user_tool_call_id = context["awaitingUserToolCallId"]
+                .as_str()
+                .or_else(|| context["awaiting_user_tool_call_id"].as_str())
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
+        }
         self.reconcile_queue(context, &page.messages);
-        self.wait_reason = context["waitReason"]
-            .as_str()
-            .or_else(|| context["wait_reason"].as_str())
-            .unwrap_or("")
-            .to_owned();
-        self.awaiting_user_tool_call_id = context["awaitingUserToolCallId"]
-            .as_str()
-            .or_else(|| context["awaiting_user_tool_call_id"].as_str())
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned);
         self.pending_tool_ids = context["pendingTools"]
             .as_array()
             .or_else(|| context["pending_tools"].as_array())
@@ -252,19 +271,35 @@ impl Model {
         self.queued_messages.len() != before
     }
 
-    /// Marks a queued row as awaiting the runtime's removal acknowledgement.
-    ///
-    /// The row stays in the list so the panel can report that the removal was
-    /// sent; [`Self::reconcile_queue`] clears the mark when the runtime drops
-    /// the row.
-    pub fn mark_queue_removal(&mut self, id: &str) {
-        if self.queued_messages.iter().any(|item| item.id == id) {
-            self.removing_queue_ids.insert(id.to_owned());
-        }
+    /// A local removal is not a cancellation receipt, even if the row disappears.
+    pub fn can_remove_queued_message(&self, id: &str) -> bool {
+        !self.queue_removal_pending(id)
+            && self.queued_messages.iter().any(|item| item.id == id && !item.provisional)
+    }
+
+    pub fn mark_queue_removal(&mut self, id: &str, requested: Instant, edit: bool) {
+        self.removing_queue_ids.insert(id.to_owned(), (requested, edit));
     }
 
     pub fn queue_removal_pending(&self, id: &str) -> bool {
-        self.removing_queue_ids.contains(id)
+        self.removing_queue_ids.contains_key(id)
+    }
+
+    pub fn reject_queue_removal(&mut self, id: &str, requested: Instant) -> bool {
+        self.removing_queue_ids.get(id).is_some_and(|(at, _)| *at == requested)
+            && self.removing_queue_ids.remove(id).is_some()
+    }
+
+    pub fn expire_queue_removals(&mut self, now: Instant) -> bool {
+        let before = self.removing_queue_ids.len();
+        self.removing_queue_ids.retain(|_, (requested, _)| {
+            now.saturating_duration_since(*requested) < std::time::Duration::from_secs(30)
+        });
+        self.removing_queue_ids.len() != before
+    }
+
+    pub fn take_queue_removal_result(&mut self, id: &str) -> Option<bool> {
+        self.queue_removal_results.remove(id)
     }
 
     fn finish_queued_message(&mut self, id: &str) {
@@ -273,24 +308,42 @@ impl Model {
         self.queued_messages.retain(|item| item.id != id);
     }
 
+    fn apply_queued_message(&mut self, id: &str) {
+        if self.removing_queue_ids.get(id).is_some_and(|(_, edit)| *edit)
+            || self.queue_removal_results.contains_key(id)
+        {
+            self.queue_removal_results.insert(id.to_owned(), false);
+        }
+        self.finish_queued_message(id);
+    }
+
+    fn cancel_queued_message(&mut self, id: &str) {
+        if self.removing_queue_ids.get(id).is_some_and(|(_, edit)| *edit) {
+            self.queue_removal_results.entry(id.to_owned()).or_insert(true);
+        }
+        self.finish_queued_message(id);
+    }
+
     fn reconcile_queue(&mut self, context: &Value, messages: &[Message]) {
+        for id in messages.iter().filter(|row| row.role == "user").flat_map(|row| {
+            ["queued_user_message_id", "client_message_id"]
+                .into_iter()
+                .filter_map(|key| row.metadata[key].as_str())
+        }) {
+            self.apply_queued_message(id);
+        }
         for id in context["removed_queued_user_message_ids"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .chain(
-                messages
-                    .iter()
-                    .filter(|row| row.role == "user")
-                    .filter_map(|row| {
-                        row.metadata["queued_user_message_id"]
-                            .as_str()
-                            .or_else(|| row.metadata["client_message_id"].as_str())
-                    }),
-            )
         {
-            self.finish_queued_message(id);
+            // Legacy tombstones prevent revival, but can coexist with an already
+            // applied turn. Only the explicit result can reopen an edit draft.
+            self.finished_queue_ids.insert(id.to_owned());
+            if self.removing_queue_ids.get(id).is_some_and(|(_, edit)| !edit) {
+                self.removing_queue_ids.remove(id);
+            }
         }
         let items = if context.is_null() {
             Vec::new()
@@ -319,17 +372,11 @@ impl Model {
                     !ids.contains(&item.id)
                         && !self.snapshot_queue_ids.contains(&item.id)
                         && !self.finished_queue_ids.contains(&item.id)
-                        && !matches!(
-                            self.state.as_str(),
-                            "completed" | "failed" | "cancelled" | "error" | "stopped"
-                        )
+                        && (item.provisional || !crate::chimes::terminal(&self.state))
                 }),
         );
         self.snapshot_queue_ids = ids;
         self.queued_messages = queue;
-        // A confirmed removal also ends the row's pending acknowledgement.
-        self.removing_queue_ids
-            .retain(|id| self.queued_messages.iter().any(|item| &item.id == id));
     }
 
     /// Drops the local echo only when the backend supplies a durable user row.
@@ -366,7 +413,13 @@ impl Model {
         self.reading_history = true;
     }
 
+    pub fn clear_compression_hint(&mut self) {
+        self.compressing = false;
+        self.compression_message.clear();
+    }
+
     pub fn reset_live(&mut self) {
+        self.clear_compression_hint();
         self.live = Message::default();
         self.tools.clear();
         self.tool_order.clear();
@@ -445,7 +498,14 @@ impl Model {
             ),
             "queued_user_message_removed" => {
                 if let Some(id) = event["queued_user_message_id"].as_str() {
-                    self.finish_queued_message(id);
+                    match event["cancelled_before_apply"].as_bool() {
+                        Some(true) => self.cancel_queued_message(id),
+                        Some(false) => self.apply_queued_message(id),
+                        None => {
+                            self.finished_queue_ids.insert(id.to_owned());
+                            self.queued_messages.retain(|item| item.id != id);
+                        }
+                    }
                 }
             }
             "message" => {
@@ -476,7 +536,7 @@ impl Model {
                             return;
                         }
                         if event["metadata"]["queue_status"] == "applied" {
-                            self.finish_queued_message(id);
+                            self.apply_queued_message(id);
                         }
                     }
                 }
@@ -487,7 +547,7 @@ impl Model {
                     if event["role"] == "user" {
                         if let Some(client_id) = event["metadata"]["client_message_id"].as_str() {
                             self.confirm_turn(client_id);
-                            self.finish_queued_message(client_id);
+                            self.apply_queued_message(client_id);
                         }
                     }
                     let row = Message {
@@ -593,6 +653,7 @@ impl Model {
                     // Keep the footer from pairing its new state with the old liveness flag.
                     self.has_live_session = !crate::chimes::terminal(state);
                     self.state = state.to_owned();
+                    self.lifecycle_observed_at = Some(Instant::now());
                 }
                 self.wait_reason = event["wait_reason"].as_str().unwrap_or_default().to_owned();
                 let call_id = event.get("awaiting_user_tool_call_id");
@@ -794,6 +855,42 @@ mod tests {
     }
 
     #[test]
+    fn continue_is_hidden_until_submit_settles_and_old_snapshot_cannot_hide_stop() {
+        let mut model = Model::default();
+        let old = || Page {
+            fetched_from: Some(Instant::now() - std::time::Duration::from_secs(1)),
+            status: "executing".into(),
+            ..Page::default()
+        };
+        model.page(Page { status: "failed".into(), ..Page::default() }, false);
+        assert!(model.can_continue());
+        model.pending_turns.push(Message {
+            metadata: json!({"gpui_turn_status":"pending", "client_message_id":"turn"}),
+            ..Message::default()
+        });
+        model.page(old(), false);
+        assert!(!model.can_continue());
+        assert!(!model.can_stop());
+
+        let stale = old();
+        model.event(json!({"type":"state", "state":"thinking"}));
+        model.event(json!({"type":"message", "role":"user", "message_id":"42",
+            "metadata":{"client_message_id":"turn"}}));
+        model.page(stale, false);
+        assert!(!model.turn_submission_pending());
+        assert!(!model.can_continue());
+        assert!(model.can_stop());
+
+        model.page(Page {
+            fetched_from: model.lifecycle_observed_at.map(|at| at + std::time::Duration::from_nanos(1)),
+            status: "cancelled".into(),
+            ..Page::default()
+        }, false);
+        assert!(model.can_continue());
+        assert!(!model.can_stop());
+    }
+
+    #[test]
     fn local_turn_reconciles_from_event_or_snapshot_without_text_deduplication() {
         for snapshot_first in [false, true] {
             let mut model = Model::default();
@@ -836,6 +933,7 @@ mod tests {
         }});
         assert!(!model.apply_context_clear(&json!({"markerMessage":null})));
         assert!(model.apply_context_clear(&receipt));
+        assert!(model.accepts_idle_turn());
         model.event(json!({"type":"message","message_id":id,"role":"system"}));
         let marker = model.messages[&id].clone();
         assert_eq!(marker.message_subtype.as_deref(), Some("manual_clear_context"));
@@ -998,6 +1096,64 @@ mod tests {
         let previous = model.generation;
         model.select();
         assert!(!model.accepts(previous));
+    }
+
+    #[test]
+    fn queue_edit_requires_matching_cancellation_and_ignores_stale_failure() {
+        use std::time::Duration;
+
+        let mut model = Model::default();
+        let queued = json!({"type":"message", "role":"user", "content":"original",
+            "metadata":{"queue_status":"queued", "queued_user_message_id":"old"}});
+        let removed = json!({"type":"queued_user_message_removed", "queued_user_message_id":"old",
+            "cancelled_before_apply":true});
+        model.queued_messages.push(QueuedMessage {
+            id: "old".into(), content: "original".into(), metadata: Value::Null, provisional: true,
+        });
+        assert!(!model.can_remove_queued_message("old"));
+        model.event(queued.clone());
+        assert!(model.can_remove_queued_message("old"));
+        let first = Instant::now();
+        model.mark_queue_removal("old", first, true);
+        assert!(!model.can_remove_queued_message("old"));
+        assert!(!model.reject_queue_removal("other", first));
+        assert!(model.reject_queue_removal("old", first));
+        assert!(model.can_remove_queued_message("old"));
+        let retry = first + Duration::from_secs(1);
+        model.mark_queue_removal("old", retry, true);
+        assert!(!model.reject_queue_removal("old", first));
+        model.page(Page {
+            execution_context: json!({"removed_queued_user_message_ids":["old"]}),
+            ..Page::default()
+        }, false);
+        assert!(model.queue_removal_pending("old"));
+        assert_eq!(model.take_queue_removal_result("old"), None);
+        model.event(removed);
+        assert!(!model.queue_removal_pending("old"));
+        assert_eq!(model.take_queue_removal_result("old"), Some(true));
+        assert!(!model.reject_queue_removal("old", retry));
+        model.event(queued);
+        assert!(model.queued_messages.is_empty());
+    }
+
+    #[test]
+    fn queue_edit_does_not_reopen_an_applied_or_unconfirmed_message() {
+        let mut model = Model::default();
+        let now = Instant::now();
+        model.mark_queue_removal("applied", now, true);
+        model.event(json!({"type":"message", "role":"user", "message_id":"42",
+            "metadata":{"client_message_id":"applied"}}));
+        model.event(json!({"type":"queued_user_message_removed",
+            "queued_user_message_id":"applied", "cancelled_before_apply":true}));
+        assert_eq!(model.take_queue_removal_result("applied"), Some(false));
+        assert!(model.messages.contains_key(&42));
+
+        model.mark_queue_removal("late", now, true);
+        assert!(model.expire_queue_removals(now + std::time::Duration::from_secs(30)));
+        assert!(!model.queue_removal_pending("late"));
+        model.event(json!({"type":"queued_user_message_removed",
+            "queued_user_message_id":"late", "cancelled_before_apply":true}));
+        assert_eq!(model.take_queue_removal_result("late"), None);
     }
 
     #[test]

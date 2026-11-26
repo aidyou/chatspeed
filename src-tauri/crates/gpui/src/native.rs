@@ -49,7 +49,7 @@ pub async fn control_get(options: &Options, path: &str) -> Result<Value, String>
     client.get(path).await.map_err(|error| error.to_string())
 }
 
-/// Runs a control-plane mutation with an idempotency key.
+/// Runs a control-plane mutation that does not need idempotent retries.
 pub async fn control_post(options: &Options, path: &str, body: Value) -> Result<Value, String> {
     let client = connect(options)
         .await
@@ -58,6 +58,33 @@ pub async fn control_post(options: &Options, path: &str, body: Value) -> Result<
         .post(path, &body)
         .await
         .map_err(|error| error.to_string())
+}
+
+/// Uses the same keyed signal path as the desktop. Terminal compression can
+/// spend minutes in goal tracking and model calls before responding.
+pub async fn manual_compress(
+    options: &Options,
+    session: &str,
+    key: &str,
+) -> Result<(), crate::types::ManualCompressionError> {
+    use crate::types::ManualCompressionError;
+    use chatspeed_runtime_client::{user_error_message, ClientError};
+
+    let client = connect(options).await.ok_or(ManualCompressionError::NotSent)?;
+    client
+        .post_with_idempotency(
+            &format!("/control/v1/workflows/{session}/signal"),
+            &json!({"type": "manual_compress"}),
+            key,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| match error {
+            ClientError::Transport(_) | ClientError::Serialization(_) => {
+                ManualCompressionError::Unconfirmed(error.to_string())
+            }
+            _ => ManualCompressionError::Rejected(user_error_message(&error).to_owned()),
+        })
 }
 
 /// Runs one allowlisted workflow command.
@@ -222,9 +249,24 @@ pub fn list_dir(path: &str) -> Result<Vec<DirEntry>, String> {
 }
 
 fn directory_git_status(root: &Path) -> std::collections::BTreeMap<String, String> {
-    let Ok(output) = std::process::Command::new("git")
-        .current_dir(root)
-        .args(["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "status.relativePaths=true", "status", "--short", "-z", "--no-renames", "--untracked-files=normal", "--ignore-submodules=all", "--", "."])
+    let git = || {
+        let mut command = std::process::Command::new("git");
+        command.current_dir(root);
+        command
+    };
+    // Porcelain -z always emits repo-relative paths, even below the root.
+    let Ok(prefix) = git().args(["rev-parse", "--show-prefix"]).output() else {
+        return Default::default();
+    };
+    if !prefix.status.success() {
+        return Default::default();
+    }
+    let prefix = prefix.stdout.strip_suffix(b"\n").unwrap_or(&prefix.stdout);
+    let Ok(output) = git()
+        .args([
+            "--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain=v1",
+            "-z", "--no-renames", "--untracked-files=all", "--ignore-submodules=all", "--", ".",
+        ])
         .output()
     else {
         return Default::default();
@@ -232,16 +274,19 @@ fn directory_git_status(root: &Path) -> std::collections::BTreeMap<String, Strin
     if !output.status.success() {
         return Default::default();
     }
-    parse_git_status(&output.stdout)
+    parse_git_status(&output.stdout, prefix)
 }
 
-fn parse_git_status(output: &[u8]) -> std::collections::BTreeMap<String, String> {
+fn parse_git_status(output: &[u8], prefix: &[u8]) -> std::collections::BTreeMap<String, String> {
     let mut statuses = std::collections::BTreeMap::new();
     for record in output.split(|byte| *byte == 0) {
         if record.get(2) != Some(&b' ') {
             continue;
         }
-        let path = String::from_utf8_lossy(&record[3..]);
+        let Some(path) = record[3..].strip_prefix(prefix) else {
+            continue;
+        };
+        let path = String::from_utf8_lossy(path);
         let Some(name) = path.split('/').next().filter(|name| !name.is_empty()) else {
             continue;
         };
@@ -257,11 +302,52 @@ mod tests {
 
     #[test]
     fn git_status_preserves_spaces_and_groups_child_paths() {
-        let statuses = parse_git_status(b" M src/main.rs\0?? new file.txt\0A  added\0bad\0");
+        let statuses = parse_git_status(b" M src/main.rs\0?? new file.txt\0A  added\0bad\0", b"");
         assert_eq!(statuses.get("src").map(String::as_str), Some("M"));
         assert_eq!(statuses.get("new file.txt").map(String::as_str), Some("??"));
         assert_eq!(statuses.get("added").map(String::as_str), Some("A"));
         assert_eq!(statuses.len(), 3);
+    }
+
+    #[test]
+    fn git_status_matches_immediate_children_below_the_repo_root() {
+        let statuses = parse_git_status(
+            b" M src/app code/main.rs\0?? src/app code/new notes.txt\0AM src/app code/staged.rs\0?? src/app code/new dir/file.txt\0 M src/app code extra/unrelated.rs\0",
+            b"src/app code/",
+        );
+        assert_eq!(statuses.get("main.rs").map(String::as_str), Some("M"));
+        assert_eq!(statuses.get("new notes.txt").map(String::as_str), Some("??"));
+        assert_eq!(statuses.get("staged.rs").map(String::as_str), Some("AM"));
+        assert_eq!(statuses.get("new dir").map(String::as_str), Some("??"));
+        assert_eq!(statuses.len(), 4);
+    }
+
+    #[cfg(feature = "gui")]
+    #[test]
+    fn nested_listing_reads_staged_and_untracked_files_from_git() {
+        let root = tempfile::tempdir().expect("temporary repository");
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(root.path())
+                .args(args)
+                .output()
+                .expect("run Git");
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        };
+        git(&["init", "--quiet", "--template="]);
+        let nested = root.path().join("src/app code");
+        std::fs::create_dir_all(&nested).expect("nested directory");
+        let staged = nested.join("staged.rs");
+        std::fs::write(&staged, "before\n").expect("staged file");
+        git(&["add", "--", "src/app code/staged.rs"]);
+        std::fs::write(&staged, "after\n").expect("modified file");
+        std::fs::write(nested.join("new notes.txt"), "new\n").expect("untracked file");
+
+        let entries = list_dir(nested.to_str().expect("UTF-8 temp path")).expect("nested listing");
+        let statuses: Vec<_> = entries.iter().map(|entry| {
+            (entry.name.as_str(), entry.git_status.as_deref())
+        }).collect();
+        assert_eq!(statuses, [("new notes.txt", Some("??")), ("staged.rs", Some("AM"))]);
     }
 
     // `gpui_kit` is not imported here, so the built-in attribute is unambiguous.

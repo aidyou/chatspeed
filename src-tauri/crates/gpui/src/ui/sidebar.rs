@@ -223,7 +223,7 @@ fn rail(
                     t!("terminal").to_string(),
                     skin,
                     cx,
-                    |this, _, cx| super::terminal::toggle(this, cx),
+                    |this, window, cx| super::terminal::toggle(this, window, cx),
                 )),
         )
         .into_any_element()
@@ -1082,7 +1082,7 @@ fn compact(
                     48.,
                     skin,
                     cx,
-                    |this, _, cx| super::terminal::toggle(this, cx),
+                    |this, window, cx| super::terminal::toggle(this, window, cx),
                 )),
         )
         .into_any_element()

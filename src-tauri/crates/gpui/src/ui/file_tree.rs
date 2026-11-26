@@ -19,6 +19,8 @@ use chatspeed_gpui::types::{root_name, DirEntry};
 /// Vue indents the root's children by `--cs-space` and every deeper level by 21px.
 const ROOT_INDENT: f32 = 16.;
 const NESTED_INDENT: f32 = 21.;
+/// Cap visual indentation so actions still fit in a narrow sidebar.
+const MAX_INDENT_DEPTH: usize = 4;
 /// Guards against a symlink cycle turning the recursive walk into a hang.
 const MAX_DEPTH: usize = 32;
 
@@ -183,11 +185,15 @@ fn root_row(
 fn level(indent: f32, rows: Vec<AnyElement>, cx: &mut Context<Observer>) -> AnyElement {
     v_flex()
         .w_full()
-        .ml(px(indent))
-        .border_l_1()
-        .border_dashed()
-        .border_color(cx.theme().border)
-        .children(rows)
+        .pl(px(indent))
+        .child(
+            v_flex()
+                .w_full()
+                .border_l_1()
+                .border_dashed()
+                .border_color(cx.theme().border)
+                .children(rows),
+        )
         .into_any_element()
 }
 
@@ -216,7 +222,9 @@ fn children(
         rows.push(node_row(observer, entry, cx));
         if entry.is_dir && observer.expanded_dirs.contains(&entry.path) {
             let nested = children(observer, &entry.path, depth + 1, cx);
-            if !nested.is_empty() {
+            if depth >= MAX_INDENT_DEPTH {
+                rows.extend(nested);
+            } else if !nested.is_empty() {
                 rows.push(level(NESTED_INDENT, nested, cx));
             }
         }
@@ -234,6 +242,20 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
     let path = entry.path.clone();
     let name = entry.name.clone();
     let is_dir = entry.is_dir;
+    // Match the Vue tree's status colors, but keep the Git code visible so
+    // added and modified entries are distinguishable without relying on color.
+    let git_status = entry.git_status.as_deref().map(|code| {
+        let color = if code.contains('D') {
+            cx.theme().danger
+        } else if code == "??" || code.contains('A') {
+            cx.theme().success
+        } else if code.contains(['M', 'R', 'C', 'U', 'T']) {
+            cx.theme().warning
+        } else {
+            secondary
+        };
+        (code.to_owned(), color)
+    });
 
     h_flex()
         .id(format!("node-{path}"))
@@ -277,12 +299,12 @@ fn node_row(observer: &Observer, entry: &DirEntry, cx: &mut Context<Observer>) -
                 .flex_1()
                 .min_w_0()
                 .text_size(px(13.))
-                .text_color(foreground)
+                .text_color(git_status.as_ref().map_or(foreground, |(_, color)| *color))
                 .text_ellipsis()
-                .child(name.clone()),
+                .child(name),
         )
-        .children(entry.git_status.as_ref().map(|status| {
-            div().text_xs().text_color(secondary).child(status.clone())
+        .children(git_status.map(|(code, color)| {
+            div().flex_shrink_0().text_xs().text_color(color).child(code)
         }))
         .child(actions(&path, is_dir, false, cx))
         .on_click(cx.listener(move |this, _, window, cx| {

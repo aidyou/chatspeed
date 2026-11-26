@@ -394,10 +394,8 @@ impl ContextManager {
     pub(crate) fn effective_task_objective_from_durable_history(
         &self,
     ) -> Result<Option<EffectiveTaskObjective>, WorkflowEngineError> {
-        let snapshot = self.main_store.get_workflow_snapshot(&self.session_id)?;
-        Ok(Self::effective_task_objective_from_durable_messages(
-            &snapshot.messages,
-        ))
+        let messages = self.main_store.get_workflow_context_history(&self.session_id)?;
+        Ok(Self::effective_task_objective_from_durable_messages(&messages))
     }
 
     fn latest_task_goal_state_before_boundary(
@@ -520,9 +518,9 @@ impl ContextManager {
         &self,
         compressed_until_message_id: i64,
     ) -> Result<TaskGoalLedger, WorkflowEngineError> {
-        let snapshot = self.main_store.get_workflow_snapshot(&self.session_id)?;
+        let messages = self.main_store.get_workflow_context_history(&self.session_id)?;
         Ok(Self::task_goal_ledger_from_durable_messages(
-            &snapshot.messages,
+            &messages,
             compressed_until_message_id,
         ))
     }
@@ -584,9 +582,11 @@ impl ContextManager {
     }
 
     fn current_approved_plan_index(messages: &[WorkflowMessage]) -> Option<usize> {
-        let task_start = Self::latest_successful_completion_index(messages)
-            .map(|index| index + 1)
-            .unwrap_or(0);
+        let completion_start = Self::latest_successful_completion_index(messages)
+            .map_or(0, |index| index + 1);
+        let clear_start = Self::latest_manual_clear_context_index(messages)
+            .map_or(0, |index| index + 1);
+        let task_start = completion_start.max(clear_start);
         messages[task_start..]
             .iter()
             .rposition(|message| message.message_subtype.as_deref() == Some("approved_plan"))
@@ -1129,16 +1129,16 @@ impl ContextManager {
         }
     }
 
-    /// Loads history from database, starting from the last summary if exists.
+    /// Rebuilds the runtime projection from the durable transcript after the last manual clear.
     pub async fn load_history(&mut self) -> Result<(), WorkflowEngineError> {
-        let (snapshot, execution_context) = {
+        let (messages, execution_context) = {
             let store = self.main_store.as_ref();
             (
-                store.get_workflow_snapshot(&self.session_id)?,
+                store.get_workflow_context_history(&self.session_id)?,
                 store.get_execution_context(&self.session_id)?,
             )
         };
-        self.messages = Self::rebuild_compacted_messages(&snapshot.messages, self.max_tokens);
+        self.messages = Self::rebuild_compacted_messages(&messages, self.max_tokens);
         let transcript_segment_id = self
             .messages
             .iter()

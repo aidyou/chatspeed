@@ -232,6 +232,12 @@ pub enum Command {
         queue_id: String,
         signal: Value,
     },
+    RemoveQueuedMessage {
+        generation: u64,
+        session: String,
+        queue_id: String,
+        requested: Instant,
+    },
     SubmitTurn {
         generation: u64,
         session: String,
@@ -241,6 +247,10 @@ pub enum Command {
     Signal {
         id: String,
         signal: Value,
+    },
+    ManualCompress {
+        session: String,
+        requested: Instant,
     },
     Rewind {
         generation: u64,
@@ -387,6 +397,13 @@ pub struct Update {
     pub kind: UpdateKind,
 }
 
+#[derive(Debug)]
+pub enum ManualCompressionError {
+    NotSent,
+    Rejected(String),
+    Unconfirmed(String),
+}
+
 /// Control messages share the reliable queue with text deltas.
 pub enum UpdateKind {
     ConfigSaved {
@@ -414,11 +431,17 @@ pub enum UpdateKind {
     Snapshot(Page),
     Older(Page),
     TurnUnconfirmed { client_id: String, message: String },
+    QueueRemovalUnconfirmed { queue_id: String, requested: Instant, message: String },
     QueueSubmissionFailed {
         queue_id: String,
         message: String,
     },
     Event(Value),
+    ManualCompressionResponse {
+        session: String,
+        requested: Instant,
+        result: Result<(), ManualCompressionError>,
+    },
     Decisions {
         owner: String,
         pending: Vec<crate::chimes::PendingDecision>,

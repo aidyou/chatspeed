@@ -1301,12 +1301,18 @@ impl MainStore {
     }
 
     #[cfg(not(feature = "desktop"))]
-    pub fn list_child_workflows(&self) -> Result<Vec<Workflow>, StoreError> {
+    pub(crate) fn list_child_workflows_for_startup_recovery(&self) -> Result<Vec<Workflow>, StoreError> {
         self.db_runtime()?.read_blocking(|conn| {
             let mut statement = conn.prepare(
-                "SELECT * FROM workflows
-                 WHERE parent_session_id IS NOT NULL
-                 ORDER BY created_at ASC",
+                "SELECT child.* FROM workflows AS child
+                 WHERE child.parent_session_id IS NOT NULL
+                   AND (child.status NOT IN ('completed', 'failed', 'error', 'cancelled')
+                        OR EXISTS (
+                            SELECT 1 FROM workflow_snapshots AS parent
+                            WHERE parent.session_id = child.parent_session_id
+                              AND parent.waiting_on_sub_agent_id = child.id
+                        ))
+                 ORDER BY child.created_at ASC, child.id ASC",
             )?;
             let rows = statement.query_map([], |row| Ok(Workflow::from(row)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -2037,6 +2043,94 @@ impl MainStore {
         })
     }
 
+    /// Reads the durable transcript suffix, including its last manual-clear marker.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) fn get_workflow_context_history(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<WorkflowMessage>, StoreError> {
+        let session_id = session_id.to_owned();
+        self.db_runtime()?.read_blocking(move |conn| {
+            let transaction = conn.transaction()?;
+            let boundary_id = {
+                // Include legacy classifications as candidates. Confirm with the same
+                // row decoder as the transcript (including Unicode whitespace).
+                let mut statement = transaction.prepare(
+                    "SELECT id, role, message_kind, message_subtype, metadata,
+                            CASE WHEN role = 'system' THEN message ELSE '' END AS message
+                     FROM workflow_messages WHERE session_id = ?1
+                       AND (message_subtype = 'manual_clear_context'
+                         OR (message_subtype IS NULL AND CASE WHEN json_valid(metadata)
+                             THEN json_extract(metadata, '$.subtype') = 'manual_clear_context' END)
+                         OR (role = 'system' AND instr(message, 'MANUAL_CLEAR_CONTEXT') > 0))
+                     ORDER BY id DESC",
+                )?;
+                let mut rows = statement.query(params![session_id])?;
+                let mut boundary_id = i64::MIN;
+                while let Some(row) = rows.next()? {
+                    let message = WorkflowMessage::from(row);
+                    if message.message_kind == "summary"
+                        && message.message_subtype.as_deref() == Some("manual_clear_context")
+                    {
+                        boundary_id = row.get("id")?;
+                        break;
+                    }
+                }
+                boundary_id
+            };
+            let mut statement = transaction.prepare(
+                "SELECT * FROM workflow_messages WHERE session_id = ?1 AND id >= ?2 ORDER BY id ASC",
+            )?;
+            let rows = statement.query_map(params![session_id, boundary_id], |row| {
+                Ok(WorkflowMessage::from(row))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(StoreError::from)
+        })
+    }
+
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) fn get_last_workflow_message(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<WorkflowMessage>, StoreError> {
+        let session_id = session_id.to_owned();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT * FROM workflow_messages WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
+                params![session_id],
+                |row| Ok(WorkflowMessage::from(row)),
+            )
+            .optional()
+            .map_err(StoreError::from)
+        })
+    }
+
+    /// Checks the durable identity across all segments, without loading message bodies.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) fn has_persisted_user_message_id(
+        &self,
+        session_id: &str,
+        client_message_id: &str,
+    ) -> Result<bool, StoreError> {
+        let session_id = session_id.to_owned();
+        let client_message_id = client_message_id.to_owned();
+        self.db_runtime()?.read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT EXISTS (
+                    SELECT 1 FROM workflow_messages
+                    WHERE session_id = ?1 AND role = 'user'
+                      AND CASE WHEN json_valid(metadata) THEN
+                          json_extract(metadata, '$.queued_user_message_id') = ?2
+                          OR json_extract(metadata, '$.client_message_id') = ?2
+                      END
+                )",
+                params![session_id, client_message_id],
+                |row| row.get(0),
+            )
+            .map_err(StoreError::from)
+        })
+    }
+
     #[cfg(not(feature = "desktop"))]
     pub fn get_workflow_message_by_id_and_role(
         &self,
@@ -2065,13 +2159,44 @@ impl MainStore {
         let session_id = session_id.to_string();
         self.db_runtime()?.read_blocking(move |conn| {
             let transaction = conn.transaction()?;
+            // The newest unconditional candidate settles the result without older
+            // messages or events. Leave event-dependent and legacy answers to the planner.
+            {
+                const PROBE_LIMIT: usize = 16;
+                let mut statement = transaction.prepare(
+                    "SELECT id, role, message_kind, message_subtype, metadata, step_type,
+                            CASE WHEN role = 'system' THEN message ELSE '' END AS message
+                     FROM workflow_messages WHERE session_id = ?1 ORDER BY id DESC LIMIT ?2",
+                )?;
+                let mut rows = statement.query(params![session_id, PROBE_LIMIT as i64])?;
+                for _ in 0..PROBE_LIMIT {
+                    let Some(row) = rows.next()? else {
+                        return Ok(None);
+                    };
+                    let message = WorkflowMessage::from(row);
+                    if is_manual_clear_context_message(&message) {
+                        return Ok(Some("manual_clear_context"));
+                    }
+                    if is_rewindable_user_message(&message) {
+                        if message.metadata.as_ref().is_some_and(|metadata| {
+                            metadata.get("ask_user_response").and_then(Value::as_bool) != Some(true)
+                        }) {
+                            return Ok(Some("user_message"));
+                        }
+                        break;
+                    }
+                    if is_tool_observation_message(&message) && message_tool_call_id(&message).is_some() {
+                        break;
+                    }
+                }
+            }
             let messages = {
                 let mut statement = transaction.prepare(
                     "SELECT
                         id,
                         '' AS session_id,
                         role,
-                        message,
+                        CASE WHEN role IN ('system', 'user') THEN message ELSE '' END AS message,
                         NULL AS reasoning,
                         message_kind,
                         message_subtype,
@@ -3792,6 +3917,89 @@ mod tests {
                 created_at: None,
             })
             .expect("failed to add window test message")
+    }
+
+    #[test]
+    fn persisted_user_message_identity_spans_clear_boundaries_and_ignores_invalid_metadata() {
+        let (_temp_dir, store) = create_test_store();
+        seed_agent(&store, "agent-queue-lookup");
+        for session_id in ["queue-lookup", "other-queue-lookup"] {
+            store
+                .create_workflow(session_id, "query", "agent-queue-lookup", None, None)
+                .expect("create workflow");
+        }
+        let runtime = store.db_runtime().expect("database runtime");
+        runtime
+            .write_blocking(|conn| {
+                conn.execute_batch(
+                    r#"INSERT INTO workflow_messages
+                       (session_id, role, message, segment_id, message_kind, message_subtype, metadata)
+                       VALUES
+                         ('queue-lookup','user','old turn',1,'message',NULL,'{"queued_user_message_id":"queued"}'),
+                         ('queue-lookup','user','old turn',1,'message',NULL,'{"client_message_id":"client"}'),
+                         ('queue-lookup','system','',2,'summary','manual_clear_context',NULL),
+                         ('queue-lookup','tool','tool output',2,'message',NULL,'{"client_message_id":"tool"}'),
+                         ('queue-lookup','user','broken metadata',2,'message',NULL,'{broken'),
+                         ('queue-lookup','user','non-string ID',2,'message',NULL,'{"client_message_id":42}'),
+                         ('other-queue-lookup','user','other session',1,'message',NULL,'{"client_message_id":"other"}');"#,
+                )?;
+                Ok(())
+            })
+            .expect("seed persisted queue identity");
+        for id in ["queued", "client"] {
+            assert!(store.has_persisted_user_message_id("queue-lookup", id).unwrap());
+        }
+        for id in ["tool", "42", "other", "missing"] {
+            assert!(!store.has_persisted_user_message_id("queue-lookup", id).unwrap());
+        }
+    }
+
+    #[test]
+    fn long_history_context_suffix_and_rewind_match_durable_history() {
+        let (_temp_dir, store) = create_test_store();
+        let session = "long-context-suffix";
+        seed_agent(&store, "agent-context-suffix");
+        store
+            .create_workflow(session, "query", "agent-context-suffix", None, None)
+            .expect("create workflow");
+        store.db_runtime().expect("database runtime").write_blocking(|conn| {
+            conn.execute_batch(
+                "WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<10000)
+                 INSERT INTO workflow_messages(session_id, role, message)
+                 SELECT 'long-context-suffix', 'assistant', hex(zeroblob(512)) FROM rows;",
+            )?;
+            Ok(())
+        }).expect("seed long history");
+        let before = add_window_test_message(&store, session, "prior task", false);
+        let mut marker = before.clone();
+        marker.role = "system".into();
+        marker.message_kind = "summary".into();
+        marker.message_subtype = None;
+        marker.message = "\u{2003}MANUAL_CLEAR_CONTEXT\n".into();
+        marker.segment_id = 2;
+        marker.metadata = Some(json!({"compressed_until_message_id": before.id}));
+        let marker = store.add_workflow_message(&marker).expect("add legacy marker");
+        let mut inert = before.clone();
+        inert.role = "assistant".into();
+        inert.segment_id = 2;
+        store.add_workflow_message(&inert).expect("add inert tail");
+        assert_eq!(store.get_tail_rewind_kind(session).unwrap(), Some("manual_clear_context"));
+
+        let mut current = before;
+        current.segment_id = 2;
+        current.message = "new task".into();
+        current.metadata = Some(json!({"client_message_id": "new"}));
+        let current = store.add_workflow_message(&current).expect("add current user");
+        let suffix = store.get_workflow_context_history(session).expect("load suffix");
+        assert_eq!(suffix.len(), 3);
+        assert_eq!(suffix.first().and_then(|row| row.id), marker.id);
+        assert_eq!(suffix.last().and_then(|row| row.id), current.id);
+        let full = store.get_workflow_snapshot(session).expect("load durable history");
+        assert_eq!(full.messages.len(), 10004);
+        assert_eq!(
+            store.get_tail_rewind_kind(session).unwrap(),
+            determine_tail_rewind_plan(&full.messages, &[]).map(|plan| plan.kind)
+        );
     }
 
     #[test]

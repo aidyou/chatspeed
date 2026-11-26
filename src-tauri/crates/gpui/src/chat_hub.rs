@@ -118,41 +118,21 @@ window.addEventListener('click', function (event) {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn install_edit_menu(cx: &mut gpui_kit::App) {
-    use gpui_kit::{component::input::Paste, Menu, MenuItem, OsAction};
+    use gpui_kit::{component::input::{Copy, Cut, Paste, SelectAll}, Menu, MenuItem, OsAction};
+    use rust_i18n::t;
 
-    // Wry child views leave Command shortcuts to the menu bar. A native
-    // paste: action gives WebKit the original pasteboard, including images.
+    // Wry child views leave Command shortcuts to AppKit. Keep the edit menu
+    // native so WebKit can use the original pasteboard, including images.
     cx.set_menus([
         Menu::new("ChatSpeed"),
-        Menu::new(rust_i18n::t!("menu_edit").to_string()).items([MenuItem::os_action(
-            rust_i18n::t!("menu_paste").to_string(),
-            Paste,
-            OsAction::Paste,
-        )]),
+        Menu::new(t!("menu_edit").to_string()).items([
+            MenuItem::os_action(t!("menu_cut").to_string(), Cut, OsAction::Cut),
+            MenuItem::os_action(t!("menu_copy").to_string(), Copy, OsAction::Copy),
+            MenuItem::os_action(t!("menu_paste").to_string(), Paste, OsAction::Paste),
+            MenuItem::os_action(t!("menu_select_all").to_string(), SelectAll, OsAction::SelectAll),
+        ]),
     ]);
-    // When GPUI sees the key equivalent first, forward it before the editor's
-    // Paste binding can consume the event while WebKit has native focus.
-    cx.intercept_keystrokes(|event, window, cx| {
-        let key = &event.keystroke;
-        if key.key != "v" || !key.modifiers.platform || key.modifiers.control
-            || key.modifiers.alt || key.modifiers.shift || key.modifiers.function
-        {
-            return;
-        }
-        let Some(observer) = window.root::<crate::Observer>().flatten() else {
-            return;
-        };
-        let Some(view) = observer.read(cx).chat_hub.as_ref().and_then(Dock::focused_view) else {
-            return;
-        };
-        // GPUI's logical focus can still point to the composer. Once WebKit
-        // owns native focus, never fall through to that stale Paste binding.
-        cx.stop_propagation();
-        paste_into_webview(&view);
-    }).detach();
-    // The menu wins the key equivalent before GPUI sees it, so Cmd+V needs the
-    // native monitor installed above to reach the page with the full pasteboard.
-    install_paste_monitor();
+    install_edit_shortcut_monitor();
 }
 
 #[cfg(target_os = "macos")]
@@ -169,42 +149,26 @@ fn webview_has_keyboard_focus(view: &WebView) -> bool {
         .is_some_and(|responder| responder.isDescendantOf(native))
 }
 
+/// Only ChatHub's child views participate in the native shortcut bridge.
 #[cfg(target_os = "macos")]
-fn paste_into_webview(view: &WebView) {
-    use objc2_app_kit::{NSApplication, NSView};
-    use wry::WebViewExtMacOS;
-
-    let webview = view.webview();
-    let native: &NSView = &webview;
-    let app = NSApplication::sharedApplication(native.into());
-    let Some(sender) = app.mainMenu().and_then(|menu| menu.itemAtIndex(1))
-        .and_then(|item| item.submenu()).and_then(|menu| menu.itemAtIndex(0)) else {
-        return;
+thread_local! {
+    static EDIT_VIEWS: std::cell::RefCell<Vec<std::rc::Weak<WebView>>> = const {
+        std::cell::RefCell::new(Vec::new())
     };
-    let Some(action) = sender.action() else { return; };
-    // SAFETY: The selector and sender are from the native Paste menu item.
-    let target = unsafe { app.targetForAction_to_from(action, None, Some(&sender)) };
-    let Some(target) = target.and_then(|target| target.downcast::<NSView>().ok()) else {
-        return;
-    };
-    if target.isDescendantOf(native) {
-        // SAFETY: AppKit resolved this target for the same selector and sender.
-        unsafe { app.sendAction_to_from(action, Some(&target), Some(&sender)) };
-    }
 }
 
-/// Intercepts Cmd+V before AppKit's menu handles it, while a docked page owns
-/// the keyboard.
-///
-/// The menu key equivalent runs before the window sees the key, so Cmd+V went
-/// through the app's GPUI Paste action: the pasteboard stayed inside GPUI focus
-/// and the page never received it, which is why a screenshot only pasted from
-/// the page's own context menu. A local event monitor runs before dispatch, so
-/// the page can be given the native `paste:` selector with the original
-/// pasteboard. Every other case (GPUI inputs, dialogs, other shortcuts) is left
-/// to the menu unchanged.
 #[cfg(target_os = "macos")]
-pub(crate) fn install_paste_monitor() {
+fn remember_edit_view(view: &Rc<WebView>) {
+    EDIT_VIEWS.with_borrow_mut(|views| {
+        views.retain(|view| view.strong_count() != 0);
+        views.push(Rc::downgrade(view));
+    });
+}
+
+/// Handle known Edit actions before AppKit can dispatch them to stale GPUI
+/// focus. Leave ordinary typing, deletion, IME and other shortcuts untouched.
+#[cfg(target_os = "macos")]
+fn install_edit_shortcut_monitor() {
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
@@ -215,18 +179,16 @@ pub(crate) fn install_paste_monitor() {
     thread_local! {
         /// AppKit calls the block until the monitor is removed; the token has to
         /// outlive the install call for the whole app run.
-        static PASTE_MONITOR: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
+        static EDIT_MONITOR: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
     }
 
-    PASTE_MONITOR.with(|slot| {
+    EDIT_MONITOR.with(|slot| {
         if slot.borrow().is_some() {
             return;
         }
         let handler = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
             // SAFETY: AppKit passes the key event this monitor was installed for.
-            let event_ref = unsafe { event.as_ref() };
-            if is_command_v(event_ref) && paste_into_focused_webview() {
-                // The page consumed the paste; the menu must not also run it.
+            if dispatch_webview_edit_action(unsafe { event.as_ref() }) {
                 return std::ptr::null_mut();
             }
             event.as_ptr()
@@ -240,73 +202,50 @@ pub(crate) fn install_paste_monitor() {
 }
 
 #[cfg(target_os = "macos")]
-fn is_command_v(event: &objc2_app_kit::NSEvent) -> bool {
-    use objc2_app_kit::NSEventModifierFlags;
+fn dispatch_webview_edit_action(event: &objc2_app_kit::NSEvent) -> bool {
+    use objc2_app_kit::{NSApplication, NSEventModifierFlags as Flags, NSView};
+    use wry::WebViewExtMacOS;
 
     let flags = event.modifierFlags();
-    if !flags.contains(NSEventModifierFlags::Command) {
+    if !flags.contains(Flags::Command)
+        || flags.intersects(Flags::Control | Flags::Option | Flags::Shift | Flags::Function)
+    {
         return false;
     }
-    let blocking = NSEventModifierFlags::Control
-        | NSEventModifierFlags::Option
-        | NSEventModifierFlags::Shift;
-    if flags.intersects(blocking) {
-        return false;
-    }
-    event
-        .charactersIgnoringModifiers()
-        .is_some_and(|characters| characters.to_string().eq_ignore_ascii_case("v"))
-}
-
-/// Sends the native `paste:` selector to the focused web page.
-///
-/// This is the path the page's context menu uses: WebKit reads the original
-/// pasteboard, so screenshots paste, while a GPUI Paste action can only feed
-/// GPUI elements. Returns false when the key window's first responder is not
-/// inside a web view or refuses the action, so the menu path still runs.
-#[cfg(target_os = "macos")]
-fn paste_into_focused_webview() -> bool {
-    use objc2::runtime::AnyClass;
-    use objc2_app_kit::{NSApplication, NSView};
-
-    let Some(marker) = objc2::MainThreadMarker::new() else {
+    let Some(characters) = event.charactersIgnoringModifiers() else { return false; };
+    let action = match characters.to_string().to_ascii_lowercase().as_str() {
+        "x" => objc2::sel!(cut:),
+        "c" => objc2::sel!(copy:),
+        "v" => objc2::sel!(paste:),
+        "a" => objc2::sel!(selectAll:),
+        _ => return false,
+    };
+    let Some(marker) = objc2::MainThreadMarker::new() else { return false; };
+    let Some(window) = event.window(marker).filter(|window| window.isKeyWindow()) else {
         return false;
     };
-    let Some(webview) = AnyClass::get(c"WKWebView") else {
+    let Some(responder) = window.firstResponder().and_then(|r| r.downcast::<NSView>().ok()) else {
         return false;
     };
+    let view = EDIT_VIEWS.with_borrow(|views| {
+        views.iter().filter_map(std::rc::Weak::upgrade).find(|view| {
+            let webview = view.webview();
+            let native: &NSView = &webview;
+            !native.isHiddenOrHasHiddenAncestor() && responder.isDescendantOf(native)
+        })
+    });
+    let Some(view) = view else { return false; };
+    let webview = view.webview();
+    let native: &NSView = &webview;
     let app = NSApplication::sharedApplication(marker);
-    let Some(window) = app.keyWindow() else { return false; };
-    let Some(responder) = window.firstResponder() else { return false; };
-    let Ok(view) = responder.clone().downcast::<NSView>() else { return false; };
-    if !belongs_to_webview(&view, webview) {
+    // SAFETY: AppKit resolves these standard Edit selectors for its current
+    // responder chain. Never send an action to a target outside this WebView.
+    let target = unsafe { app.targetForAction_to_from(action, None, None) };
+    let Some(target) = target.and_then(|target| target.downcast::<NSView>().ok()) else {
         return false;
-    }
-    // SAFETY: `paste:` is AppKit's own responder action and the responder is
-    // the key window's current first responder.
-    unsafe { app.sendAction_to_from(objc2::sel!(paste:), Some(&responder), None) }
-}
-
-#[cfg(target_os = "macos")]
-fn belongs_to_webview(
-    view: &objc2_app_kit::NSView,
-    webview: &objc2::runtime::AnyClass,
-) -> bool {
-    use objc2::runtime::NSObjectProtocol;
-
-    if view.isKindOfClass(webview) {
-        return true;
-    }
-    // SAFETY: Walking the superview chain of the key window's first responder
-    // is the documented way to find the view that hosts it.
-    let mut parent = unsafe { view.superview() };
-    while let Some(current) = parent {
-        if current.isKindOfClass(webview) {
-            return true;
-        }
-        parent = unsafe { current.superview() };
-    }
-    false
+    };
+    target.isDescendantOf(native)
+        && unsafe { app.sendAction_to_from(action, Some(&target), None) }
 }
 
 #[cfg(target_os = "macos")]
@@ -710,6 +649,10 @@ impl Dock {
                     size: wry::dpi::LogicalSize::new(1, 1).into(),
                 },
             )?));
+            #[cfg(target_os = "macos")]
+            if let Some(view) = &view {
+                remember_edit_view(view);
+            }
             self.pages.push(Page {
                 site: site.clone(),
                 #[cfg(not(target_os = "linux"))]

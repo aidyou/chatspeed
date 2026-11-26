@@ -374,10 +374,6 @@ pub struct ToolView {
     pub diff: Option<Vec<DiffLine>>,
     pub detail: String,
     pub choices: Vec<ChoiceGroupView>,
-    /// Delegated prompt of a `sub_agent_run` call; the runtime reports the same
-    /// string as the live child's `task`, so a running call row can be matched
-    /// to the card that already shows it.
-    pub sub_agent_task: Option<String>,
 }
 
 impl ToolView {
@@ -432,11 +428,6 @@ impl ToolView {
             display_type,
             diff.is_some(),
         );
-        let sub_agent_task = (name == "sub_agent_run")
-            .then(|| args["prompt"].as_str())
-            .flatten()
-            .filter(|prompt| !prompt.trim().is_empty())
-            .map(str::to_owned);
         let icon = crate::icons::tool_icon_for(&name, category);
         let kind = ToolGroupKind::of(&name, category);
         let summary = tool_summary(message, &name, status);
@@ -458,7 +449,6 @@ impl ToolView {
             diff,
             detail,
             choices: Vec::new(),
-            sub_agent_task,
         }
     }
 }
@@ -634,6 +624,7 @@ pub struct SnapshotView {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubAgentStatus {
+    Starting,
     Running,
     Completed,
     Failed,
@@ -652,6 +643,7 @@ impl SubAgentStatus {
 
     fn label(self) -> String {
         match self {
+            Self::Starting => t!("sub_agent_starting").to_string(),
             Self::Running => t!("sub_agent_running").to_string(),
             Self::Completed => t!("sub_agent_completed").to_string(),
             Self::Failed => t!("sub_agent_failed").to_string(),
@@ -1753,21 +1745,10 @@ pub fn live_child_card(id: &str, progress: &Value) -> Option<SubAgentView> {
     Some(card)
 }
 
-/// Whether a running `sub_agent_run` row is already shown by a live child card.
-///
-/// The live card carries the agent, tool count and context for the same
-/// delegation, so the call row would be a second card until the durable result
-/// row takes over.
+/// A starting card yields to the runtime's child card once progress arrives.
 pub fn row_shown_by_live_child(row: &Row, live_tasks: &[&str]) -> bool {
-    let Row::Tool(tool) = row else {
-        return false;
-    };
-    tool.name == "sub_agent_run"
-        && tool.status.is_running()
-        && tool
-            .sub_agent_task
-            .as_deref()
-            .is_some_and(|task| live_tasks.contains(&task))
+    matches!(row, Row::SubAgent(card) if card.status == SubAgentStatus::Starting
+        && live_tasks.iter().any(|task| clean_text(task) == card.task))
 }
 
 #[cfg(test)]
@@ -1794,20 +1775,14 @@ fn sub_agent_view(
     if name != "sub_agent_run" && direct_id.is_none() && review_state != "final_review_pending" {
         return None;
     }
-    // A running call has no task id yet, so it is projected as the generic tool
-    // row and yields to the live child card (see `row_shown_by_live_child`),
-    // which already knows the agent name and its progress. Building a card for
-    // it here showed the same delegation twice, the call row titled with the
-    // fallback "Sub-agent" name until the durable result row replaced it.
-    let status = message.metadata["sub_agent_status"]
-        .as_str()
-        .or_else(|| message.metadata["execution_status"].as_str())
-        .or_else(|| message.metadata["data"]["execution_status"].as_str())
-        .unwrap_or("running");
-    let running = status.eq_ignore_ascii_case("running");
-    if direct_id.is_none() && review_state != "final_review_pending" && running {
+    let tool_status = ToolStatus::from_message(message);
+    let without_child = direct_id.is_none() && review_state != "final_review_pending";
+    let starting = without_child && tool_status == ToolStatus::Running;
+    // The normal tool card owns approval controls; a proposed call must not hide them.
+    if without_child && (tool_status == ToolStatus::Pending || message.metadata["approval_status"] == "pending") {
         return None;
     }
+    let args = tool_arguments(&message.metadata);
     let data = &message.metadata["data"];
     let completion = direct_id
         .as_ref()
@@ -1830,13 +1805,16 @@ fn sub_agent_view(
     let agent = text(&message.metadata["sub_agent_name"])
         .or_else(|| text(&data["sub_agent_name"]))
         .or_else(|| text(&completion["sub_agent_name"]))
+        .or_else(|| text(&args["child_agent_name"]))
         .unwrap_or_else(|| t!("sub_agent_default_agent").to_string());
     let task = text(&message.metadata["sub_agent_task"])
         .or_else(|| text(&data["sub_agent_task"]))
         .or_else(|| text(&completion["sub_agent_task"]))
+        .or_else(|| text(&args["prompt"]))
         .unwrap_or_else(|| t!("sub_agent_default_task").to_string());
     let mode = text(&message.metadata["execution_mode"])
         .or_else(|| text(&data["execution_mode"]))
+        .or_else(|| text(&args["execution_mode"]))
         .unwrap_or_else(|| "call".into());
     let status_text = completion["execution_status"]
         .as_str()
@@ -1845,7 +1823,13 @@ fn sub_agent_view(
         .or(data["execution_status"].as_str())
         .or(message.metadata["execution_status"].as_str())
         .unwrap_or("running");
-    let status = SubAgentStatus::parse(status_text);
+    let status = if starting {
+        SubAgentStatus::Starting
+    } else if without_child && tool_status.is_error() {
+        SubAgentStatus::Failed
+    } else {
+        SubAgentStatus::parse(status_text)
+    };
     let tool_calls = completion_result["tool_calls_count"]
         .as_u64()
         .or(completion_result["toolCallsCount"].as_u64())
@@ -3211,19 +3195,33 @@ mod tests {
             ..Message::default()
         };
         let rows = project(vec![assistant], &[]);
-        let [Row::Tool(tool)] = rows.as_slice() else {
-            panic!("expected the projected call row");
+        let [Row::SubAgent(card)] = rows.as_slice() else {
+            panic!("expected a child card before runtime progress");
         };
-        assert_eq!(tool.name, "sub_agent_run");
-        assert_eq!(
-            tool.sub_agent_task.as_deref(),
-            Some("Find why the spinners freeze")
-        );
+        assert_eq!(card.status, SubAgentStatus::Starting);
+        assert_eq!(card.agent, "Zhugeliang");
+        assert_eq!(card.task_id, None);
+        assert_eq!(card.task, "Find why the spinners freeze");
         assert!(row_shown_by_live_child(
             &rows[0],
             &["Find why the spinners freeze"]
         ));
         assert!(!row_shown_by_live_child(&rows[0], &["another task"]));
+    }
+
+    #[test]
+    fn sub_agent_starting_card_does_not_replace_approval_controls() {
+        let pending = tool(30, "sub_agent_run", json!({
+            "tool_call_id": "call-30",
+            "execution_status": "pending_approval",
+            "arguments": {"child_agent_name": "Zhugeliang", "prompt": "Review this"}
+        }));
+        let rows = project(vec![pending], &[]);
+        let [Row::Tool(card)] = rows.as_slice() else {
+            panic!("expected a tool card for the pending approval");
+        };
+        assert_eq!(card.status, ToolStatus::Pending);
+        assert!(!row_shown_by_live_child(&rows[0], &["Review this"]));
     }
 
     #[test]

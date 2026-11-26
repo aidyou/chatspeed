@@ -539,7 +539,7 @@ async fn recover_terminal_sub_agent_finalization(main_store: &Arc<MainStore>, ta
     // usage snapshot are durable, so hand the remaining idempotent parent projection to the
     // same recovery path used after an application restart.
     if let Err(error) =
-        crate::commands::workflow::reconcile_interrupted_child_workflows(main_store.as_ref())
+        crate::commands::workflow::reconcile_terminal_child_workflow(main_store.as_ref(), task_id)
     {
         log::error!(
             "[Workflow][session={}][phase=sub_agent_completion] Deferred terminal-finalization recovery failed: {}",

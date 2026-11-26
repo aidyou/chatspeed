@@ -9,7 +9,7 @@ use chatspeed_gpui::presentation::{SubAgentStatus, SubAgentView};
 
 fn status_color(status: SubAgentStatus) -> Rgba {
     match status {
-        SubAgentStatus::Running => accent(),
+        SubAgentStatus::Starting | SubAgentStatus::Running => accent(),
         SubAgentStatus::Completed => success(),
         SubAgentStatus::Failed => danger(),
         SubAgentStatus::Cancelled => rgb(0x848586),

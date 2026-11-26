@@ -474,6 +474,17 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                     }
                 }
             }
+            Command::RemoveQueuedMessage { generation, session, queue_id, requested } => {
+                let path = format!("/control/v1/workflows/{session}/signal");
+                let signal = json!({"type": "remove_queued_user_message", "queued_user_message_id": queue_id});
+                if let Err(error) = native::control_post(&options, &path, signal).await {
+                    eprintln!("queue removal unconfirmed ({session}/{queue_id}): {error}");
+                    let message = rust_i18n::t!("queued_message_removal_unconfirmed").into_owned();
+                    if !send(&tx, generation, UpdateKind::QueueRemovalUnconfirmed { queue_id, requested, message }).await {
+                        return;
+                    }
+                }
+            }
             Command::SubmitTurn { generation, session, client_id, signal } => {
                 let path = format!("/control/v1/workflows/{session}/signal");
                 if let Err(message) = native::control_post(&options, &path, signal).await {
@@ -492,6 +503,20 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                         return;
                     }
                 }
+            }
+            // A stopped workflow answers only after compression finishes. Keep
+            // selection, polling and other signals off this long request's lane.
+            Command::ManualCompress { session, requested } => {
+                let options = options.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let result = if options.demo {
+                        Ok(())
+                    } else {
+                        native::manual_compress(&options, &session, &idempotency_key("manual-compress")).await
+                    };
+                    let _ = send(&tx, 0, UpdateKind::ManualCompressionResponse { session, requested, result }).await;
+                });
             }
             Command::Rewind {
                 generation,
@@ -1606,6 +1631,11 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                                     let needs_question_id = event["type"] == "state"
                                         && event["wait_reason"] == "user_input"
                                         && event.get("awaiting_user_tool_call_id").is_none();
+                                    // CompressionApplied follows persistence. Load the handoff
+                                    // before the event clears its banner rather than waiting for polling.
+                                    if event["type"] == "compression_applied" {
+                                        let _ = snapshot(&client, &id, &tx, generation).await;
+                                    }
                                     if !send(&tx, generation, UpdateKind::Event(event)).await { return; }
                                     // Older streams omit the question ID. Read it from the
                                     // authoritative snapshot instead of guessing from history.

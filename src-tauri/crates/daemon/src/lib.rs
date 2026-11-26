@@ -1620,6 +1620,12 @@ pub async fn start_runtime(config: RuntimeConfig) -> Result<RuntimeHandle, Runti
         startup_started.elapsed()
     );
 
+    // Only this owner boundary has proof that unregistered persisted children
+    // cannot still be starting: the DB lock is held and no work is admitted yet.
+    if let Err(error) = owner.recover_interrupted_child_workflows() {
+        log::error!("[Runtime][workflow][startup_recovery] Child recovery failed: {error}");
+    }
+
     // Fail-closed ordering: classify crash-interrupted capability operations and
     // load the desktop-free core tool surface *before* discovery is published or
     // a lease is accepted, so a client can never observe a half-initialized
@@ -3043,6 +3049,66 @@ mod tests {
             .expect("runtime stops");
         assert!(instance_lock_path(dir.path()).exists());
         let _next = RuntimeDirLock::acquire(dir.path()).expect("owner lock was released");
+    }
+
+    #[tokio::test]
+    async fn runtime_startup_recovers_orphaned_child_before_serving() {
+        use chatspeed_runtime_backend::workflow::react::types::{
+            ExecutionContext, RuntimeState, WaitReason,
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = short_config(dir.path(), Duration::from_secs(30), Duration::from_secs(30));
+        seed_enabled_once_automation(config.db_path());
+        {
+            let store = chatspeed_runtime_backend::db::MainStore::new(config.db_path())
+                .expect("open temporary seed database");
+            store
+                .create_workflow("orphan-parent", "Parent", "agent-1", None, None)
+                .expect("seed parent");
+            store
+                .create_workflow("orphan-child", "Child", "agent-1", None, Some("orphan-parent"))
+                .expect("seed unregistered child");
+            let context: ExecutionContext = serde_json::from_value(serde_json::json!({
+                "session_id": "orphan-parent",
+                "state": RuntimeState::Waiting,
+                "wait_reason": WaitReason::SubAgent,
+                "waiting_on_sub_agent_id": "orphan-child",
+                "current_step": 0,
+                "max_steps": 100,
+                "pending_tools": [],
+                "version": ExecutionContext::CURRENT_VERSION,
+            }))
+            .expect("build parent wait context");
+            store.upsert_execution_context(&context).expect("seed parent wait");
+            store.update_workflow_status("orphan-parent", "awaiting_sub_agent").expect("seed parent status");
+        }
+
+        for _ in 0..2 {
+            let handle = start_runtime(config.clone()).await.expect("start runtime");
+            let document = discovery::read_discovery_in(dir.path()).expect("discovery published");
+            let http = Http {
+                client: reqwest::Client::new(),
+                port: handle.port(),
+                token: document.token,
+            };
+            // Read the child first: fetching a parent snapshot must not be required.
+            let child: Value = http.get("/control/v1/workflows/orphan-child").await
+                .error_for_status().expect("child snapshot status").json().await.expect("child snapshot");
+            let parent: Value = http.get("/control/v1/workflows/orphan-parent").await
+                .error_for_status().expect("parent snapshot status").json().await.expect("parent snapshot");
+            assert_eq!(child["workflow"]["status"], "cancelled");
+            let context = &parent["execution_context"];
+            assert_eq!(context["waiting_on_sub_agent_id"], "orphan-child");
+            let completions = context["pending_sub_agent_completions"].as_array().expect("durable outcomes");
+            assert_eq!(completions.len(), 1);
+            assert_eq!(completions[0]["status"], "interrupted");
+            assert_eq!(completions[0]["consumed"], false);
+            handle.shutdown();
+            tokio::time::timeout(Duration::from_secs(10), handle.wait())
+                .await
+                .expect("runtime stops");
+        }
     }
 
     // -- lifecycle ---------------------------------------------------------
