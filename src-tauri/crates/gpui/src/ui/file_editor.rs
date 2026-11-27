@@ -61,25 +61,31 @@ fn load_preview(path: &Path, format: image::ImageFormat) -> io::Result<Arc<Rende
     Ok(Arc::new(RenderImage::new([image::Frame::new(pixels)])))
 }
 
-fn open_file(path: PathBuf) -> io::Result<OpenedFile> {
-    match image::ImageFormat::from_path(&path).ok() {
-        Some(
-            format @ (image::ImageFormat::Png
-            | image::ImageFormat::Jpeg
-            | image::ImageFormat::Gif
-            | image::ImageFormat::WebP
-            | image::ImageFormat::Bmp
-            | image::ImageFormat::Ico
-            | image::ImageFormat::Tiff),
-        ) => {
-            let image = load_preview(&path, format)?;
-            Ok(OpenedFile::Image(Preview { path, image }))
+fn preview_format(path: &Path) -> Option<image::ImageFormat> {
+    image::ImageFormat::from_path(path).ok().filter(|format| {
+        matches!(
+            format,
+            image::ImageFormat::Png
+                | image::ImageFormat::Jpeg
+                | image::ImageFormat::Gif
+                | image::ImageFormat::WebP
+                | image::ImageFormat::Bmp
+                | image::ImageFormat::Ico
+                | image::ImageFormat::Tiff
+        )
+    })
+}
+
+fn open_file(path: PathBuf, text_only: bool) -> io::Result<OpenedFile> {
+    if let Some(format) = preview_format(&path) {
+        if text_only {
+            return Err(io::ErrorKind::InvalidData.into());
         }
-        _ => {
-            let text = read_text(&path)?;
-            Ok(OpenedFile::Text(path, text))
-        }
+        let image = load_preview(&path, format)?;
+        return Ok(OpenedFile::Image(Preview { path, image }));
     }
+    let text = read_text(&path)?;
+    Ok(OpenedFile::Text(path, text))
 }
 
 #[derive(Default)]
@@ -170,6 +176,30 @@ pub(super) fn open(
     window: &mut Window,
     cx: &mut Context<Observer>,
 ) {
+    open_in_panel(this, path.into(), false, window, cx);
+}
+
+/// The transcript can open editable text, but not the sidebar's image previews.
+pub(super) fn text_action_path(path: &Path) -> Option<&Path> {
+    preview_format(path).is_none().then_some(path)
+}
+
+pub(super) fn open_text(
+    this: &mut Observer,
+    path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Observer>,
+) {
+    open_in_panel(this, path, true, window, cx);
+}
+
+fn open_in_panel(
+    this: &mut Observer,
+    path: PathBuf,
+    text_only: bool,
+    window: &mut Window,
+    cx: &mut Context<Observer>,
+) {
     let editor = &mut this.file_editor;
     if editor.loading || editor.saving {
         return;
@@ -188,8 +218,8 @@ pub(super) fn open(
     let roots = this.roots().to_vec();
     let open_roots = roots.clone();
     let task = cx.background_spawn(async move {
-        let path = authorized(Path::new(&path), &open_roots)?;
-        open_file(path)
+        let path = authorized(&path, &open_roots)?;
+        open_file(path, text_only)
     });
     cx.spawn_in(window, async move |this, cx| {
         let result = task.await;
@@ -413,9 +443,14 @@ mod tests {
             .save(&path)
             .unwrap();
         let path = authorized(&path, &roots).unwrap();
-        assert!(matches!(open_file(path.clone()), Ok(OpenedFile::Image(_))));
+        assert!(matches!(
+            open_file(path.clone(), false),
+            Ok(OpenedFile::Image(_))
+        ));
+        assert!(text_action_path(&path).is_none());
+        assert!(open_file(path.clone(), true).is_err());
         fs::write(&path, "not a PNG").unwrap();
-        assert!(open_file(path).is_err());
+        assert!(open_file(path, false).is_err());
     }
 
     #[::core::prelude::v1::test]
@@ -439,6 +474,10 @@ mod tests {
         fs::write(&path, "one").unwrap();
         let path = authorized(&path, &roots).unwrap();
         assert_eq!(language(&path), "rust");
+        assert_eq!(text_action_path(&path), Some(path.as_path()));
+        assert!(
+            matches!(open_file(path.clone(), true), Ok(OpenedFile::Text(_, text)) if text == "one")
+        );
         save_text(&path, &roots, "one", "two").unwrap();
         assert_eq!(
             save_text(&path, &roots, "one", "three").unwrap_err().kind(),
@@ -446,6 +485,7 @@ mod tests {
         );
         assert_eq!(read_text(&path).unwrap(), "two");
         fs::write(&path, b"a\0b").unwrap();
+        assert!(open_file(path.clone(), true).is_err());
         assert_eq!(
             read_text(&path).unwrap_err().kind(),
             io::ErrorKind::InvalidData

@@ -4,8 +4,14 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
-use crate::{accent, danger, success, ui::Icon};
-use chatspeed_gpui::presentation::{FinishTaskView, SnapshotView};
+use crate::{
+    accent, danger, success,
+    ui::{file_editor, Icon},
+    warning, Observer,
+};
+use chatspeed_gpui::presentation::{
+    file_changes_title, ActivityView, FinishTaskView, SnapshotView, TaskFileKind,
+};
 
 use super::cost_card;
 
@@ -86,11 +92,91 @@ pub(crate) fn snapshot_card(
     body.into_any_element()
 }
 
+fn task_files_card(
+    view: &FinishTaskView,
+    open: bool,
+    on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &mut Context<Observer>,
+) -> AnyElement {
+    let mut counts = [0; 3];
+    for file in &view.files {
+        counts[match file.kind {
+            TaskFileKind::Added => 0,
+            TaskFileKind::Modified => 1,
+            TaskFileKind::Deleted => 2,
+        }] += 1;
+    }
+    let group = ActivityView {
+        key: format!("{}:files", view.key),
+        icon: "edit",
+        summary: file_changes_title(counts, &rust_i18n::locale()),
+        thought_count: 0,
+        error_count: 0,
+        ongoing: false,
+        items: Vec::new(),
+    };
+    let hover = cx.theme().muted;
+    let files = open.then(|| {
+        view.files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| {
+                let color = match file.kind {
+                    TaskFileKind::Added => success(),
+                    TaskFileKind::Modified => warning(),
+                    TaskFileKind::Deleted => danger(),
+                };
+                let row = h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(color)
+                            .child(file.path.clone()),
+                    )
+                    .when_some(file.lines, |row, (added, removed)| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_color(danger())
+                                .child(format!("+{added}")),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(success())
+                                .child(format!("--{removed}")),
+                        )
+                    });
+                if let Some(path) = file.editor_path().and_then(file_editor::text_action_path) {
+                    let path = path.to_path_buf();
+                    row.id(format!("{}:{index}", group.key))
+                        .cursor_pointer()
+                        .hover(move |style| style.bg(hover))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            file_editor::open_text(this, path.clone(), window, cx);
+                        }))
+                        .into_any_element()
+                } else {
+                    row.into_any_element()
+                }
+            })
+            .collect()
+    });
+    super::super::rows::activity_group(&group, false, files, on_toggle, cx)
+}
+
 pub(crate) fn finish_task_card(
     view: &FinishTaskView,
     open: bool,
     on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    cx: &App,
+    files_open: bool,
+    on_toggle_files: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &mut Context<Observer>,
 ) -> AnyElement {
     let (icon, color) = if view.failed {
         ("check-x", danger())
@@ -130,6 +216,9 @@ pub(crate) fn finish_task_card(
         .w_full()
         .min_w_0()
         .gap_2()
+        .when(!view.files.is_empty(), |body| {
+            body.child(task_files_card(view, files_open, on_toggle_files, cx))
+        })
         .child(h_flex().w_full().min_w_0().child(label));
     if open {
         if let Some(cost) = &view.cost {

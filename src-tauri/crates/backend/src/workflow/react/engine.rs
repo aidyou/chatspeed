@@ -97,6 +97,7 @@ struct ToolExecutionObservation {
     reinforced: ReinforcedResult,
     original_call: serde_json::Value,
     execution_plan_metadata: Option<serde_json::Value>,
+    file_changes: Option<serde_json::Value>,
     duration_ms: Option<u64>,
 }
 
@@ -119,8 +120,14 @@ impl ToolExecutionObservation {
             reinforced,
             original_call,
             execution_plan_metadata,
+            file_changes: None,
             duration_ms,
         }
+    }
+
+    fn with_file_changes(mut self, file_changes: Option<Value>) -> Self {
+        self.file_changes = file_changes;
+        self
     }
 }
 
@@ -260,6 +267,17 @@ impl WorkflowExecutor {
             .and_then(|value| value.get("structured_content"))
             .and_then(|value| value.get("execution_plan"))
             .cloned()
+    }
+
+    fn observed_shell_file_changes(
+        tool_name: &str,
+        result: &Result<Value, crate::tools::ToolError>,
+    ) -> Option<Value> {
+        if tool_name != crate::tools::TOOL_BASH {
+            return None;
+        }
+        result.as_ref().ok()?.get("structured_content")?
+            .get("file_changes").filter(|changes| changes.is_array()).cloned()
     }
 
     fn should_expose_tool_duration(tool_name: &str) -> bool {
@@ -4186,6 +4204,7 @@ impl WorkflowExecutor {
                                     // 3. Post-processing and Notification
                                     let execution_plan_metadata =
                                         Self::extract_shell_execution_plan_metadata(&result);
+                                    let file_changes = Self::observed_shell_file_changes(&tool_name, &result);
                                     let reinforced = self
                                         .post_process_tool_result(
                                             &tool_name,
@@ -4212,6 +4231,9 @@ impl WorkflowExecutor {
                                     }
                                     if let Some(execution_plan) = execution_plan_metadata {
                                         metadata["execution_plan"] = execution_plan;
+                                    }
+                                    if let Some(changes) = file_changes {
+                                        metadata["file_changes"] = changes;
                                     }
                                     if let Some(details) = self.build_completed_tool_result_details(
                                         &tool_name,
@@ -4712,6 +4734,7 @@ impl WorkflowExecutor {
                             // 3. Post-processing and Notification
                             let execution_plan_metadata =
                                 Self::extract_shell_execution_plan_metadata(&result);
+                            let file_changes = Self::observed_shell_file_changes(&tool_name, &result);
                             let reinforced = self
                                 .post_process_tool_result(
                                     &tool_name,
@@ -4738,6 +4761,9 @@ impl WorkflowExecutor {
                             }
                             if let Some(execution_plan) = execution_plan_metadata {
                                 metadata["execution_plan"] = execution_plan;
+                            }
+                            if let Some(changes) = file_changes {
+                                metadata["file_changes"] = changes;
                             }
                             if let Some(details) = self.build_completed_tool_result_details(
                                 &tool_name,
@@ -5320,6 +5346,9 @@ impl WorkflowExecutor {
                     }
                     if let Some(execution_plan) = execution_plan_metadata {
                         metadata["execution_plan"] = execution_plan.clone();
+                    }
+                    if let Some(changes) = &observation.file_changes {
+                        metadata["file_changes"] = changes.clone();
                     }
                     if reinforced.approval_status.as_deref() == Some("pending") {
                         if let Some(pending_info) = self.pending_approvals.get(id) {
@@ -6817,6 +6846,7 @@ impl WorkflowExecutor {
                 self.append_tool_terminal_event(&id, &name, &res).await;
                 self.dispatch_tool_terminal_payload(&id, &name, &res).await;
                 let execution_plan_metadata = Self::extract_shell_execution_plan_metadata(&res);
+                let file_changes = Self::observed_shell_file_changes(&name, &res);
                 let reinforced = self
                     .post_process_tool_result(&name, &args, &call, res)
                     .await?;
@@ -6828,7 +6858,7 @@ impl WorkflowExecutor {
                         call,
                         execution_plan_metadata,
                         Some(duration_ms),
-                    ),
+                    ).with_file_changes(file_changes),
                 );
             }
         }
@@ -6902,6 +6932,7 @@ impl WorkflowExecutor {
             self.dispatch_tool_terminal_payload(&id, &name, &final_res)
                 .await;
             let execution_plan_metadata = Self::extract_shell_execution_plan_metadata(&final_res);
+            let file_changes = Self::observed_shell_file_changes(&name, &final_res);
             let reinforced = self
                 .post_process_tool_result(&name, &args, &call, final_res)
                 .await?;
@@ -6913,7 +6944,7 @@ impl WorkflowExecutor {
                     call,
                     execution_plan_metadata,
                     Some(duration_ms),
-                ),
+                ).with_file_changes(file_changes),
             );
 
             if self.state == WorkflowState::AwaitingSubAgent

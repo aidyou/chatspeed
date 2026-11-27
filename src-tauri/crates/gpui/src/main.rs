@@ -6180,7 +6180,10 @@ impl Observer {
         let target = view.cost_key.clone();
         let open = self.expanded.contains(&target);
         let on_toggle = cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx));
-        ui::transcript::finish_task_card(view, open, on_toggle, cx)
+        let files_key = format!("{}:files", view.key);
+        let files_open = self.expanded.contains(&files_key);
+        let on_toggle_files = cx.listener(move |this, _, _, cx| this.toggle(files_key.clone(), cx));
+        ui::transcript::finish_task_card(view, open, on_toggle, files_open, on_toggle_files, cx)
     }
 
     fn row(

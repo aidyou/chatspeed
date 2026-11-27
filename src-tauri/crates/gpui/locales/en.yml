@@ -240,6 +240,10 @@ new_task: New task
 notification_sound: "Notification sound"
 no_sessions: No workflow sessions yet
 not_supported_native: Not available in the native window yet
+file_changes_added: "Added x%{count}"
+file_changes_deleted: "Deleted x%{count}"
+file_changes_modified: "Modified x%{count}"
+file_changes_title: "File changes (%{counts})"
 file_editor_close: Close
 file_editor_conflict: The file changed on disk. Your edits are still open; copy them before reopening the file.
 file_editor_discard: Discard and close

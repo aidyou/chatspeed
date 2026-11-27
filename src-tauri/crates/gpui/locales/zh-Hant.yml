@@ -240,6 +240,10 @@ new_task: 新建任務
 notification_sound: "通知聲音"
 no_sessions: 暫無工作流會話
 not_supported_native: 原生視窗暫未支援
+file_changes_added: "新增 x%{count}"
+file_changes_deleted: "刪除 x%{count}"
+file_changes_modified: "修改 x%{count}"
+file_changes_title: "檔案修改清單（%{counts}）"
 file_editor_close: 關閉
 file_editor_conflict: 磁碟上的檔案已變更。目前的編輯仍保留，請複製變更後再重新開啟檔案。
 file_editor_discard: 捨棄並關閉

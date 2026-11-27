@@ -1632,7 +1632,68 @@ pub struct ShellExecute {
     owned_processes: Option<OwnedProcessCancellation>,
 }
 
+/// Observe literal, non-recursive host removals without interpreting shell output
+/// or changing the command, its approval, or its execution result.
+fn literal_removal_paths(command: &str) -> Option<Vec<String>> {
+    if command.len() > 8192
+        || command.contains(['\r', '\n', ';', '&', '|', '<', '>', '$', '`', '*', '?', '[', ']', '~', '#', '(', ')', '{', '}', '\\'])
+    {
+        return None;
+    }
+    let tokens = shell_tokens(command)?;
+    let program = tokens.first()?.as_str();
+    let rm = matches!(program, "rm" | "/bin/rm" | "/usr/bin/rm");
+    if !rm && !matches!(program, "unlink" | "/bin/unlink" | "/usr/bin/unlink") {
+        return None;
+    }
+    let operands = &tokens[1..];
+    let options = operands.iter().take_while(|arg| arg.starts_with('-') && *arg != "--");
+    if !options.clone().all(|arg| rm && matches!(arg.as_str(), "-f" | "-v" | "-fv" | "-vf")) {
+        return None;
+    }
+    let paths = &operands[options.count()..];
+    let after_separator = paths.first().is_some_and(|arg| arg == "--");
+    let paths = &paths[usize::from(after_separator)..];
+    if paths.is_empty() || paths.len() > 64 || (!rm && paths.len() != 1)
+        || paths.iter().any(|path| path.is_empty() || (!after_separator && path.starts_with('-')))
+    {
+        return None;
+    }
+    Some(paths.to_vec())
+}
+
 impl ShellExecute {
+    fn observe_removal_candidates(&self, command: &str) -> Vec<std::path::PathBuf> {
+        if !cfg!(unix) || self.planning_mode {
+            return Vec::new();
+        }
+        let Some(paths) = literal_removal_paths(command) else {
+            return Vec::new();
+        };
+        let Ok(guard) = self.policy_engine.path_guard.read() else {
+            return Vec::new();
+        };
+        let Some(root) = guard.get_primary_root() else {
+            return Vec::new();
+        };
+        let roots = guard.workspace_roots();
+        let candidates: std::collections::BTreeSet<_> = paths
+            .into_iter()
+            .filter_map(|path| {
+                let path = root.join(path);
+                // This is a display-only observation; shell policy owns authorization.
+                let validated = guard.validate_for_listing(&path, false).ok()?;
+                if !roots.iter().any(|root| validated.starts_with(root))
+                    || !std::fs::symlink_metadata(&path).ok()?.is_file()
+                {
+                    return None;
+                }
+                Some(validated)
+            })
+            .collect();
+        candidates.into_iter().collect()
+    }
+
     pub fn new(
         path_guard: Arc<RwLock<PathGuard>>,
         tsid_generator: Arc<crate::libs::tsid::TsidGenerator>,
@@ -1755,11 +1816,28 @@ impl ToolDefinition for ShellExecute {
         let requested_timeout_ms = params.get("timeout").and_then(Value::as_u64);
         let working_dir = self.default_working_dir();
 
-        // Use streaming execution if gateway is configured
+        // Use streaming execution if gateway is configured.
         if self.gateway.is_some() && self.session_id.is_some() {
-            return self
+            let candidates = self.observe_removal_candidates(command_str);
+            let mut result = self
                 .call_with_streaming(command_str, requested_timeout_ms, params.clone())
-                .await;
+                .await?;
+            if let Some(content) = result.structured_content.as_mut() {
+                if content["exit_code"] == 0 && content["execution_plan"]["backend"] == "host" {
+                    let changes: Vec<_> = candidates.into_iter().filter_map(|path| {
+                        if !std::fs::symlink_metadata(&path).is_err_and(|err| {
+                            err.kind() == std::io::ErrorKind::NotFound
+                        }) {
+                            return None;
+                        }
+                        Some(json!({ "path": path.to_str()?, "kind": "deleted" }))
+                    }).collect();
+                    if !changes.is_empty() {
+                        content["file_changes"] = json!(changes);
+                    }
+                }
+            }
+            return Ok(result);
         }
 
         let tool_id = params
@@ -4891,6 +4969,30 @@ mod tests {
             .expect("persisted path missing");
         let physical_path = crate::libs::ai_temp::resolve_ai_temp_path(Path::new(model_path));
         std::fs::remove_file(physical_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_removal_reports_only_files_that_existed_and_disappeared() {
+        let temp_root = stable_temp_dir();
+        let project_root = temp_root.path().canonicalize().unwrap();
+        let file = project_root.join("old file.txt");
+        std::fs::write(&file, "old\n").unwrap();
+        let shell = test_shell_execute(project_root)
+            .with_gateway(Arc::new(RecordingGateway::default()), "test-session".into());
+
+        let result = shell.call(json!({"command":"/bin/rm -f -- 'old file.txt' missing.txt"}))
+            .await.unwrap().structured_content.unwrap();
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(result["file_changes"], json!([{"path":file, "kind":"deleted"}]));
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn file_removal_observation_ignores_dynamic_and_recursive_commands() {
+        for command in ["rm -r dir", "rm *.txt", "echo rm file", "rm file; true", "rm $FILE"] {
+            assert!(super::literal_removal_paths(command).is_none(), "{command}");
+        }
     }
 
     #[cfg(unix)]

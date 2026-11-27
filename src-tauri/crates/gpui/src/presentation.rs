@@ -10,6 +10,7 @@ use crate::types::Message;
 use rust_i18n::t;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 const READ_TOOLS: &[&str] = &["read_file", "list_dir", "web_fetch"];
 const SEARCH_TOOLS: &[&str] = &["grep", "glob", "web_search"];
@@ -595,6 +596,33 @@ pub struct FinishTaskView {
     pub label: String,
     pub cost_key: String,
     pub cost: Option<CostView>,
+    pub files: Vec<TaskFileChange>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TaskFileKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskFileChange {
+    pub path: String,
+    pub kind: TaskFileKind,
+    pub lines: Option<(u64, u64)>,
+    workspace_path: Option<PathBuf>,
+}
+
+impl TaskFileChange {
+    /// The editor still validates this path against the current workspace before opening it.
+    pub fn editor_path(&self) -> Option<&Path> {
+        if self.kind == TaskFileKind::Deleted {
+            None
+        } else {
+            self.workspace_path.as_deref()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2185,7 +2213,7 @@ fn activity_view(items: Vec<Message>, roots: &[String], open_tail: bool) -> Acti
             .iter()
             .map(|(label, count)| format!("{label} x{count}"))
             .collect::<Vec<_>>()
-            .join(" · "),
+            .join(ACTIVITY_SEPARATOR),
         120,
     );
     let ongoing = open_tail
@@ -2505,6 +2533,156 @@ fn ask_user_choices(message: &Message, answers: Option<&[AskUserAnswer]>) -> Vec
         .collect()
 }
 
+pub const ACTIVITY_SEPARATOR: &str = " · ";
+
+/// Format the task's added, modified and deleted file counts in that order.
+pub fn file_changes_title(counts: [usize; 3], locale: &str) -> String {
+    let counts = [
+        "file_changes_added",
+        "file_changes_modified",
+        "file_changes_deleted",
+    ]
+    .into_iter()
+    .zip(counts)
+    .filter(|(_, count)| *count != 0)
+    .map(|(key, count)| t!(key, locale = locale, count = count))
+    .collect::<Vec<_>>()
+    .join(ACTIVITY_SEPARATOR);
+    t!("file_changes_title", locale = locale, counts = counts).into_owned()
+}
+
+fn task_file_change(message: &Message, roots: &[String]) -> Option<(String, TaskFileChange)> {
+    let name = tool_name(&message.metadata);
+    if !matches!(name, "edit_file" | "write_file") {
+        return None;
+    }
+    let details = decoded(&primary_tool(&message.metadata)["details"]);
+    let path = details["file_path"]
+        .as_str()
+        .or_else(|| details["display_path"].as_str())?;
+    let kind = if name == "edit_file" || details["overwritten"].as_bool()? {
+        TaskFileKind::Modified
+    } else {
+        TaskFileKind::Added
+    };
+    let old = details["old_string"].as_str();
+    let new = details["new_string"]
+        .as_str()
+        .or_else(|| details["content"].as_str());
+    if kind == TaskFileKind::Modified && old.is_some() && old == new {
+        return None;
+    }
+    let lines = if kind == TaskFileKind::Added {
+        new.map(|text| (text.lines().count() as u64, 0))
+    } else if details["replace_all"] != true {
+        old.zip(new)
+            .and_then(|(old, new)| task_file_line_counts(old, new))
+    } else {
+        None
+    };
+    task_file_path(path, kind, lines, roots)
+}
+
+fn task_file_line_counts(old: &str, new: &str) -> Option<(u64, u64)> {
+    // The preview intentionally approximates oversized diffs; never report that
+    // approximation as a line count.
+    if old.len().saturating_add(new.len()) > 256 * 1024 {
+        return None;
+    }
+    let old = split_diff_lines(old);
+    let new = split_diff_lines(new);
+    if (old.len() + 1).saturating_mul(new.len() + 1) > 250_000 {
+        return None;
+    }
+    let mut counts = (0, 0);
+    for (kind, _) in diff_sequence(&old, &new) {
+        match kind {
+            DiffKind::Added => counts.0 += 1,
+            DiffKind::Removed => counts.1 += 1,
+            DiffKind::Context => {}
+        }
+    }
+    Some(counts)
+}
+
+fn task_file_path(
+    path: &str,
+    kind: TaskFileKind,
+    lines: Option<(u64, u64)>,
+    roots: &[String],
+) -> Option<(String, TaskFileChange)> {
+    let normalized = path.trim().replace('\\', "/");
+    let normalized = normalized.trim_start_matches("./");
+    if normalized.is_empty() || normalized == "." {
+        return None;
+    }
+    let absolute = normalized.starts_with('/') || normalized.as_bytes().get(1) == Some(&b':');
+    let key = if absolute {
+        normalized.to_owned()
+    } else if let Some(root) = roots.first() {
+        format!("{}/{normalized}", root.replace('\\', "/").trim_end_matches('/'))
+    } else {
+        normalized.to_owned()
+    };
+    // Resolve from tool metadata, not the shortened, single-line label shown in the UI.
+    let source = Path::new(path);
+    let workspace_path = roots.first().map(|root| Path::new(root).join(source));
+    // Keep secondary roots distinguishable when they have identical relative paths.
+    let path = single_line(&format_display_path(normalized, &roots[..roots.len().min(1)]));
+    Some((
+        key,
+        TaskFileChange {
+            path,
+            kind,
+            lines,
+            workspace_path,
+        },
+    ))
+}
+
+fn task_files(messages: &[Message], roots: &[String]) -> Vec<TaskFileChange> {
+    use TaskFileKind::{Added, Deleted, Modified};
+    let mut files = BTreeMap::<String, TaskFileChange>::new();
+    for message in messages {
+        if is_hidden(message) || message.role != "tool"
+            || ToolStatus::from_message(message) != ToolStatus::Completed
+        {
+            continue;
+        }
+        let reported = message.metadata["file_changes"].as_array();
+        let changes = reported.into_iter().flatten().filter_map(|value| {
+            let kind = match value["kind"].as_str()? {
+                "added" => Added,
+                "modified" => Modified,
+                "deleted" => Deleted,
+                _ => return None,
+            };
+            task_file_path(
+                value["path"].as_str()?, kind,
+                value["added_lines"].as_u64().zip(value["removed_lines"].as_u64()), roots,
+            )
+        });
+        for (key, change) in changes.chain(reported.is_none().then(|| task_file_change(message, roots)).flatten()) {
+            if let Some(previous) = files.get_mut(&key) {
+                match (previous.kind, change.kind) {
+                    (Added, Deleted) => { files.remove(&key); continue; }
+                    (Added, _) => {}
+                    (Deleted, Added) => previous.kind = Modified,
+                    (_, kind) => previous.kind = kind,
+                }
+                previous.lines = previous.lines.zip(change.lines).map(|((a, d), (more_a, more_d))| {
+                    (a.saturating_add(more_a), d.saturating_add(more_d))
+                });
+            } else {
+                files.insert(key, change);
+            }
+        }
+    }
+    let mut files: Vec<_> = files.into_values().collect();
+    files.sort_by(|a, b| (a.kind, &a.path).cmp(&(b.kind, &b.path)));
+    files
+}
+
 /// Build the renderable transcript.
 ///
 /// `roots` are the workflow's authorized display roots; they only shorten
@@ -2618,6 +2796,7 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
     // Like Vue, a tool result does not close the group. Only a later turn,
     // reply, or standalone activity does; trailing thought text can join it.
     let last_group_boundary = deduped.iter().rposition(is_tool_group_boundary);
+    let mut task_start = 0;
     let mut rows = Vec::new();
     let mut index = 0usize;
     let total = deduped.len();
@@ -2669,6 +2848,7 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
         }
         if message.role == "system" && message.message_kind == "summary" {
             if message.message_subtype.as_deref() == Some("manual_clear_context") {
+                task_start = index + 1;
                 rows.push(Row::Divider);
             } else {
                 let snapshot = snapshot_view(message);
@@ -2713,8 +2893,16 @@ pub fn project(messages: Vec<Message>, roots: &[String]) -> Vec<Row> {
             } else if is_completion_message(message) {
                 let key = message_key(message);
                 let status = ToolStatus::from_message(message);
+                let files = if status == ToolStatus::Completed {
+                    let files = task_files(&deduped[task_start..index], roots);
+                    task_start = index + 1;
+                    files
+                } else {
+                    Vec::new()
+                };
                 rows.push(Row::FinishTask(FinishTaskView {
                     key: key.clone(),
+                    files,
                     failed: status.is_error(),
                     label: finish_task_label(message),
                     cost_key: format!("{key}:cost"),
@@ -3553,6 +3741,89 @@ mod tests {
         assert_eq!(tool.choices[0].selected, None);
         assert!(tool.choices[0].other_selected);
         assert_eq!(tool.choices[0].answer.as_deref(), Some("something else"));
+    }
+
+    #[test]
+    fn completed_task_files_use_successful_observations_and_reset_at_boundaries() {
+        let tool = |id, name, status, details| Message {
+            id,
+            role: "tool".into(),
+            metadata: json!({"tool_name": name, "execution_status": status, "details": details}),
+            ..Message::default()
+        };
+        let mut duplicate = tool(2, "edit_file", "pending_approval", json!({"file_path":"new.rs"}));
+        duplicate.metadata["tool_call_id"] = json!("edit-new");
+        let mut edit = tool(3, "edit_file", "completed", json!({
+            "file_path":"/workspace/new.rs", "old_string":"b", "new_string":"B"
+        }));
+        edit.metadata["tool_call_id"] = json!("edit-new");
+        let mut removal = tool(5, "bash", "completed", Value::Null);
+        removal.metadata["file_changes"] = json!([
+            {"path":"/workspace/gone.rs", "kind":"deleted"},
+            {"path":"/workspace/temporary.rs", "kind":"deleted"}
+        ]);
+        let rows = project(vec![
+            tool(1, "write_file", "completed", json!({
+                "file_path":"./new.rs", "overwritten":false, "content":"a\nb\n"
+            })),
+            duplicate,
+            edit,
+            tool(4, "write_file", "completed", json!({
+                "file_path":"temporary.rs", "overwritten":false, "content":""
+            })),
+            removal,
+            tool(6, "edit_file", "completed", json!({
+                "file_path":"old.rs", "old_string":"a\nb\nc", "new_string":"a\nB\nc\nd"
+            })),
+            tool(7, "edit_file", "failed", json!({"file_path":"failed.rs"})),
+            tool(8, "complete_workflow", "failed", Value::Null),
+            tool(9, "complete_workflow", "completed", Value::Null),
+            tool(10, "complete_workflow", "completed", Value::Null),
+            tool(11, "edit_file", "completed", json!({"file_path":"before-clear.rs"})),
+            Message {
+                id: 12,
+                role: "system".into(),
+                message_kind: "summary".into(),
+                message_subtype: Some("manual_clear_context".into()),
+                ..Message::default()
+            },
+            tool(13, "complete_workflow", "completed", Value::Null),
+        ], &["/workspace".into()]);
+        let finished: Vec<_> = rows.iter().filter_map(|row| match row {
+            Row::FinishTask(view) => Some(&view.files),
+            _ => None,
+        }).collect();
+        assert_eq!(finished.len(), 4);
+        assert!(finished[0].is_empty());
+        assert_eq!(finished[1], &vec![
+            TaskFileChange { path: "new.rs".into(), kind: TaskFileKind::Added, lines: Some((3, 1)), workspace_path: Some("/workspace/new.rs".into()) },
+            TaskFileChange { path: "old.rs".into(), kind: TaskFileKind::Modified, lines: Some((2, 1)), workspace_path: Some("/workspace/old.rs".into()) },
+            TaskFileChange { path: "gone.rs".into(), kind: TaskFileKind::Deleted, lines: None, workspace_path: Some("/workspace/gone.rs".into()) },
+        ]);
+        assert_eq!(finished[1][0].editor_path(), Some(Path::new("/workspace/new.rs")));
+        assert_eq!(finished[1][1].editor_path(), Some(Path::new("/workspace/old.rs")));
+        assert_eq!(finished[1][2].editor_path(), None);
+        assert!(finished[2].is_empty());
+        assert!(finished[3].is_empty());
+    }
+
+    #[test]
+    fn task_files_keep_paths_when_precise_line_counts_are_unavailable() {
+        let write = |id, metadata| Message { id, role: "tool".into(), metadata, ..Message::default() };
+        let rows = project(vec![
+            write(1, json!({"tool_name":"write_file", "execution_status":"completed", "details":{
+                "file_path":"config.txt", "overwritten":true, "old_string":"same", "content":"same"
+            }})),
+            write(2, json!({"tool_name":"edit_file", "execution_status":"completed", "details":{
+                "file_path":"multi.txt", "old_string":"x", "new_string":"y", "replace_all":true
+            }})),
+            write(3, json!({"tool_name":"complete_workflow","execution_status":"completed"})),
+        ], &[]);
+        let Some(Row::FinishTask(view)) = rows.last() else { panic!("completion row missing") };
+        assert_eq!(view.files, vec![TaskFileChange {
+            path: "multi.txt".into(), kind: TaskFileKind::Modified, lines: None, workspace_path: None,
+        }]);
+        assert_eq!(task_file_line_counts(&"old\n".repeat(600), &"new\n".repeat(600)), None);
     }
 
     #[test]

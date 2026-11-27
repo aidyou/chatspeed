@@ -34,6 +34,35 @@ mod locale_tests {
     }
 
     #[test]
+    fn file_changes_title_omits_zero_counts_in_every_locale() {
+        for (locale, all, only_modified, added_and_deleted) in [
+            (
+                "en",
+                "File changes (Added x2 · Modified x3 · Deleted x1)",
+                "File changes (Modified x3)",
+                "File changes (Added x2 · Deleted x1)",
+            ),
+            (
+                "zh-Hans",
+                "文件修改列表（新增 x2 · 修改 x3 · 删除 x1）",
+                "文件修改列表（修改 x3）",
+                "文件修改列表（新增 x2 · 删除 x1）",
+            ),
+            (
+                "zh-Hant",
+                "檔案修改清單（新增 x2 · 修改 x3 · 刪除 x1）",
+                "檔案修改清單（修改 x3）",
+                "檔案修改清單（新增 x2 · 刪除 x1）",
+            ),
+        ] {
+            use crate::presentation::file_changes_title;
+            assert_eq!(file_changes_title([2, 3, 1], locale), all);
+            assert_eq!(file_changes_title([0, 3, 0], locale), only_modified);
+            assert_eq!(file_changes_title([2, 0, 1], locale), added_and_deleted);
+        }
+    }
+
+    #[test]
     fn status_placeholders_use_rust_i18n_syntax() {
         let locales = [
             include_str!("../locales/en.yml"),
