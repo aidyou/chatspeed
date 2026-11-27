@@ -4974,6 +4974,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn concurrent_workflow_start_preserves_the_live_message_channel() {
+        use crate::workflow::react::types::WorkflowState;
+
+        let (app, _env) = spawn_test_app().await;
+        let agent_id = "agent-start-race";
+        insert_agent(&app, agent_id).await;
+        let session_id = app
+            .svc
+            .create_workflow(WorkflowCreateRequest {
+                user_query: None,
+                agent_id: agent_id.into(),
+                allowed_paths: None,
+                auto_approve_plan: None,
+                final_audit: None,
+                inherited_agent_config: None,
+            })
+            .await
+            .unwrap();
+        // Keep the executor alive without making a real model request.
+        app.store
+            .update_workflow_status(&session_id, &WorkflowState::Paused.to_string())
+            .unwrap();
+
+        let request = |initial_prompt: Option<&str>| WorkflowStartRequest {
+            session_id: session_id.clone(),
+            agent_id: agent_id.into(),
+            initial_prompt: initial_prompt.map(str::to_owned),
+            initial_metadata: None,
+            initial_attached_context: None,
+            planning_mode: None,
+        };
+        let signal = serde_json::json!({
+            "type": "user_message",
+            "content": "follow-up during startup",
+            "attached_context": "attachment",
+            "metadata": { "client_message_id": "startup-follow-up" },
+            "queued_user_message_id": "startup-follow-up"
+        });
+        let startup = app
+            .svc
+            .workflow_manager
+            .lock_session_transition(&session_id)
+            .await;
+        let mut start = std::pin::pin!(app.svc.workflow_start(request(None)));
+        let mut duplicate =
+            std::pin::pin!(app.svc.workflow_start(request(Some("duplicate start"))));
+        let mut follow_up =
+            std::pin::pin!(app.svc.workflow_signal(&session_id, signal.to_string()));
+        assert!(futures::poll!(&mut start).is_pending());
+        assert!(futures::poll!(&mut duplicate).is_pending());
+        assert!(futures::poll!(&mut follow_up).is_pending());
+        drop(startup);
+
+        let (started, rejected, delivered) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(start, duplicate, follow_up)
+        })
+        .await
+        .expect("startup and concurrent requests completed");
+        assert_eq!(started.unwrap(), session_id);
+        let conflict = dto::application_error_response(&rejected.unwrap_err());
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(conflict.into_body(), 8192)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["error"]["presentation"]["reason"],
+            "session_already_exists"
+        );
+        assert_eq!(delivered.unwrap(), "Signal injected");
+
+        let queued = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(context) = app.store.get_execution_context(&session_id).unwrap() {
+                    if !context.queued_user_messages.is_empty() {
+                        break context.queued_user_messages;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("winner consumes the queued signal");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].content, "follow-up during startup");
+        assert_eq!(queued[0].attached_context.as_deref(), Some("attachment"));
+        assert_eq!(
+            queued[0].metadata.as_ref().unwrap()["client_message_id"],
+            "startup-follow-up"
+        );
+        app.svc.workflow_stop(&session_id).await.unwrap();
+        app.handle.shutdown();
+    }
+
+    #[tokio::test]
     async fn unauthorized_requests_are_rejected_with_stable_errors() {
         let (app, _env) = spawn_test_app().await;
         let client = client();

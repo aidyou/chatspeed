@@ -30,7 +30,9 @@ use crate::workflow::react::gateway::Gateway;
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::intelligence::IntelligenceManager;
 #[cfg(not(feature = "desktop"))]
-use crate::workflow::react::manager::{ManagedSessionStatus, SignalSendError, WorkflowManager};
+use crate::workflow::react::manager::{
+    ManagedSessionStatus, SignalSendError, WorkflowManager, WorkflowManagerError,
+};
 #[cfg(not(feature = "desktop"))]
 use crate::workflow::react::orchestrator::{
     clear_completed_background_tasks_for_owner, list_background_task_ids_for_owner,
@@ -3467,6 +3469,7 @@ fn schedule_completed_session_cleanup(
         ))
         .await;
 
+        let _transition = workflow_manager.lock_session_transition(&session_id).await;
         let removed =
             workflow_manager.remove_session_if_updated_matches(&session_id, completed_at_ms);
         if removed.is_some() {
@@ -3789,11 +3792,65 @@ pub(crate) async fn workflow_start_core(
     initial_attached_context: Option<String>,
     planning_mode: Option<bool>,
 ) -> Result<String, ApplicationError> {
-    // Starting or resuming a session is canonical runtime work: fence it at this
-    // lowest layer so a direct, non-HTTP caller is refused on the one gate. A
-    // nested call inside an already-admitted task (e.g. automation dispatch)
-    // joins the existing scope instead of admitting twice.
+    let _transition = svc
+        .workflow_manager
+        .lock_session_transition(&session_id)
+        .await;
+    start_workflow_under_transition(
+        svc,
+        session_id,
+        agent_id,
+        initial_prompt,
+        initial_metadata,
+        initial_attached_context,
+        planning_mode,
+    )
+    .await
+}
+
+#[cfg(not(feature = "desktop"))]
+fn workflow_start_conflict(session_id: String) -> ApplicationError {
+    ApplicationError::conflict(format!("Session already exists: {}", session_id))
+        .with_reason(chatspeed_contracts::ErrorReason::SessionAlreadyExists)
+}
+
+/// Both explicit starts and signal-driven recovery hold the same session transition lock.
+#[cfg(not(feature = "desktop"))]
+async fn start_workflow_under_transition(
+    svc: &WorkflowApplicationService,
+    session_id: String,
+    agent_id: String,
+    initial_prompt: Option<String>,
+    initial_metadata: Option<Value>,
+    initial_attached_context: Option<String>,
+    planning_mode: Option<bool>,
+) -> Result<String, ApplicationError> {
     let _ticket = svc.admit_work_or_stopping(crate::lifecycle::WorkKind::WorkflowStart)?;
+
+    let workflow_manager_arc = svc.workflow_manager.clone();
+    if has_reconciled_live_session(&workflow_manager_arc, &session_id, "start").await {
+        match workflow_manager_arc.get_session_status(&session_id) {
+            Some(ManagedSessionStatus::Stopping) => {
+                log::info!(
+                    "[Workflow][session={}][phase=start] Session is still stopping, rejecting restart",
+                    session_id
+                );
+                return Err(ApplicationError::state(format!(
+                    "Session is stopping: {}",
+                    session_id
+                ))
+                .with_reason(chatspeed_contracts::ErrorReason::SessionStopping));
+            }
+            Some(ManagedSessionStatus::Completed) if initial_prompt.is_some() => {}
+            _ => {
+                log::info!(
+                    "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
+                    session_id
+                );
+                return Err(workflow_start_conflict(session_id));
+            }
+        }
+    }
 
     log::info!(
         "[Workflow][session={}][phase=start] Starting workflow, agent_id={}, planning_mode={}",
@@ -3807,7 +3864,6 @@ pub(crate) async fn workflow_start_core(
     let tsid_generator = svc.tsid_generator.clone();
     let gateway_arc = svc.gateway.clone();
     let factory = svc.factory.clone();
-    let workflow_manager_arc = svc.workflow_manager.clone();
     let app_data_dir = svc.app_data_dir.clone();
     let planning_mode = planning_mode.unwrap_or(false);
 
@@ -3936,30 +3992,9 @@ pub(crate) async fn workflow_start_core(
         }
     }
 
-    // Reject only truly live sessions. A completed executor may still exist in
-    // memory for a short window and can be resumed above without rebuilding.
+    // Hot resume can yield to stale-session recovery. Recheck before constructing a replacement.
     if has_reconciled_live_session(&workflow_manager_arc, &session_id, "start").await {
-        if matches!(
-            workflow_manager_arc.get_session_status(&session_id),
-            Some(ManagedSessionStatus::Stopping)
-        ) {
-            log::info!(
-                "[Workflow][session={}][phase=start] Session is still stopping, rejecting restart",
-                session_id
-            );
-            return Err(
-                ApplicationError::state(format!("Session is stopping: {}", session_id))
-                    .with_reason(chatspeed_contracts::ErrorReason::SessionStopping),
-            );
-        }
-        log::info!(
-            "[Workflow][session={}][phase=start] Session already exists in WorkflowManager, rejecting duplicate start",
-            session_id
-        );
-        return Err(
-            ApplicationError::conflict(format!("Session already exists: {}", session_id))
-                .with_reason(chatspeed_contracts::ErrorReason::SessionAlreadyExists),
-        );
+        return Err(workflow_start_conflict(session_id));
     }
 
     // A runtime shutdown may have stopped an approval before the tool began.
@@ -3980,15 +4015,6 @@ pub(crate) async fn workflow_start_core(
     }
 
     let (signal_tx, signal_rx) = tokio::sync::mpsc::channel(100);
-    gateway_arc
-        .register_session_tx_with_source(session_id.clone(), signal_tx.clone(), "workflow_start")
-        .await;
-    WorkflowManager::register_session_signal_tx_with_source(
-        session_id.clone(),
-        signal_tx,
-        "workflow_start",
-    );
-
     let global_tool_manager = chat_state_arc.tool_manager.clone();
 
     let allowed_roots: Vec<PathBuf> = allowed_paths
@@ -4111,22 +4137,27 @@ pub(crate) async fn workflow_start_core(
         }
     }
 
-    // Register to WorkflowManager FIRST (primary registry)
-    if let Err(e) = workflow_manager_arc.register_session(
+    // Publish the input channel only after initialization and executor registration succeed.
+    workflow_manager_arc
+        .register_session(
+            session_id.clone(),
+            shared_executor.clone(),
+            ManagedSessionStatus::Active,
+        )
+        .map_err(|error| match error {
+            WorkflowManagerError::SessionAlreadyExists { session_id } => {
+                workflow_start_conflict(session_id)
+            }
+            error => ApplicationError::internal(error.to_string()),
+        })?;
+    gateway_arc
+        .register_session_tx_with_source(session_id.clone(), signal_tx.clone(), "workflow_start")
+        .await;
+    WorkflowManager::register_session_signal_tx_with_source(
         session_id.clone(),
-        shared_executor.clone(),
-        ManagedSessionStatus::Active,
-    ) {
-        log::error!(
-            "[Workflow][session={}][phase=start] Failed to register to WorkflowManager: {}",
-            session_id,
-            e
-        );
-        return Err(ApplicationError::internal(format!(
-            "Failed to register workflow session: {}",
-            e
-        )));
-    }
+        signal_tx,
+        "workflow_start",
+    );
 
     // BACKGROUND_TASKS as compatibility layer (secondary)
     BACKGROUND_TASKS.insert(
@@ -4375,6 +4406,9 @@ pub(crate) async fn workflow_signal_core(
     };
 
     let workflow_manager_arc = svc.workflow_manager.clone();
+    let _transition = workflow_manager_arc
+        .lock_session_transition(&session_id)
+        .await;
     let gateway_arc = svc.gateway.clone();
     let main_store_arc = svc.main_store.clone();
     let workflow = main_store_arc
@@ -4485,7 +4519,7 @@ pub(crate) async fn workflow_signal_core(
                 session_id,
                 workflow.status
             );
-            workflow_start_core(
+            start_workflow_under_transition(
                 svc,
                 session_id.clone(),
                 workflow.agent_id.clone(),
@@ -4662,7 +4696,7 @@ pub(crate) async fn workflow_signal_core(
                     workflow.status
                 );
 
-                workflow_start_core(
+                start_workflow_under_transition(
                     svc,
                     session_id.clone(),
                     workflow.agent_id.clone(),
@@ -4741,7 +4775,7 @@ pub(crate) async fn workflow_signal_core(
                     session_id
                 );
 
-                workflow_start_core(
+                start_workflow_under_transition(
                     svc,
                     session_id.clone(),
                     workflow.agent_id.clone(),
@@ -4804,7 +4838,7 @@ pub(crate) async fn workflow_signal_core(
                     );
                 }
 
-                workflow_start_core(
+                start_workflow_under_transition(
                     svc,
                     session_id.clone(),
                     workflow.agent_id.clone(),
@@ -4878,7 +4912,7 @@ pub(crate) async fn workflow_signal_core(
                     session_id
                 );
 
-                workflow_start_core(
+                start_workflow_under_transition(
                     svc,
                     session_id.clone(),
                     workflow.agent_id.clone(),
@@ -4932,7 +4966,7 @@ pub(crate) async fn workflow_signal_core(
                     )));
                 }
 
-                workflow_start_core(
+                start_workflow_under_transition(
                     svc,
                     session_id.clone(),
                     workflow.agent_id.clone(),

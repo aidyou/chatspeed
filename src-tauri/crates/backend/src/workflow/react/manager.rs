@@ -1,4 +1,4 @@
-use dashmap::DashMap;
+use dashmap::{mapref::entry::Entry, DashMap};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
@@ -71,6 +71,8 @@ pub enum SignalSendError {
 
 pub struct WorkflowManager {
     sessions: DashMap<String, ManagedSession>,
+    #[cfg(not(feature = "desktop"))]
+    transitions: DashMap<String, std::sync::Weak<Mutex<()>>>,
 }
 
 impl WorkflowManager {
@@ -78,7 +80,30 @@ impl WorkflowManager {
         log::info!("[WorkflowManager] Initialized");
         Self {
             sessions: DashMap::new(),
+            #[cfg(not(feature = "desktop"))]
+            transitions: DashMap::new(),
         }
+    }
+
+    /// Serialize startup and command routing without holding a registry shard across an await.
+    #[cfg(not(feature = "desktop"))]
+    pub(crate) async fn lock_session_transition(
+        &self,
+        session_id: &str,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        // Completed or cancelled operations leave no strong reference. Reap their keys so
+        // the transition table is bounded by in-flight work, not by conversation history.
+        self.transitions
+            .retain(|_, mutex| mutex.strong_count() != 0);
+        let mutex = {
+            let mut slot = self.transitions.entry(session_id.to_string()).or_default();
+            slot.upgrade().unwrap_or_else(|| {
+                let mutex = Arc::new(Mutex::new(()));
+                *slot = Arc::downgrade(&mutex);
+                mutex
+            })
+        };
+        mutex.lock_owned().await
     }
 
     pub fn register_session(
@@ -87,16 +112,18 @@ impl WorkflowManager {
         executor: Arc<Mutex<dyn ReActExecutor>>,
         status: ManagedSessionStatus,
     ) -> Result<(), WorkflowManagerError> {
-        if self.sessions.contains_key(&session_id) {
-            log::info!(
-                "[WorkflowManager][session={}][event=session_registered] Session already exists",
-                session_id
-            );
-            return Err(WorkflowManagerError::SessionAlreadyExists { session_id });
+        match self.sessions.entry(session_id.clone()) {
+            Entry::Occupied(_) => {
+                log::info!(
+                    "[WorkflowManager][session={}][event=session_registered] Session already exists",
+                    session_id
+                );
+                return Err(WorkflowManagerError::SessionAlreadyExists { session_id });
+            }
+            Entry::Vacant(slot) => {
+                slot.insert(ManagedSession::new(executor, status.clone()));
+            }
         }
-
-        let session = ManagedSession::new(executor, status.clone());
-        self.sessions.insert(session_id.clone(), session);
 
         log::info!(
             "[WorkflowManager][session={}][event=session_registered] Session registered with status {:?}",
