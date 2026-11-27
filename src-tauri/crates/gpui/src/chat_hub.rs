@@ -25,27 +25,29 @@ pub(crate) const DOCK_MIN_WIDTH: f32 = 375.;
 /// Width the workflow UI always keeps beside the page, mirroring the Tauri
 /// carrier's `CHAT_HUB_MIN_HOST_WIDTH`.
 pub(crate) const DOCK_MIN_HOST_WIDTH: f32 = 480.;
+pub(crate) const SPLITTER_WIDTH: f32 = 5.;
 /// How long the docked column takes to slide in or out.
 const SLIDE: Duration = Duration::from_millis(180);
+// The native resize can land after the animation's last request. Stop waiting
+// if the compositor keeps the window at a different size.
+const RESIZE_SETTLE: Duration = Duration::from_millis(180);
 
 /// Clamps a requested page width the way the Tauri carrier does.
 pub(crate) fn clamp_width(window_width: f32, requested: f32) -> f32 {
     if !window_width.is_finite() || !requested.is_finite() {
         return DOCK_WIDTH;
     }
-    let maximum = (window_width - DOCK_MIN_HOST_WIDTH).max(DOCK_MIN_WIDTH);
+    let maximum = (window_width - DOCK_MIN_HOST_WIDTH - SPLITTER_WIDTH).max(DOCK_MIN_WIDTH);
     requested.clamp(DOCK_MIN_WIDTH, maximum)
 }
 
-/// Resolves the page width and the window growth together.
-///
-/// The width is clamped against the window the dock is about to get, not the
-/// one it has now, so a slide can target the final width and the clamp after
-/// the expansion has nothing left to change.
+/// Fit the page into the space to the right if it has room for the minimum
+/// width. Only borrow from the workflow when the screen cannot fit that.
 fn expand_plan(window_width: f32, available: f32, requested: f32) -> (f32, f32) {
     let available = available.max(0.);
-    let width = clamp_width(window_width + available.min(requested), requested);
-    (width, available.min(width))
+    let width = clamp_width(window_width + available.min(requested + SPLITTER_WIDTH), requested);
+    let width = width.min((available - SPLITTER_WIDTH).max(DOCK_MIN_WIDTH));
+    (width, available.min(width + SPLITTER_WIDTH))
 }
 
 #[cfg(test)]
@@ -64,15 +66,20 @@ fn dock_expands_to_the_width_the_slide_targets() {
         assert_eq!(clamp_width(window_width + growth, width), width);
         assert!(width >= DOCK_MIN_WIDTH);
         assert!(growth <= available.max(0.));
-        assert!(growth <= width);
+        assert!(growth <= width + SPLITTER_WIDTH);
+        if available >= DOCK_MIN_WIDTH + SPLITTER_WIDTH {
+            assert_eq!(growth, width + SPLITTER_WIDTH);
+        }
     }
+    assert_eq!(expand_plan(1000., 450., 900.), (445., 450.));
+    assert_eq!(expand_plan(1000., 300., 900.), (DOCK_MIN_WIDTH, 300.));
 }
 
 #[cfg(test)]
 #[::core::prelude::v1::test]
 fn dock_width_keeps_a_phone_page_and_the_workflow_ui_visible() {
     assert_eq!(clamp_width(1600., 900.), 900.);
-    assert_eq!(clamp_width(1600., 2000.), 1120.);
+    assert_eq!(clamp_width(1600., 2000.), 1115.);
     assert_eq!(clamp_width(1600., 100.), DOCK_MIN_WIDTH);
     // A narrow window cannot honor both limits; the page floor wins.
     assert_eq!(clamp_width(700., 900.), DOCK_MIN_WIDTH);
@@ -95,8 +102,74 @@ fn dock_slide_eases_from_closed_to_open() {
         to: 600.,
         closing: false,
     };
-    assert!(landed.done());
+    assert!(landed.done(false));
+    assert!(!landed.done(true));
     assert_eq!(landed.width(), 600.);
+    let capped = Reveal {
+        started: Instant::now() - SLIDE - RESIZE_SETTLE,
+        ..landed
+    };
+    assert!(capped.done(true));
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn dock_layout_follows_observed_growth_instead_of_the_animation_target() {
+    let viewport = 1000.;
+    let total = 600. + SPLITTER_WIDTH;
+    let growth = WindowGrowth {
+        base_window: 1040.,
+        base_viewport: viewport,
+        requested: total,
+    };
+    for (added, share) in [
+        (0., 0.3),
+        (2., 0.6),
+        (240., 0.9),
+        (560., 1.),
+        (total, 1.),
+        (180., 0.),
+        (0., 0.),
+    ] {
+        let current = viewport + added;
+        let reserved = growth.layout_extent(current, total, share);
+        let splitter = reserved.min(SPLITTER_WIDTH);
+        let page = (reserved - SPLITTER_WIDTH).max(0.);
+        assert_eq!(current - splitter - page, viewport);
+    }
+    let native_target = growth.base_window + total;
+    assert!(growth.resize_pending(native_target, viewport + 560., false));
+    assert!(!growth.resize_pending(native_target, viewport + total, false));
+    assert!(growth.resize_pending(growth.base_window, viewport + 80., true));
+    assert!(!growth.resize_pending(growth.base_window, viewport, true));
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn dock_layout_borrows_only_the_width_needed_for_the_minimum_page() {
+    let (width, requested) = expand_plan(1000., 300., 600.);
+    let total = width + SPLITTER_WIDTH;
+    let growth = WindowGrowth {
+        base_window: 1000.,
+        base_viewport: 1000.,
+        requested,
+    };
+    assert_eq!(growth.layout_extent(1000., total, 0.), 0.);
+    assert_eq!(growth.layout_extent(1090., total, 0.5), 130.);
+    assert_eq!(growth.layout_extent(1300., total, 1.), total);
+}
+
+#[cfg(test)]
+#[::core::prelude::v1::test]
+fn dock_close_starts_at_the_width_left_by_the_splitter() {
+    let growth = WindowGrowth {
+        base_window: 1000.,
+        base_viewport: 1000.,
+        requested: 600.,
+    };
+    assert_eq!(growth.layout_extent(1600., 400., 1.), 400.);
+    assert_eq!(growth.layout_extent(1300., 400., 0.5), 200.);
+    assert_eq!(growth.layout_extent(1000., 400., 0.), 0.);
 }
 
 // Wry's navigation handler cannot distinguish a link click from a redirect.
@@ -373,9 +446,14 @@ pub(crate) fn proxy_from_config(config: &serde_json::Value) -> Option<ProxySetti
     Some(ProxySettings { host, port, socks })
 }
 
+#[cfg(target_os = "linux")]
+type PageView = X11Page;
+#[cfg(not(target_os = "linux"))]
+type PageView = Rc<WebView>;
+
 struct Page {
     site: Site,
-    view: Option<Rc<WebView>>,
+    view: Option<PageView>,
     bounds: Rc<Cell<Option<Rect>>>,
     #[cfg(target_os = "linux")]
     applied_bounds: Option<Rect>,
@@ -407,8 +485,37 @@ impl Reveal {
         self.from + (self.to - self.from) * self.progress()
     }
 
-    fn done(&self) -> bool {
-        self.started.elapsed() >= SLIDE
+    fn done(&self, resize_pending: bool) -> bool {
+        let elapsed = self.started.elapsed();
+        elapsed >= SLIDE && (!resize_pending || elapsed >= SLIDE + RESIZE_SETTLE)
+    }
+}
+
+struct WindowGrowth {
+    base_window: f32,
+    base_viewport: f32,
+    requested: f32,
+}
+
+impl WindowGrowth {
+    fn layout_extent(&self, viewport: f32, total_extent: f32, share: f32) -> f32 {
+        // The resize request and the frame's viewport can be a frame apart.
+        // Only borrow from the workflow when the final dock cannot fit outside it.
+        let grown = self.observed_growth(viewport);
+        let borrowed = (total_extent - self.requested).max(0.) * share;
+        // A narrower dock after a manual drag must not jump back to the
+        // original width when the close animation starts.
+        grown * (total_extent / self.requested).min(1.) + borrowed
+    }
+
+    fn observed_growth(&self, viewport: f32) -> f32 {
+        (viewport - self.base_viewport).clamp(0., self.requested)
+    }
+
+    fn resize_pending(&self, window: f32, viewport: f32, closing: bool) -> bool {
+        let delta = if closing { 0. } else { self.requested };
+        (window - self.base_window - delta).abs() >= 1.
+            || (viewport - self.base_viewport - delta).abs() >= 1.
     }
 }
 
@@ -421,7 +528,7 @@ pub(crate) struct Dock {
     width: f32,
     /// Running open or close slide of the column, `None` when it is at rest.
     reveal: Option<Reveal>,
-    growth: Option<(gpui_kit::Pixels, gpui_kit::Pixels)>,
+    growth: Option<WindowGrowth>,
     /// The page paints this before the site has loaded, instead of black.
     background: wry::RGBA,
     proxy: Option<ProxySettings>,
@@ -546,16 +653,13 @@ impl Dock {
         self.visible && self.active.is_some()
     }
 
-    /// Width of the docked column, already clamped when it was last set.
-    ///
-    /// This is the width the slide is heading for; `column_width` is the width
-    /// the frame actually gives it.
+    /// Target page width, excluding the splitter.
     pub(crate) fn width(&self) -> f32 {
         self.width
     }
 
-    /// Width the column takes in this frame.
-    pub(crate) fn column_width(&self) -> f32 {
+    /// Clock-driven width used to request native growth, not to lay out the page.
+    fn column_width(&self) -> f32 {
         match (&self.reveal, self.visible) {
             (Some(reveal), _) => reveal.width(),
             (None, true) => self.width,
@@ -568,25 +672,37 @@ impl Dock {
         self.reveal.is_some()
     }
 
-    /// Window width the slide asks for, so the workflow column keeps its size
-    /// while the page grows or shrinks. `None` once the window is already there.
-    ///
-    /// The share is taken from the column itself, not from the animation
-    /// direction, so a slide interrupted halfway resumes where it stopped.
-    pub(crate) fn slide_window_width(&self, window_width: f32) -> Option<f32> {
-        let (base, requested) = self.growth?;
-        if self.reveal.is_none() {
-            return None;
+    /// Total space to the right of the workflow, including the splitter.
+    pub(crate) fn layout_extent(&self, viewport: f32) -> f32 {
+        if !self.visible() {
+            return 0.;
         }
-        let share = (self.column_width() / self.width.max(1.)).clamp(0., 1.);
-        let target = f32::from(base) + f32::from(requested) * share;
+        let share = self.slide_share();
+        let total = self.width + SPLITTER_WIDTH;
+        if self.sliding() {
+            self.growth.as_ref().map_or(total * share, |growth| {
+                growth.layout_extent(viewport, total, share)
+            })
+        } else {
+            total
+        }
+    }
+
+    fn slide_share(&self) -> f32 {
+        (self.column_width() / self.width.max(1.)).clamp(0., 1.)
+    }
+
+    /// Request the next native width; layout waits for the actual viewport.
+    pub(crate) fn slide_window_width(&self, window_width: f32) -> Option<f32> {
+        let growth = self.growth.as_ref()?;
+        self.reveal.as_ref()?;
+        let target = growth.base_window + growth.requested * self.slide_share();
         ((target - window_width).abs() >= 1.).then_some(target)
     }
 
     pub(crate) fn set_width(&mut self, width: f32) {
         self.width = width;
-        // A splitter drag during the opening slide retargets it instead of
-        // snapping once the slide lands on the old width.
+        // Expansion may fit a smaller page than the stored preference.
         if let Some(reveal) = self.reveal.as_mut().filter(|reveal| !reveal.closing) {
             reveal.to = width;
         }
@@ -603,25 +719,30 @@ impl Dock {
         });
     }
 
-    /// Samples the running slide. Returns true when it just finished, so the
-    /// frame can be laid out and painted with the column already gone.
-    pub(crate) fn advance_reveal(&mut self) -> bool {
-        let Some(closing) = self
-            .reveal
-            .as_ref()
-            .filter(|reveal| reveal.done())
-            .map(|reveal| reveal.closing)
-        else {
-            return false;
+    /// Keep the slide layout until the last native resize reaches the viewport.
+    pub(crate) fn advance_reveal(&mut self, window: f32, viewport: f32, can_resize: bool) {
+        let Some(reveal) = &self.reveal else {
+            return;
         };
+        let resize_pending = can_resize
+            && self.growth.as_ref().is_some_and(|growth| {
+                growth.resize_pending(window, viewport, reveal.closing)
+            });
+        if !reveal.done(resize_pending) {
+            return;
+        }
+        let closing = reveal.closing;
+        if can_resize && !closing && self.growth.is_some() {
+            // Preserve the last visible extent even if the native size was
+            // rounded or the compositor capped the available growth.
+            self.width = (self.layout_extent(viewport) - SPLITTER_WIDTH).max(DOCK_MIN_WIDTH);
+        }
         self.reveal = None;
         if closing {
             self.visible = false;
-            // The slide already handed the window width back frame by frame.
             self.growth = None;
             self.sync_visibility();
         }
-        true
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -640,7 +761,7 @@ impl Dock {
                 return Err("Expected an HTTP(S) address".into());
             }
             #[cfg(not(target_os = "linux"))]
-            let view = Some(Rc::new(self.build(
+            let view = Some(self.build(
                 window,
                 cx,
                 &site.url,
@@ -648,7 +769,7 @@ impl Dock {
                     position: wry::dpi::LogicalPosition::new(-1024, -1024).into(),
                     size: wry::dpi::LogicalSize::new(1, 1).into(),
                 },
-            )?));
+            )?);
             #[cfg(target_os = "macos")]
             if let Some(view) = &view {
                 remember_edit_view(view);
@@ -715,7 +836,7 @@ impl Dock {
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     fn active_view(&self) -> Option<&Rc<WebView>> {
         self.pages
             .iter()
@@ -741,9 +862,10 @@ impl Dock {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn return_keyboard_focus(&self, window: &Window) {
-        if let Some(view) = self.active_view() {
-            return_x11_keyboard_focus(view, window);
+    pub(crate) fn return_keyboard_focus(&self) {
+        if let Some(view) = self.pages.iter().find(|page| Some(page.site.id) == self.active)
+            .and_then(|page| page.view.as_ref()) {
+            view.host.return_focus();
         }
     }
 
@@ -780,7 +902,10 @@ impl Dock {
                 if let (true, Some(view)) = (was_shown, &page.view) {
                     #[cfg(target_os = "macos")]
                     relinquish_keyboard_focus(view);
+                    #[cfg(not(target_os = "linux"))]
                     let _ = view.set_visible(false);
+                    #[cfg(target_os = "linux")]
+                    view.host.hide();
                 }
             }
         }
@@ -792,7 +917,7 @@ impl Dock {
         cx: &gpui_kit::App,
         url: &str,
         rect: Rect,
-    ) -> Result<WebView, String> {
+    ) -> Result<PageView, String> {
         let opener = cx.to_async();
         #[cfg(target_os = "macos")]
         let builder = {
@@ -830,35 +955,21 @@ impl Dock {
         };
         #[cfg(target_os = "linux")]
         {
-            use raw_window_handle::{RawWindowHandle, WindowHandle, XlibWindowHandle};
-            let handle =
-                HasWindowHandle::window_handle(window).map_err(|error| error.to_string())?;
-            let raw = match handle.as_raw() {
-                RawWindowHandle::Xlib(xlib) => xlib,
-                RawWindowHandle::Xcb(xcb) => XlibWindowHandle::new(xcb.window.get().into()),
-                _ => return Err("ChatHub on Linux requires X11 or XWayland".into()),
-            };
-            struct Parent<'a>(WindowHandle<'a>);
-            impl HasWindowHandle for Parent<'_> {
-                fn window_handle(
-                    &self,
-                ) -> Result<WindowHandle<'_>, raw_window_handle::HandleError> {
-                    Ok(self.0)
-                }
-            }
-            // The original borrowed handle keeps the same X11 window alive during creation.
-            let parent = Parent(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Xlib(raw)) });
+            use wry::WebViewBuilderExtUnix;
+            let host = X11Host::new(x11_parent_id(window)?, rect)?;
             let view = builder
                 .with_focused(false)
-                .build_as_child(&parent)
+                .build_gtk(&host.container)
                 .map_err(|error| error.to_string())?;
-            install_x11_keyboard_focus(&view)?;
-            Ok(view)
+            host.install_focus(&view);
+            host.layout(rect);
+            Ok(X11Page { view: Some(view), host })
         }
         #[cfg(not(target_os = "linux"))]
         {
             builder
                 .build_as_child(window)
+                .map(Rc::new)
                 .map_err(|error| error.to_string())
         }
     }
@@ -884,6 +995,10 @@ impl Dock {
 
     pub(crate) fn expand(&mut self, window: &mut Window, cx: &gpui_kit::App) {
         use gpui_kit::{px, size};
+        if self.growth.is_some() {
+            // A reversed closing slide still belongs to the original window.
+            return;
+        }
         if window.is_maximized() || window.is_fullscreen() {
             // There is no room to grow, so the page must already fit the
             // window it has when the slide starts.
@@ -905,26 +1020,25 @@ impl Dock {
         let available = f32::from(
             (area.origin.x + area.size.width - bounds.origin.x - bounds.size.width).max(px(0.)),
         );
-        let (width, growth) =
-            expand_plan(f32::from(window.viewport_size().width), available, self.width);
-        // The page must already be heading for the width it will keep after the
-        // window grows, otherwise the post-expansion clamp visibly corrects it.
+        let viewport = f32::from(window.viewport_size().width);
+        let (width, growth) = expand_plan(viewport, available, self.width);
         self.set_width(width);
         if growth > 0. {
-            let growth = px(growth);
-            self.growth = Some((bounds.size.width, growth));
-            // A running slide grows the window frame by frame so the workflow
-            // column keeps its size; otherwise hand the space over now.
+            self.growth = Some(WindowGrowth {
+                base_window: f32::from(bounds.size.width),
+                base_viewport: viewport,
+                requested: growth,
+            });
             if self.reveal.is_none() {
-                window.resize(size(bounds.size.width + growth, bounds.size.height));
+                window.resize(size(bounds.size.width + px(growth), bounds.size.height));
             }
         }
     }
 
     pub(crate) fn added_width(&self, width: gpui_kit::Pixels) -> gpui_kit::Pixels {
-        self.growth.map_or(gpui_kit::px(0.), |(base, requested)| {
-            (width - base).max(gpui_kit::px(0.)).min(requested)
-        })
+        gpui_kit::px(self.growth.as_ref().map_or(0., |growth| {
+            (f32::from(width) - growth.base_window).clamp(0., growth.requested)
+        }))
     }
 
     /// Hands back the width the dock took from the screen.
@@ -934,17 +1048,12 @@ impl Dock {
         if self.reveal.is_some() {
             return;
         }
-        let Some((base, requested)) = self.growth else {
-            return;
-        };
+        let grown = self.added_width(window.bounds().size.width);
         self.growth = None;
         if window.is_maximized() || window.is_fullscreen() {
             return;
         }
         let bounds = window.bounds();
-        let grown = (bounds.size.width - base)
-            .max(gpui_kit::px(0.))
-            .min(requested);
         if grown > gpui_kit::px(0.) {
             window.resize(gpui_kit::size(
                 bounds.size.width - grown,
@@ -980,25 +1089,23 @@ impl Dock {
         if applied == rect {
             return Ok(());
         }
-        let result = match (rect, &self.pages[index].view) {
+        match (rect, &self.pages[index].view) {
             (Some(rect), None) => {
                 let url = self.pages[index].site.url.clone();
-                self.build(window, cx, &url, rect).and_then(|view| {
-                    resize_x11_child(&view, rect, false)?;
-                    self.pages[index].view = Some(Rc::new(view));
-                    Ok(())
-                })
+                match self.build(window, cx, &url, rect) {
+                    Ok(view) => self.pages[index].view = Some(view),
+                    Err(error) => {
+                        self.close_tab(id);
+                        return Err(error);
+                    }
+                }
             }
-            (Some(rect), Some(view)) => resize_x11_child(view, rect, applied.is_none()),
-            (None, Some(view)) => view.set_visible(false).map_err(|error| error.to_string()),
-            (None, None) => Ok(()),
-        };
-        if result.is_ok() {
-            self.pages[index].applied_bounds = rect;
-        } else {
-            self.close_tab(id);
+            (Some(rect), Some(view)) => view.host.layout(rect),
+            (None, Some(view)) => view.host.hide(),
+            (None, None) => {}
         }
-        result
+        self.pages[index].applied_bounds = rect;
+        Ok(())
     }
 
     /// The active page's canvas; the other pages stay hidden until selected.
@@ -1123,137 +1230,189 @@ fn x11_dock_rect(
 }
 
 #[cfg(target_os = "linux")]
-fn x11_webview_host(view: &WebView) -> Option<gtk::Window> {
-    use gtk::prelude::*;
-    use wry::WebViewExtUnix;
-
-    view.webview().toplevel()?.downcast().ok()
+fn x11_parent_id(window: &Window) -> Result<u32, String> {
+    use raw_window_handle::RawWindowHandle;
+    let handle = HasWindowHandle::window_handle(window).map_err(|error| error.to_string())?;
+    match handle.as_raw() {
+        RawWindowHandle::Xcb(handle) => Ok(handle.window.get()),
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).map_err(|error| error.to_string()),
+        _ => Err("ChatHub on Linux requires X11 or XWayland".into()),
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn install_x11_keyboard_focus(view: &WebView) -> Result<(), String> {
-    use gtk::{gdk, glib::translate::ToGlibPtr, prelude::*};
-    use wry::WebViewExtUnix;
-    use x11rb::protocol::xproto::{ConnectionExt, InputFocus};
+struct X11Page {
+    view: Option<WebView>,
+    host: X11Host,
+}
 
-    let host = x11_webview_host(view)
-        .ok_or_else(|| wry::Error::UnsupportedWindowHandle.to_string())?;
-    let native = host
-        .window()
-        .ok_or_else(|| wry::Error::UnsupportedWindowHandle.to_string())?;
-    // Wry replaces the realized GtkWindow's GdkWindow with a foreign X11
-    // child. Without the GTK event owner, its FocusIn/FocusOut never reaches
-    // GtkWindow, so WebKit's input context and caret remain inactive.
-    unsafe {
-        let mut owner = std::ptr::null_mut();
-        let native = native.to_glib_none().0;
-        gdk::ffi::gdk_window_get_user_data(native, &mut owner);
-        if owner.is_null() {
-            // GtkWidget's unrealize clears the owner of its window.
-            gdk::ffi::gdk_window_set_user_data(native, host.as_ptr().cast());
-        }
+#[cfg(target_os = "linux")]
+impl Drop for X11Page {
+    fn drop(&mut self) {
+        use gtk::prelude::*;
+
+        self.host.return_focus();
+        // The main X11 window may already be gone, which destroys its native
+        // children before GTK can dispose their widgets.
+        gtk::gdk::error_trap_push();
+        drop(self.view.take());
+        // SAFETY: The WebView has been dropped and no code uses this widget
+        // after disposal. Destroy synchronously while the error trap is active.
+        unsafe { self.host.window.destroy() };
+        gtk::gdk::error_trap_pop_ignored();
     }
-    native.set_events(native.events() | gdk::EventMask::FOCUS_CHANGE_MASK);
-    let host = host.downgrade();
-    view.webview().connect_button_press_event(move |widget, event| {
-        if let Some(host) = host.upgrade() {
-            if let Some(native) = host.window().filter(|native| native.is_viewable()) {
+}
+
+#[cfg(target_os = "linux")]
+struct X11Host {
+    window: gtk::Window,
+    container: gtk::Box,
+    connection: Rc<x11rb::rust_connection::RustConnection>,
+    parent: u32,
+    child: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl X11Host {
+    fn new(parent: u32, rect: Rect) -> Result<Self, String> {
+        use gtk::{glib::translate::ToGlibPtr, prelude::*};
+        use x11rb::protocol::xproto::ConnectionExt;
+
+        #[link(name = "gdk-3")]
+        extern "C" {
+            fn gdk_x11_window_get_xid(window: *mut gtk::gdk::ffi::GdkWindow) -> std::ffi::c_ulong;
+        }
+
+        // GTK must retain the GdkWindow it creates, along with its event and
+        // IME state. Wry's X11 child adapter replaces that window with a
+        // foreign one, then destroys it before GTK finishes unmapping it.
+        let window = gtk::Window::new(gtk::WindowType::Toplevel);
+        window.set_decorated(false);
+        window.set_focus_on_map(false);
+        let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        window.add(&container);
+        window.realize();
+        let native = window.window().ok_or_else(|| wry::Error::UnsupportedWindowHandle.to_string())?;
+        native.set_override_redirect(true);
+        let display = native.display();
+        // Realize the native XID on GDK's connection before using it on ours.
+        display.sync();
+        // SAFETY: ChatHub initializes GTK with only its X11 backend enabled.
+        let child = u32::try_from(unsafe { gdk_x11_window_get_xid(native.to_glib_none().0) })
+            .map_err(|error| error.to_string())?;
+        let (connection, _) = x11rb::connect(Some(display.name().as_str())).map_err(|error| error.to_string())?;
+        let position = rect.position.to_physical::<i16>(f64::from(window.scale_factor()));
+        connection.reparent_window(child, parent, position.x, position.y).map_err(|error| error.to_string())?
+            .check().map_err(|error| error.to_string())?;
+        Ok(Self { window, container, connection: Rc::new(connection), parent, child })
+    }
+
+    fn install_focus(&self, view: &WebView) {
+        use gtk::prelude::*;
+        use wry::WebViewExtUnix;
+        use x11rb::protocol::xproto::{ConnectionExt, InputFocus};
+
+        let connection = self.connection.clone();
+        let child = self.child;
+        let host = self.window.downgrade();
+        view.webview().connect_button_press_event(move |widget, event| {
+            if let Some(host) = host.upgrade().filter(|host| host.is_mapped()) {
                 if !host.has_toplevel_focus() {
-                    with_x11_child(&native, |connection, child| {
-                        // The WM cannot activate an embedded X11 child via EWMH.
-                        // Revert to the parent if the dock hides or destroys it.
-                        connection.set_input_focus(InputFocus::PARENT, child, event.time())?.check()?;
-                        Ok(())
-                    });
+                    // An embedded override-redirect window is not activated by the WM.
+                    if let Ok(request) = connection.set_input_focus(InputFocus::PARENT, child, event.time()) {
+                        let _ = request.check();
+                    }
                 }
                 widget.grab_focus();
             }
-        }
-        // Let WebKit position the caret and process the original click.
-        gtk::glib::Propagation::Proceed
-    });
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn with_x11_child(
-    native: &gtk::gdk::Window,
-    action: impl FnOnce(&x11rb::rust_connection::RustConnection, u32) -> anyhow::Result<()>,
-) {
-    use gtk::glib::translate::ToGlibPtr;
-
-    #[link(name = "gdk-3")]
-    extern "C" {
-        fn gdk_x11_window_get_xid(window: *mut gtk::gdk::ffi::GdkWindow) -> std::ffi::c_ulong;
+            // WebKit still receives the original click to place its caret.
+            gtk::glib::Propagation::Proceed
+        });
     }
 
-    let result = (|| -> anyhow::Result<()> {
-        // SAFETY: GTK is initialized with only the X11 backend, and `native`
-        // keeps Wry's foreign GdkWindow alive throughout this call.
-        let child = u32::try_from(unsafe { gdk_x11_window_get_xid(native.to_glib_none().0) })?;
-        let display = native.display().name();
-        let (connection, _) = x11rb::connect(Some(display.as_str()))?;
-        action(&connection, child)
-    })();
-    if let Err(error) = result {
-        eprintln!("ChatHub X11 keyboard focus: {error}");
-    }
-}
+    fn return_focus(&self) {
+        use gtk::prelude::*;
+        use x11rb::protocol::xproto::{ConnectionExt, InputFocus};
 
-#[cfg(target_os = "linux")]
-fn return_x11_keyboard_focus(view: &WebView, window: &Window) {
-    use gtk::prelude::*;
-    use raw_window_handle::RawWindowHandle;
-    use x11rb::protocol::xproto::{ConnectionExt, InputFocus};
-
-    let Some(host) = x11_webview_host(view).filter(|host| host.has_toplevel_focus()) else {
-        return;
-    };
-    let (Some(native), Ok(handle)) = (host.window(), HasWindowHandle::window_handle(window)) else {
-        return;
-    };
-    let parent = match handle.as_raw() {
-        RawWindowHandle::Xcb(handle) => handle.window.get(),
-        RawWindowHandle::Xlib(handle) => match u32::try_from(handle.window) {
-            Ok(parent) => parent,
-            Err(_) => return,
-        },
-        _ => return,
-    };
-    with_x11_child(&native, |connection, child| {
-        // Do not steal focus from another application if GTK is still draining
-        // its focus-out event when GPUI receives the click.
-        if connection.get_input_focus()?.reply()?.focus == child {
-            connection.set_input_focus(InputFocus::PARENT, parent, x11rb::CURRENT_TIME)?.check()?;
+        if !self.window.is_mapped() {
+            return;
         }
-        Ok(())
-    });
-}
+        let focus = self.connection.get_input_focus().ok().and_then(|request| request.reply().ok());
+        if focus.is_some_and(|focus| focus.focus == self.child) {
+            if let Ok(request) = self.connection.set_input_focus(InputFocus::PARENT, self.parent, x11rb::CURRENT_TIME) {
+                let _ = request.check();
+            }
+        }
+    }
 
-#[cfg(target_os = "linux")]
-fn resize_x11_child(view: &WebView, rect: Rect, show: bool) -> Result<(), String> {
-    use gtk::prelude::*;
-    let host = x11_webview_host(view)
-        .ok_or_else(|| wry::Error::UnsupportedWindowHandle.to_string())?;
-    let scale = f64::from(host.scale_factor());
-    let size = rect.size.to_logical::<i32>(scale);
-    let width = size.width.max(1);
-    let height = size.height.max(1);
-    // Wry's immediate allocation alone leaves GTK free to restore the old
-    // toplevel size on its next layout or after a hide/show cycle.
-    host.set_default_size(width, height);
-    host.resize(width, height);
-    view.set_bounds(rect).map_err(|error| error.to_string())?;
-    if show {
-        // gtk_window_move only queues a move on an unmapped host. Also move
-        // the native child while hidden so XMapWindow cannot show stale bounds.
-        if let Some(native) = host.window() {
-            let position = rect.position.to_logical::<i32>(scale);
+    fn hide(&self) {
+        use gtk::prelude::*;
+        self.return_focus();
+        self.window.hide();
+    }
+
+    fn layout(&self, rect: Rect) {
+        use gtk::prelude::*;
+        let scale = f64::from(self.window.scale_factor());
+        let position = rect.position.to_logical::<i32>(scale);
+        let size = rect.size.to_logical::<i32>(scale);
+        let width = size.width.max(1);
+        let height = size.height.max(1);
+        self.window.set_default_size(width, height);
+        self.window.resize(width, height);
+        self.window.size_allocate(&gtk::Allocation::new(0, 0, width, height));
+        if let Some(native) = self.window.window() {
             native.move_resize(position.x, position.y, width, height);
         }
-        view.set_visible(true).map_err(|error| error.to_string())?;
+        if !self.window.is_visible() {
+            self.window.show_all();
+        }
     }
-    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[::core::prelude::v1::test]
+#[ignore = "requires an isolated X11 display"]
+fn x11_webview_focus_returns_to_parent_and_tears_down() {
+    use gtk::prelude::*;
+    use wry::{dpi::{PhysicalPosition, PhysicalSize}, WebViewBuilderExtUnix};
+    use x11rb::{connection::Connection, protocol::xproto::{ConnectionExt, CreateWindowAux, InputFocus, WindowClass}};
+
+    gtk::gdk::set_allowed_backends("x11");
+    gtk::init().unwrap();
+    let (connection, screen) = x11rb::connect(None).unwrap();
+    let root = connection.setup().roots[screen].root;
+    let parent = connection.generate_id().unwrap();
+    connection.create_window(0, parent, root, 0, 0, 640, 480, 0,
+        WindowClass::INPUT_OUTPUT, 0, &CreateWindowAux::new()).unwrap().check().unwrap();
+    connection.map_window(parent).unwrap().check().unwrap();
+    let rect = Rect {
+        position: PhysicalPosition::new(220, 80).into(),
+        size: PhysicalSize::new(400, 300).into(),
+    };
+    let host = X11Host::new(parent, rect).unwrap();
+    let view = WebViewBuilder::new().with_incognito(true).with_focused(false)
+        .with_html("<!doctype html><input aria-label='ChatHub focus probe'>")
+        .build_gtk(&host.container).unwrap();
+    host.install_focus(&view);
+    host.layout(rect);
+    host.window.window().unwrap().display().sync();
+    while gtk::events_pending() {
+        gtk::main_iteration_do(false);
+    }
+    let child = host.child;
+    assert_eq!(connection.query_tree(child).unwrap().reply().unwrap().parent, parent);
+    connection.set_input_focus(InputFocus::PARENT, child, x11rb::CURRENT_TIME).unwrap().check().unwrap();
+    host.return_focus();
+    assert_eq!(connection.get_input_focus().unwrap().reply().unwrap().focus, parent);
+    host.hide();
+    host.layout(rect);
+    let page = X11Page { view: Some(view), host };
+    connection.destroy_window(parent).unwrap().check().unwrap();
+    drop(page);
+    while gtk::events_pending() {
+        gtk::main_iteration_do(false);
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

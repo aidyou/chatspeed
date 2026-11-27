@@ -587,6 +587,8 @@ impl Model {
                         role: event["role"].as_str().unwrap_or_default().to_owned(),
                         message: event["content"].as_str().unwrap_or_default().to_owned(),
                         reasoning: event["reasoning"].as_str().map(str::to_owned),
+                        is_error: event["is_error"].as_bool().unwrap_or(false),
+                        error_type: event["error_type"].as_str().map(str::to_owned),
                         metadata: event["metadata"].clone(),
                         ..Message::default()
                     };

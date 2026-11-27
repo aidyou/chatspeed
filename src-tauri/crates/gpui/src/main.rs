@@ -548,40 +548,66 @@ fn running_state(state: &str) -> bool {
     )
 }
 
-fn workflow_activity(model: &Model) -> (String, String, Option<i64>, bool) {
-    (
-        model.state.clone(),
-        model.wait_reason.clone(),
-        model.messages.last_key_value().map(|(&id, _)| id),
-        model.has_live_session,
-    )
+fn show_collapsed_tool_summary(status: presentation::ToolStatus, summary: &str) -> bool {
+    status != presentation::ToolStatus::Completed && !summary.is_empty()
+}
+
+fn latest_message_id(model: &Model) -> Option<i64> {
+    model.messages.last_key_value().map(|(&id, _)| id)
+}
+
+fn workflow_activity(model: &Model) -> (&str, &str, bool) {
+    (&model.state, &model.wait_reason, model.has_live_session)
 }
 
 fn apply_workflow_event(model: &mut Model, event: Value) -> bool {
-    let kind = event["type"].as_str();
-    let advances = match kind {
+    let advances = match event["type"].as_str() {
+        Some("state") => {
+            let before = (model.state.clone(), model.wait_reason.clone(), model.has_live_session);
+            model.event(event);
+            return workflow_activity(model) != (before.0.as_str(), before.1.as_str(), before.2);
+        }
+        Some("message") => {
+            let before = latest_message_id(model);
+            model.event(event);
+            return model.messages.last_key_value().is_some_and(|(&id, message)| {
+                Some(id) > before && presentation::is_alert_activity(message) && !presentation::is_alert(message)
+            });
+        }
+        Some("compression_status") => event["is_compressing"] == true && !model.compressing,
         Some("chunk" | "reasoning_chunk") => {
             event["content"].as_str().is_some_and(|text| !text.is_empty())
         }
-        Some("tool_started" | "tool_completed" | "approval_resolved" | "confirm" | "compression_applied") => true,
+        Some("tool_started" | "tool_completed" | "tool_failed" | "approval_resolved" | "approval_requested" | "confirm") => true,
         _ => false,
     };
-    let before = matches!(kind, Some("message" | "state")).then(|| workflow_activity(model));
-    let failed = event["is_error"] == true
-        || event["metadata"]["is_error"] == true
-        || event["error_type"].as_str().is_some_and(|kind| !kind.is_empty())
-        || matches!(event["state"].as_str(), Some("error" | "failed" | "cancelled" | "stopped"));
     model.event(event);
-    !failed && (advances || before.is_some_and(|before| workflow_activity(model) != before))
+    advances
 }
 
-/// One persistent slot per conversation. Rehydrating the same transcript alert
-/// must not replace newer local feedback or bring back a cleared error.
+fn apply_feedback_snapshot(model: &mut Model, feedback: &mut SessionFeedback, page: chatspeed_gpui::types::Page) {
+    let before = (model.state.clone(), model.wait_reason.clone(), model.has_live_session);
+    let last = latest_message_id(model);
+    let new_activity = page.messages.iter().any(|message| {
+        Some(message.id) > last.max(feedback.seen_alert)
+            && presentation::is_alert_activity(message)
+            && !presentation::is_alert(message)
+    });
+    model.page(page, false);
+    if new_activity || (last.is_some() && workflow_activity(model) != (before.0.as_str(), before.1.as_str(), before.2)) {
+        // A snapshot may also contain a new error after the activity it reconciles.
+        feedback.clear_alert(last);
+    }
+}
+
+/// Transcript alerts survive until activity advances. Compression is separate:
+/// a durable summary can settle progress, but must never create a new alert.
 #[derive(Default)]
 struct SessionFeedback {
     current: Option<presentation::AlertView>,
     seen_alert: Option<i64>,
-    seen_compression: Option<i64>,
+    // Outer None means the session has not been hydrated yet.
+    seen_compression: Option<Option<i64>>,
     compression_cursor: Option<(String, u64)>,
     compression: Option<CompressionProgress>,
 }
@@ -591,6 +617,7 @@ struct CompressionProgress {
     since: Instant,
     running: bool,
     acknowledged: Option<Instant>,
+    manual: bool,
 }
 
 impl SessionFeedback {
@@ -599,7 +626,6 @@ impl SessionFeedback {
             let Some(id) = alert.key.strip_prefix("msg-").and_then(|id| id.parse::<i64>().ok()) else { return; };
             if self.seen_alert.is_none_or(|seen| id > seen) {
                 self.seen_alert = Some(id);
-                self.compression = None;
                 self.current = Some(alert.clone());
             } else if self.current.as_ref().is_some_and(|current| current.key == alert.key) {
                 self.current = Some(alert.clone());
@@ -608,41 +634,50 @@ impl SessionFeedback {
     }
 
     fn set(&mut self, kind: presentation::AlertKind, title: String) {
+        self.set_alert("session-feedback", kind, title);
+    }
+
+    fn set_alert(&mut self, key: &str, kind: presentation::AlertKind, title: String) {
         self.current = Some(presentation::AlertView {
-            key: "session-feedback".into(),
+            key: key.into(),
             kind,
             title,
             body: String::new(),
         });
     }
 
-    fn clear_error(&mut self) {
-        if self.current.as_ref().is_some_and(|alert| {
-            matches!(alert.kind, presentation::AlertKind::Error | presentation::AlertKind::Warning)
-        }) {
-            self.current = None;
-        }
+    fn clear_alert(&mut self, through: Option<i64>) {
+        self.current = None;
+        self.seen_alert = self.seen_alert.max(through);
     }
 
     fn apply_compression(&mut self, event: ManualCompressionEvent, now: Instant) {
-        use presentation::AlertKind::{Error, Success, Warning};
+        use presentation::AlertKind::{Error, Warning};
         match event {
             ManualCompressionEvent::Running => {
-                self.current = None;
                 self.compression.get_or_insert(CompressionProgress {
-                    since: now, running: true, acknowledged: None,
+                    since: now,
+                    running: true,
+                    acknowledged: None,
+                    manual: false,
                 }).running = true;
             }
             ManualCompressionEvent::Applied => {
                 self.compression = None;
-                self.set(Success, t!("compression_completed").into_owned());
+                if self.current.as_ref().is_some_and(|alert| alert.key == "compression-feedback") {
+                    self.current = None;
+                }
             }
             ManualCompressionEvent::Unavailable if self.compression.take().is_some() => {
-                self.set(Warning, t!("compression_unavailable").into_owned());
+                self.set_alert("compression-feedback", Warning, t!("compression_unavailable").into_owned());
             }
-            ManualCompressionEvent::Stopped if self.compression.is_some_and(|progress| progress.running) => {
-                self.compression = None;
-                self.set(Error, t!("compression_not_applied").into_owned());
+            ManualCompressionEvent::Stopped => {
+                if let Some(progress) = self.compression.filter(|progress| progress.running) {
+                    self.compression = None;
+                    if progress.manual {
+                        self.set_alert("compression-feedback", Error, t!("compression_not_applied").into_owned());
+                    }
+                }
             }
             _ => {}
         }
@@ -650,7 +685,7 @@ impl SessionFeedback {
 
     fn acknowledge(&mut self, requested: Instant, result: Result<(), ManualCompressionError>, now: Instant) {
         use presentation::AlertKind::{Error, Warning};
-        let Some(progress) = self.compression.as_mut().filter(|progress| progress.since == requested) else {
+        let Some(progress) = self.compression.as_mut().filter(|progress| progress.manual && progress.since == requested) else {
             return;
         };
         let error = match result {
@@ -658,6 +693,8 @@ impl SessionFeedback {
                 progress.acknowledged = Some(now);
                 return;
             }
+            // A live start is stronger evidence than an uncertain HTTP result.
+            Err(ManualCompressionError::Unconfirmed) if progress.running => return,
             Err(error) => error,
         };
         self.compression = None;
@@ -667,29 +704,45 @@ impl SessionFeedback {
             ManualCompressionError::Rejected(None) => (Error, t!("manual_compress_failed")),
             ManualCompressionError::Unconfirmed => (Warning, t!("manual_compress_unconfirmed")),
         };
-        self.set(kind, title.into_owned());
+        self.set_alert("compression-feedback", kind, title.into_owned());
     }
 
-    fn observe_compression_marker(&mut self, id: i64) {
-        if self.seen_compression.is_none_or(|seen| id > seen) {
+    fn observe_compression_marker(&mut self, id: Option<i64>, fetched_from: Option<Instant>) {
+        // A summary already present on the first snapshot is history, not the
+        // result of a new request. Empty snapshots also establish a baseline.
+        let Some(previous) = self.seen_compression else {
             self.seen_compression = Some(id);
-            if self.seen_alert.is_none_or(|error| id > error) {
+            return;
+        };
+        if id > previous {
+            self.seen_compression = Some(id);
+            if self.compression.is_some_and(|progress| fetched_from.is_some_and(|start| start >= progress.since)) {
                 self.apply_compression(ManualCompressionEvent::Applied, Instant::now());
             }
         }
     }
 
-    fn view(&self) -> Option<Row> {
-        if let Some(progress) = self.compression {
-            let hint = if progress.running { t!("compression_running") } else { t!("manual_compress_waiting") };
-            let seconds = progress.since.elapsed().as_secs();
-            return Some(Row::Alert(presentation::AlertView {
-                key: "compression-progress".into(),
-                kind: presentation::AlertKind::Progress,
-                title: t!("compression_elapsed", status = hint, seconds = seconds).into_owned(),
-                body: String::new(),
-            }));
+    fn expire_compression(&mut self, now: Instant) -> bool {
+        let Some(progress) = self.compression else { return false; };
+        // HTTP acceptance is not a start event; if the stream never reports a
+        // start or terminal event, don't leave the local request on screen.
+        let waiting_too_long = !progress.running && progress.acknowledged.is_some_and(|ack| {
+            now.saturating_duration_since(ack) >= Duration::from_secs(30)
+        });
+        if waiting_too_long {
+            self.compression = None;
+            self.set_alert("compression-feedback", presentation::AlertKind::Warning, t!("manual_compress_unconfirmed").into_owned());
         }
+        waiting_too_long
+    }
+
+    fn compression_hint(&self) -> Option<String> {
+        let progress = self.compression?;
+        let hint = if progress.running { t!("compression_running") } else { t!("manual_compress_waiting") };
+        Some(t!("compression_elapsed", status = hint, seconds = progress.since.elapsed().as_secs()).into_owned())
+    }
+
+    fn view(&self) -> Option<Row> {
         self.current.clone().map(Row::Alert)
     }
 }
@@ -807,6 +860,8 @@ struct Observer {
     /// Remembered splitter width. The dock is created lazily, so this holds the
     /// restored value until a page opens and the layout clamp has run.
     chat_hub_width: f32,
+    /// Actual per-frame space occupied by the dock and its splitter.
+    chat_hub_extent: Pixels,
     show_menu_button: bool,
     sound_enabled: BTreeSet<Chime>,
     sound_pending: BTreeMap<Chime, bool>,
@@ -1246,6 +1301,7 @@ impl Observer {
             dock_drag: None,
             dock_width_touched: false,
             chat_hub_width: chat_hub::DOCK_WIDTH,
+            chat_hub_extent: px(0.),
             show_menu_button: true,
             sound_enabled: BTreeSet::new(),
             sound_pending: BTreeMap::new(),
@@ -2743,7 +2799,6 @@ impl Observer {
                     );
                     return;
                 }
-                self.note_workflow_activity();
                 self.timeline_scroll.follow = true;
                 self.model.resume_follow();
                 self.timeline_scroll.scroll_pending = true;
@@ -2790,6 +2845,7 @@ impl Observer {
                 self.start_draft = Some((self.composer.read(cx).value().to_string(), attachments));
             }
         }
+        self.note_workflow_activity();
         self.attachments.clear();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
@@ -3157,14 +3213,13 @@ impl Observer {
         } else {
             message
         };
-        let feedback = self.session_feedback();
-        feedback.compression = None;
-        feedback.set(kind, message);
+        self.session_feedback().set(kind, message);
         cx.notify();
     }
 
     fn note_workflow_activity(&mut self) {
-        self.session_feedback().clear_error();
+        let through = latest_message_id(&self.model);
+        self.session_feedback().clear_alert(through);
     }
 
     fn manual_compress(&mut self, cx: &mut Context<Self>) {
@@ -3177,9 +3232,12 @@ impl Observer {
             session,
             requested,
         }).is_ok() {
-            let feedback = self.session_feedback();
-            feedback.current = None;
-            feedback.compression = Some(CompressionProgress { since: requested, running: false, acknowledged: None });
+            self.session_feedback().compression = Some(CompressionProgress {
+                since: requested,
+                running: false,
+                acknowledged: None,
+                manual: true,
+            });
         } else {
             self.show_workflow_feedback(presentation::AlertKind::Error, t!("manual_compress_not_sent").into_owned(), cx);
         }
@@ -3724,11 +3782,7 @@ impl Observer {
                     }
                     match *result {
                         UpdateKind::Snapshot(page) => {
-                            let before = workflow_activity(&self.child_model);
-                            self.child_model.page(page, false);
-                            if workflow_activity(&self.child_model) != before {
-                                self.child_feedback.clear_error();
-                            }
+                            apply_feedback_snapshot(&mut self.child_model, &mut self.child_feedback, page);
                             self.child_pending.remove(&id);
                         }
                         UpdateKind::Connected(connected) => {
@@ -3739,7 +3793,7 @@ impl Observer {
                         UpdateKind::RunningTools(tools) => self.child_model.restore_running_tools(tools),
                         UpdateKind::Event(event) => {
                             if apply_workflow_event(&mut self.child_model, event) {
-                                self.child_feedback.clear_error();
+                                self.child_feedback.clear_alert(latest_message_id(&self.child_model));
                             }
                         }
                         UpdateKind::Reset => {
@@ -3892,19 +3946,11 @@ impl Observer {
                     let compression_marker = page.messages.iter().filter(|message| {
                         message.role == "system" && message.message_kind == "summary"
                             && message.message_subtype.as_deref() == Some("compression")
-                    }).filter(|marker| !page.messages.iter().any(|message| message.id > marker.id
-                        && matches!(message.role.as_str(), "assistant" | "tool" | "user")
-                        && message.message_kind != "runtime_observation"))
-                        .map(|message| message.id).max();
+                    }).map(|message| message.id).max();
                     let fetched_from = page.fetched_from;
-                    let before = workflow_activity(&self.model);
-                    self.model.page(page, false);
-                    if self.switched.is_none() && workflow_activity(&self.model) != before {
-                        self.note_workflow_activity();
-                    }
-                    if let Some(id) = compression_marker {
-                        self.session_feedback().observe_compression_marker(id);
-                    }
+                    let feedback = self.feedback.entry(self.selected.clone()).or_default();
+                    apply_feedback_snapshot(&mut self.model, feedback, page);
+                    feedback.observe_compression_marker(compression_marker, fetched_from);
                     self.config_acks.retain(|_, (saved, _)| fetched_from.is_none_or(|start| start <= *saved));
                     let mut patches: Vec<_> = self.config_acks.iter().map(|(&key, (at, patch))| (*at, key, patch.clone())).collect();
                     patches.sort_by_key(|(at, _, _)| *at);
@@ -3959,14 +4005,7 @@ impl Observer {
         self.settle_queue_edit(cx);
         let now = Instant::now();
         for feedback in self.feedback.values_mut() {
-            // A successful HTTP response may acknowledge a live signal without
-            // confirming that the executor ever reached it.
-            if feedback.compression.is_some_and(|progress| !progress.running
-                && progress.acknowledged.is_some_and(|ack| now.duration_since(ack) >= Duration::from_secs(30))) {
-                feedback.compression = None;
-                feedback.set(presentation::AlertKind::Warning, t!("manual_compress_unconfirmed").into_owned());
-                dirty = true;
-            }
+            dirty |= feedback.expire_compression(now);
         }
         if self
             .sound_player
@@ -4103,9 +4142,9 @@ impl Observer {
             if let Some(width) = config[prefs::CHAT_HUB_WIDTH_KEY].as_f64() {
                 self.chat_hub_width = width as f32;
                 if let Some(dock) = self.chat_hub.as_mut() {
-                    // A poll landing mid-slide would retarget an animation that
-                    // already resolved its width against the expanded window.
-                    if !dock.sliding() {
+                    // The visible dock has already fit its width to the screen.
+                    // Reapplying the preference would squeeze the workflow again.
+                    if !dock.visible() {
                         dock.set_width(self.chat_hub_width);
                     }
                 }
@@ -4284,11 +4323,7 @@ impl Observer {
     /// centered overlays and the kit's dialog layer keep this much room free
     /// instead of sliding under the page.
     fn dialog_reserved_right(&self) -> Pixels {
-        match self.chat_hub.as_ref().filter(|dock| dock.visible()) {
-            // The column width follows the slide, so dialogs re-centre with it.
-            Some(dock) => px(dock.column_width()),
-            None => px(0.),
-        }
+        self.chat_hub_extent
     }
 
     /// The centre column the status panel may cover: everything right of the
@@ -4300,20 +4335,7 @@ impl Observer {
         } else {
             px(ui::RAIL_WIDTH + self.sidebar_width + 4.)
         };
-        #[cfg(feature = "chat-hub")]
-        let dock = self
-            .chat_hub
-            .as_ref()
-            .filter(|dock| dock.visible())
-            .map_or(px(0.), |dock| {
-                px(chat_hub::clamp_width(
-                    f32::from(viewport.width),
-                    dock.column_width(),
-                ))
-            });
-        #[cfg(not(feature = "chat-hub"))]
-        let dock = px(0.);
-        let width = (viewport.width - sidebar - dock).max(px(0.));
+        let width = (viewport.width - sidebar - self.chat_hub_extent).max(px(0.));
         let height = (viewport.height - px(ui::TITLEBAR_HEIGHT)).max(px(0.));
         (width > px(0.) && height > px(0.))
             .then(|| Bounds::new(point(sidebar, px(ui::TITLEBAR_HEIGHT)), size(width, height)))
@@ -4940,7 +4962,9 @@ impl Observer {
         }
         let mut body = v_flex().w_full().min_w_0().child(h_flex().min_w_0().child(title));
         if !open {
-            let summary_text = tool.summary.clone();
+            if !show_collapsed_tool_summary(tool.status, &tool.summary) {
+                return body.into_any_element();
+            }
             let mut summary = h_flex()
                 .id(SharedString::from(format!("{detail_key}:summary")))
                 .flex_none()
@@ -4976,15 +5000,13 @@ impl Observer {
                         .child(t!("click_to_expand").to_string()),
                 );
             }
-            if !summary_text.is_empty() {
-                if expandable {
-                    let target = tool.detail_key.clone();
-                    summary = summary.cursor_pointer().on_click(
-                        cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)),
-                    );
-                }
-                body = body.child(h_flex().w_full().min_w_0().pl_6().child(summary));
+            if expandable {
+                let target = detail_key.clone();
+                summary = summary.cursor_pointer().on_click(
+                    cx.listener(move |this, _, _, cx| this.toggle(target.clone(), cx)),
+                );
             }
+            body = body.child(h_flex().w_full().min_w_0().pl_6().child(summary));
         } else if pending && tool.choices.is_empty() && tool.name != "ask_user" {
             // The approval card owns the diff/command/plan while pending, so the
             // regular detail would only repeat it. `ask_user` keeps its options.
@@ -6492,10 +6514,30 @@ impl Render for Observer {
                     .child(t!("live_overflow").to_string()),
             );
         }
-        if let Some(row) = self.feedback.get(&self.selected).and_then(SessionFeedback::view) {
-            content = content.child(div().w_full().min_w_0().mb(px(20.)).child(
-                self.row(&row, None, MsgScope::Main, cx),
-            ));
+        if let Some(feedback) = self.feedback.get(&self.selected) {
+            if let Some(hint) = feedback.compression_hint() {
+                content = content.child(h_flex().w_full().justify_center().py_3().child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .px_4()
+                        .py_2()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(border)
+                        .bg(surface)
+                        .child(Icon::new("loading").size(14.).color(accent()).spin(
+                            "compression-loading",
+                            ui::Spin::Accelerate,
+                        ))
+                        .child(div().text_size(px(12.)).text_color(muted).child(hint)),
+                ));
+            }
+            if let Some(row) = feedback.view() {
+                content = content.child(div().w_full().min_w_0().mb(px(20.)).child(
+                    self.row(&row, None, MsgScope::Main, cx),
+                ));
+            }
         }
 
         // The kit's root plugin owns the hairline outline, the gutter shadow and
@@ -6520,20 +6562,21 @@ impl Render for Observer {
                 dock.set_width(width);
                 self.chat_hub_width = width;
             }
-            // The slide moves the window edge with the column, so the workflow
-            // column keeps its size instead of jumping when the window snaps.
-            // The platform resize lands after this frame.
+            // Drive native growth from the clock, but give the dock only the
+            // space available in the viewport being painted this frame.
             let window_width = f32::from(window.bounds().size.width);
-            if !window.is_maximized() && !window.is_fullscreen() {
+            let viewport_width = f32::from(window.viewport_size().width);
+            let can_resize = !window.is_maximized() && !window.is_fullscreen();
+            dock.advance_reveal(window_width, viewport_width, can_resize);
+            if can_resize {
                 if let Some(target) = dock.slide_window_width(window_width) {
-                    window.request_animation_frame();
                     window.on_next_frame(move |window, _| {
                         let height = window.bounds().size.height;
                         window.resize(gpui_kit::size(px(target), height));
                     });
                 }
             }
-            dock.advance_reveal();
+            self.chat_hub_extent = px(dock.layout_extent(viewport_width));
             if dock.sliding() {
                 // Sample the slide from the shared clock and keep the frames
                 // coming the way the loading spinner does: `with_animation`
@@ -6556,7 +6599,7 @@ impl Render for Observer {
             .filter(|dock| dock.visible())
             .map(|dock| {
                 let active = dock.active().map(|site| site.id);
-                let dock_width = dock.column_width();
+                let dock_width = (self.chat_hub_extent - px(chat_hub::SPLITTER_WIDTH)).max(px(0.));
                 let mut strip = h_flex()
                     .id("chat-hub-tabs")
                     .w_full()
@@ -6614,15 +6657,14 @@ impl Render for Observer {
                 }
                 v_flex()
                     .flex_none()
-                    .w(px(dock_width))
+                    .w(dock_width)
                     .min_w_0()
                     .h_full()
                     .min_h_0()
                     // The tab strip keeps its size while the column closes, so
                     // clip it instead of letting it paint into the transcript.
                     .overflow_hidden()
-                    .border_l_1()
-                    .border_color(border)
+                    .when(dock_width >= px(1.), |dock| dock.border_l_1().border_color(border))
                     .bg(background)
                     .child(strip)
                     .child(dock.dock(cx))
@@ -6683,7 +6725,7 @@ impl Render for Observer {
                     .id("chat-hub-resize")
                     .flex_none()
                     .h_full()
-                    .w(px(5.))
+                    .w(self.chat_hub_extent.min(px(chat_hub::SPLITTER_WIDTH)))
                     .cursor_col_resize()
                     .hover(move |band| band.bg(primary.opacity(0.18)))
                     .when(self.dock_drag.is_some(), |band| {
@@ -6692,13 +6734,12 @@ impl Render for Observer {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                            let width = this
-                                .chat_hub
-                                .as_ref()
-                                .map_or(chat_hub::DOCK_WIDTH, |dock| dock.column_width());
+                            let Some(dock) = this.chat_hub.as_ref().filter(|dock| !dock.sliding()) else {
+                                return;
+                            };
                             this.dock_drag = Some(ResizeDrag {
                                 start_x: event.position.x,
-                                start_width: width,
+                                start_width: dock.width(),
                             });
                             // From here on the live width wins over config polls.
                             this.dock_width_touched = true;
@@ -6752,9 +6793,9 @@ impl Render for Observer {
             }
         }));
         #[cfg(all(target_os = "linux", feature = "chat-hub"))]
-        let shell = shell.capture_any_mouse_down(cx.listener(|this, _, window, _| {
+        let shell = shell.capture_any_mouse_down(cx.listener(|this, _, _, _| {
             if let Some(dock) = &this.chat_hub {
-                dock.return_keyboard_focus(window);
+                dock.return_keyboard_focus();
             }
         }));
         let mut shell = shell
@@ -6894,6 +6935,18 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn collapsed_tools_hide_success_but_keep_errors_and_in_progress_summaries() {
+        use super::{presentation::ToolStatus, show_collapsed_tool_summary};
+
+        assert!(!show_collapsed_tool_summary(ToolStatus::Completed, "Command completed"));
+        assert!(show_collapsed_tool_summary(ToolStatus::Failed, "Command blocked by security policy"));
+        assert!(show_collapsed_tool_summary(ToolStatus::Rejected, "Command rejected"));
+        assert!(show_collapsed_tool_summary(ToolStatus::Running, "Command running"));
+        assert!(show_collapsed_tool_summary(ToolStatus::Pending, "Waiting for approval"));
+        assert!(!show_collapsed_tool_summary(ToolStatus::Failed, ""));
+    }
+
+    #[test]
     fn session_feedback_replaces_errors_and_does_not_revive_replayed_alerts() {
         use super::{presentation, Message, Row, SessionFeedback};
         use presentation::AlertKind;
@@ -6915,33 +6968,74 @@ mod tests {
         assert!(matches!(feedback.view(), Some(Row::Alert(a)) if a.title == "newer local error"));
         feedback.observe(&presentation::project(vec![Message { id: 42, ..error }], &[]));
         assert!(matches!(feedback.view(), Some(Row::Alert(a)) if a.key == "msg-42"));
-        feedback.clear_error();
+        feedback.clear_alert(Some(42));
         feedback.observe(&rows);
         assert!(feedback.view().is_none());
     }
 
     #[test]
-    fn compression_feedback_survives_switch_and_requires_runtime_confirmation() {
-        use super::{CompressionProgress, ManualCompressionError, ManualCompressionEvent, Row, SessionFeedback};
-        use super::presentation::AlertKind;
+    fn compression_feedback_survives_switch_and_disappears_on_completion() {
+        use super::{CompressionProgress, ManualCompressionError, ManualCompressionEvent, SessionFeedback};
         use std::{collections::BTreeMap, time::Instant};
 
         let now = Instant::now();
         let mut sessions = BTreeMap::from([("a", SessionFeedback {
-            compression: Some(CompressionProgress { since: now, running: false, acknowledged: None }),
+            compression: Some(CompressionProgress { since: now, running: false, acknowledged: None, manual: true }),
             ..SessionFeedback::default()
         }), ("b", SessionFeedback::default())]);
         sessions.get_mut("a").unwrap().acknowledge(now, Ok(()), now);
-        assert!(matches!(sessions["a"].view(), Some(Row::Alert(a)) if a.kind == AlertKind::Progress));
-        assert!(sessions["b"].view().is_none());
+        assert!(sessions["a"].compression_hint().is_some());
+        assert!(sessions["b"].compression_hint().is_none());
         let feedback = sessions.get_mut("a").unwrap();
+        feedback.observe_compression_marker(Some(41), Some(now));
+        assert!(feedback.compression_hint().is_some());
         feedback.apply_compression(ManualCompressionEvent::Running, now);
         feedback.acknowledge(now, Err(ManualCompressionError::Unconfirmed), now);
-        assert!(matches!(feedback.view(), Some(Row::Alert(a)) if a.kind == AlertKind::Warning));
-        feedback.observe_compression_marker(42);
+        assert!(feedback.compression_hint().is_some());
+        feedback.apply_compression(ManualCompressionEvent::Applied, now);
         feedback.apply_compression(ManualCompressionEvent::Stopped, now);
         feedback.acknowledge(now, Err(ManualCompressionError::Rejected(None)), now);
-        assert!(matches!(feedback.view(), Some(Row::Alert(a)) if a.kind == AlertKind::Success));
+        feedback.observe_compression_marker(Some(42), Some(now));
+        assert!(feedback.compression_hint().is_none());
+        assert!(feedback.view().is_none());
+    }
+
+    #[test]
+    fn historical_compression_is_silent_and_new_summary_settles_progress() {
+        use super::{ManualCompressionEvent, SessionFeedback};
+        use std::time::Instant;
+
+        let now = Instant::now();
+        let mut feedback = SessionFeedback::default();
+        feedback.observe_compression_marker(Some(41), Some(now));
+        assert!(feedback.view().is_none());
+        assert!(feedback.compression_hint().is_none());
+        feedback.apply_compression(ManualCompressionEvent::Running, now);
+        feedback.observe_compression_marker(Some(41), Some(now));
+        assert!(feedback.compression_hint().is_some());
+        feedback.observe_compression_marker(Some(42), Some(now));
+        assert!(feedback.compression_hint().is_none());
+        assert!(feedback.view().is_none());
+    }
+
+    #[test]
+    fn state_clears_alerts_without_hiding_compression_and_replay_does_not_restore_them() {
+        use super::{apply_workflow_event, latest_message_id, presentation, ManualCompressionEvent, Model, SessionFeedback};
+        use std::time::Instant;
+
+        let mut model = Model::default();
+        let mut feedback = SessionFeedback::default();
+        let error = json!({"type":"message","message_id":"42","role":"assistant","content":"failed","is_error":true});
+        assert!(!apply_workflow_event(&mut model, error.clone()));
+        let rows = presentation::project(model.messages.values().cloned().collect(), &[]);
+        feedback.observe(&rows);
+        assert!(feedback.view().is_some());
+        feedback.apply_compression(ManualCompressionEvent::Running, Instant::now());
+        assert!(apply_workflow_event(&mut model, json!({"type":"state","state":"stopped"})));
+        feedback.clear_alert(latest_message_id(&model));
+        feedback.observe(&rows);
+        assert!(feedback.view().is_none());
+        assert!(feedback.compression_hint().is_some());
     }
 
     #[test]

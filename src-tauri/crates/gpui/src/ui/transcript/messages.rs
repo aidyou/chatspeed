@@ -1,5 +1,6 @@
 //! User bubbles and assistant responses.
 
+use gpui_kit::base::SelectableText;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -33,7 +34,10 @@ pub(crate) fn user_bubble(
             text.max_h(px(USER_MESSAGE_COLLAPSED_TEXT_HEIGHT))
                 .overflow_hidden()
         })
-        .child(view.text.clone());
+        .child(SelectableText::new(
+            SharedString::from(format!("{toggle_key}:text")),
+            view.text.clone(),
+        ));
     let toggle = h_flex()
         .id(SharedString::from(toggle_key.clone()))
         .absolute()

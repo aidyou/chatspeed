@@ -601,8 +601,6 @@ pub struct FinishTaskView {
 pub enum AlertKind {
     Warning,
     Error,
-    Progress,
-    Success,
 }
 
 /// Vue keeps error records out of the transcript and surfaces the trailing one
@@ -2230,7 +2228,7 @@ fn activity_view(items: Vec<Message>, roots: &[String], open_tail: bool) -> Acti
 }
 
 /// Vue's `isWorkflowAlertMessage`: durable error records never join the transcript.
-fn is_alert(message: &Message) -> bool {
+pub fn is_alert(message: &Message) -> bool {
     if message.role == "tool" {
         return false;
     }
@@ -2254,7 +2252,7 @@ fn is_alert(message: &Message) -> bool {
 }
 
 /// Vue's `isWorkflowAlertActivity`: only the last activity decides the tail alert.
-fn is_alert_activity(message: &Message) -> bool {
+pub fn is_alert_activity(message: &Message) -> bool {
     let visibility = message.metadata["ui_visibility"]
         .as_str()
         .or(message.metadata["uiVisibility"].as_str())

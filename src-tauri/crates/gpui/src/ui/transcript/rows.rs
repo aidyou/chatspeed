@@ -335,14 +335,6 @@ fn alert_row(view: &AlertView) -> AnyElement {
     let (icon, color) = match view.kind {
         AlertKind::Warning => ("warning", warning()),
         AlertKind::Error => ("error", danger()),
-        AlertKind::Progress => ("loading", accent()),
-        AlertKind::Success => ("check-circle", crate::success()),
-    };
-    let icon = Icon::new(icon).size(20.).color(color);
-    let icon = if view.kind == AlertKind::Progress {
-        icon.spin("session-compression", crate::ui::Spin::Accelerate)
-    } else {
-        icon
     };
     // Vue renders an `el-alert` with `show-icon`: the icon is a fixed left
     // column and everything else sits in one right column, so the body starts
@@ -385,7 +377,7 @@ fn alert_row(view: &AlertView) -> AnyElement {
         .bg(color.opacity(0.08))
         .px_4()
         .py_3()
-        .child(icon)
+        .child(Icon::new(icon).size(20.).color(color))
         .child(content)
         .into_any_element()
 }
