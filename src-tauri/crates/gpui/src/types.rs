@@ -35,6 +35,31 @@ pub struct AutomationSummary {
     pub enabled: bool,
 }
 
+/// Matches the selectable primary agents, including legacy records without a role.
+pub fn default_workflow_agent(agents: &[Value]) -> Option<&Value> {
+    agents.iter().find(|agent| {
+        agent["role"].as_str().is_none_or(|role| role == "primary")
+            && agent["disabled"].as_bool() != Some(true)
+            && agent["id"].as_str().is_some_and(|id| !id.is_empty())
+    })
+}
+
+/// An enabled audit can always be turned off, even after its reviewer is removed.
+pub fn can_toggle_final_audit(enabled: bool, parent_id: Option<&str>, agents: &[Value]) -> bool {
+    enabled || parent_id.is_some_and(|id| {
+        agents.iter().any(|agent| {
+            let model = agent.get("actModel").filter(|model| !model.is_null())
+                .unwrap_or(&agent["models"]["act"]);
+            agent["role"] == "child"
+                && agent["parent_agent_id"].as_str().or_else(|| agent["parentAgentId"].as_str()) == Some(id)
+                && agent["sub_agent_role"].as_str().or_else(|| agent["subAgentRole"].as_str()) == Some("final_reviewer")
+                && agent["disabled"].as_bool() != Some(true)
+                && model["model"].as_str().is_some_and(|name| !name.trim().is_empty())
+                && (model["id"].is_i64() || model["id"].as_str().is_some_and(|id| !id.trim().is_empty()))
+        })
+    })
+}
+
 /// Minimal read-only workflow projection.
 #[derive(Clone, Default, Deserialize)]
 pub struct Session {
@@ -307,6 +332,7 @@ pub enum Command {
     CreateWorkflow {
         agent_id: Option<String>,
         allowed_paths: Option<Value>,
+        final_audit: Option<bool>,
         inherited_agent_config: Option<String>,
     },
     /// Lists one directory for the authorized-path tree.
@@ -397,11 +423,42 @@ pub struct Update {
     pub kind: UpdateKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualCompressionEvent {
+    Running,
+    Applied,
+    Unavailable,
+    Stopped,
+}
+
+impl ManualCompressionEvent {
+    pub fn from_payload(event: &Value) -> Option<Self> {
+        match event["type"].as_str()? {
+            "compression_status" => Some(if event["is_compressing"].as_bool()? {
+                Self::Running
+            } else {
+                Self::Stopped
+            }),
+            "compression_applied" => Some(Self::Applied),
+            // The runtime's only warning notification is the no-safe-segment case.
+            "notification" if event["category"] == "warning" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ManualCompressionError {
     NotSent,
-    Rejected(String),
-    Unconfirmed(String),
+    Rejected(Option<String>),
+    Unconfirmed,
+}
+
+/// Do not surface backend request URLs in workflow failure feedback, even if
+/// an older runtime includes one in its user-message projection.
+pub(crate) fn workflow_error_detail(detail: &str) -> Option<&str> {
+    let detail = detail.trim();
+    (!detail.is_empty() && !detail.contains("://")).then_some(detail)
 }
 
 /// Control messages share the reliable queue with text deltas.
@@ -437,6 +494,13 @@ pub enum UpdateKind {
         message: String,
     },
     Event(Value),
+    RunningTools(Vec<(Value, Option<Instant>)>),
+    CompressionEvent {
+        session: String,
+        instance: String,
+        sequence: u64,
+        event: ManualCompressionEvent,
+    },
     ManualCompressionResponse {
         session: String,
         requested: Instant,
@@ -495,6 +559,29 @@ pub enum UpdateKind {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn final_audit_requires_a_configured_reviewer_for_the_actual_parent() {
+        let agents = vec![
+            json!({"id":"disabled", "role":"primary", "disabled":true}),
+            json!({"id":"child", "role":"child"}),
+            json!({"id":"legacy"}),
+            json!({"id":"other", "role":"primary"}),
+            json!({"role":"child", "parent_agent_id":"legacy",
+                "sub_agent_role":"final_reviewer", "models":{"act":{"id":0,"model":"review"}}}),
+            json!({"role":"child", "parentAgentId":"other", "disabled":true,
+                "subAgentRole":"final_reviewer", "actModel":{"id":2,"model":"review"}}),
+            json!({"role":"child", "parent_agent_id":"unconfigured",
+                "sub_agent_role":"final_reviewer", "models":{"act":{"id":2,"model":""}}}),
+        ];
+        let default = default_workflow_agent(&agents).and_then(|agent| agent["id"].as_str());
+        assert_eq!(default, Some("legacy"));
+        assert!(can_toggle_final_audit(false, default, &agents));
+        assert!(!can_toggle_final_audit(false, Some("other"), &agents));
+        assert!(!can_toggle_final_audit(false, Some("unconfigured"), &agents));
+        assert!(!can_toggle_final_audit(false, None, &agents));
+        assert!(can_toggle_final_audit(true, Some("other"), &[]));
+    }
 
     #[test]
     fn session_list_accepts_null_and_missing_titles() {

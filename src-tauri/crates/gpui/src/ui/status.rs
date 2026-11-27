@@ -2074,11 +2074,14 @@ fn live_state(model: &Model, running: bool, answered: bool) -> Option<Live> {
     // Vue already moved on, so the line must not fall back to "awaiting".
     let answered_ask = answered && latest.is_some_and(|(_, tool)| tool_name(tool) == "ask_user");
 
-    if let Some((id, tool)) = latest {
+    let active = model.tool_order.iter().rev().find_map(|id| {
+        let tool = model.tools.get(id)?;
         let phase = tool_phase(tool);
-        if !answered_ask && matches!(phase, "pending" | "running") {
-            return Some(tool_status(model, id, tool, phase));
-        }
+        (matches!(phase, "pending" | "running") && !(answered && tool_name(tool) == "ask_user"))
+            .then_some((id, tool, phase))
+    });
+    if let Some((id, tool, phase)) = active {
+        return Some(tool_status(model, id, tool, phase));
     }
 
     if waiting_approval && !answered_ask {
@@ -2431,6 +2434,33 @@ mod tests {
         assert_eq!(truncate("abcdef", 6), "abcdef");
         assert_eq!(truncate("abcdefgh", 6), "abc...");
         assert_eq!(truncate("缓存命中率很高", 5), "缓存...");
+    }
+
+    #[test]
+    fn restored_running_tool_keeps_its_timer_and_yields_to_terminal_events() {
+        use serde_json::json;
+        use std::time::{Duration, Instant};
+
+        let mut model = Model::default();
+        model.select();
+        model.state = "executing".into();
+        model.has_live_session = true;
+        let started = Instant::now() - Duration::from_secs(12);
+        let tool = |id: &str, name: &str| {
+            json!({"type":"tool_started", "tool_call_id":id, "tool_name":name})
+        };
+        model.restore_running_tools(vec![(tool("first", "read_file"), Some(started)), (tool("last", "grep"), None)]);
+        let status = live_state(&model, true, false).unwrap();
+        assert_eq!(status.text, rust_i18n::t!("live_running_tool", tool = "grep").into_owned());
+        model.event(json!({"type":"tool_completed", "tool_call_id":"last"}));
+        assert_eq!(model.tool_started["first"], started);
+        let status = live_state(&model, true, false).unwrap();
+        assert!(status.text.contains("read_file"));
+        assert!(status.text.contains("12"));
+        model.event(json!({"type":"tool_failed", "tool_call_id":"first"}));
+        model.restore_running_tools(vec![(tool("first", "read_file"), Some(started))]);
+        assert!(!model.tool_started.contains_key("first"));
+        assert!(!live_state(&model, true, false).unwrap().text.contains("read_file"));
     }
 
     #[test]

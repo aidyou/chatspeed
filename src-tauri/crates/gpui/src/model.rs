@@ -71,6 +71,15 @@ pub struct QueuedMessage {
     pub provisional: bool,
 }
 
+fn finished_tool_id(row: &Message) -> Option<&str> {
+    let metadata = &row.metadata;
+    let status = metadata["execution_status"].as_str();
+    let finished = matches!(status, Some("completed" | "failed" | "rejected"))
+        || matches!(metadata["type"].as_str(), Some("tool_completed" | "tool_failed"))
+        || (row.role == "tool" && status.is_none() && metadata["approval_status"] != "pending");
+    finished.then(|| metadata["tool_call_id"].as_str()).flatten()
+}
+
 impl Model {
     pub fn select(&mut self) -> u64 {
         let generation = self.generation.wrapping_add(1);
@@ -246,18 +255,14 @@ impl Model {
             .extend(page.messages.into_iter().map(|m| (m.id, m)));
         if initial {
             self.live = Message::default();
-            self.tools.clear();
-            self.tool_order.clear();
-            self.tool_started.clear();
-            self.tool_finished.clear();
-        } else {
-            for row in self.messages.values() {
-                if let Some(id) = row.metadata["tool_call_id"].as_str() {
-                    self.tools.remove(id);
-                }
-            }
-            self.tool_order.retain(|id| self.tools.contains_key(id));
         }
+        for row in self.messages.values() {
+            if let Some(id) = finished_tool_id(row) {
+                self.tools.remove(id);
+                self.tool_started.remove(id);
+            }
+        }
+        self.tool_order.retain(|id| self.tools.contains_key(id));
     }
 
     /// A transport failure can race with a runtime acknowledgement.
@@ -413,6 +418,33 @@ impl Model {
         self.reading_history = true;
     }
 
+    /// Seed only calls the runtime has started but not yet finished. A missing
+    /// audit timestamp leaves the tool visible without inventing a start time.
+    pub fn restore_running_tools(&mut self, tools: Vec<(Value, Option<Instant>)>) {
+        if !self.has_live_session || crate::chimes::terminal(&self.state) {
+            return;
+        }
+        for (tool, started) in tools {
+            let Some(id) = tool["tool_call_id"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            if self.tool_finished.contains_key(&id)
+                || self.tools.get(&id).is_some_and(|tool| {
+                    matches!(tool["type"].as_str(), Some("tool_started" | "tool_completed" | "tool_failed"))
+                })
+                || self.messages.values().any(|row| finished_tool_id(row) == Some(id.as_str()))
+            {
+                continue;
+            }
+            self.event(tool);
+            if let Some(started) = started {
+                self.tool_started.insert(id, started);
+            } else {
+                self.tool_started.remove(&id);
+            }
+        }
+    }
+
     pub fn clear_compression_hint(&mut self) {
         self.compressing = false;
         self.compression_message.clear();
@@ -558,8 +590,9 @@ impl Model {
                         metadata: event["metadata"].clone(),
                         ..Message::default()
                     };
-                    if let Some(tool) = row.metadata["tool_call_id"].as_str() {
+                    if let Some(tool) = finished_tool_id(&row) {
                         self.tools.remove(tool);
+                        self.tool_started.remove(tool);
                     }
                     if row.role == "assistant" {
                         self.live = Message::default();

@@ -149,9 +149,9 @@ fn webview_has_keyboard_focus(view: &WebView) -> bool {
         .is_some_and(|responder| responder.isDescendantOf(native))
 }
 
-/// Only ChatHub's child views participate in the native shortcut bridge.
 #[cfg(target_os = "macos")]
 thread_local! {
+    /// Only ChatHub's child views participate in the native shortcut bridge.
     static EDIT_VIEWS: std::cell::RefCell<Vec<std::rc::Weak<WebView>>> = const {
         std::cell::RefCell::new(Vec::new())
     };
@@ -715,7 +715,7 @@ impl Dock {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn active_view(&self) -> Option<&Rc<WebView>> {
         self.pages
             .iter()
@@ -737,6 +737,13 @@ impl Dock {
     pub(crate) fn return_keyboard_focus(&self) {
         if let Some(view) = self.active_view() {
             relinquish_keyboard_focus(view);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn return_keyboard_focus(&self, window: &Window) {
+        if let Some(view) = self.active_view() {
+            return_x11_keyboard_focus(view, window);
         }
     }
 
@@ -841,9 +848,12 @@ impl Dock {
             }
             // The original borrowed handle keeps the same X11 window alive during creation.
             let parent = Parent(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Xlib(raw)) });
-            builder
+            let view = builder
+                .with_focused(false)
                 .build_as_child(&parent)
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            install_x11_keyboard_focus(&view)?;
+            Ok(view)
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -1113,15 +1123,119 @@ fn x11_dock_rect(
 }
 
 #[cfg(target_os = "linux")]
-fn resize_x11_child(view: &WebView, rect: Rect, show: bool) -> Result<(), String> {
+fn x11_webview_host(view: &WebView) -> Option<gtk::Window> {
     use gtk::prelude::*;
     use wry::WebViewExtUnix;
-    let widget = view.webview();
-    let host = widget
-        .toplevel()
-        .and_then(|widget| widget.downcast::<gtk::Window>().ok())
+
+    view.webview().toplevel()?.downcast().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn install_x11_keyboard_focus(view: &WebView) -> Result<(), String> {
+    use gtk::{gdk, glib::translate::ToGlibPtr, prelude::*};
+    use wry::WebViewExtUnix;
+    use x11rb::protocol::xproto::{ConnectionExt, InputFocus};
+
+    let host = x11_webview_host(view)
         .ok_or_else(|| wry::Error::UnsupportedWindowHandle.to_string())?;
-    let scale = f64::from(widget.scale_factor());
+    let native = host
+        .window()
+        .ok_or_else(|| wry::Error::UnsupportedWindowHandle.to_string())?;
+    // Wry replaces the realized GtkWindow's GdkWindow with a foreign X11
+    // child. Without the GTK event owner, its FocusIn/FocusOut never reaches
+    // GtkWindow, so WebKit's input context and caret remain inactive.
+    unsafe {
+        let mut owner = std::ptr::null_mut();
+        let native = native.to_glib_none().0;
+        gdk::ffi::gdk_window_get_user_data(native, &mut owner);
+        if owner.is_null() {
+            // GtkWidget's unrealize clears the owner of its window.
+            gdk::ffi::gdk_window_set_user_data(native, host.as_ptr().cast());
+        }
+    }
+    native.set_events(native.events() | gdk::EventMask::FOCUS_CHANGE_MASK);
+    let host = host.downgrade();
+    view.webview().connect_button_press_event(move |widget, event| {
+        if let Some(host) = host.upgrade() {
+            if let Some(native) = host.window().filter(|native| native.is_viewable()) {
+                if !host.has_toplevel_focus() {
+                    with_x11_child(&native, |connection, child| {
+                        // The WM cannot activate an embedded X11 child via EWMH.
+                        // Revert to the parent if the dock hides or destroys it.
+                        connection.set_input_focus(InputFocus::PARENT, child, event.time())?.check()?;
+                        Ok(())
+                    });
+                }
+                widget.grab_focus();
+            }
+        }
+        // Let WebKit position the caret and process the original click.
+        gtk::glib::Propagation::Proceed
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn with_x11_child(
+    native: &gtk::gdk::Window,
+    action: impl FnOnce(&x11rb::rust_connection::RustConnection, u32) -> anyhow::Result<()>,
+) {
+    use gtk::glib::translate::ToGlibPtr;
+
+    #[link(name = "gdk-3")]
+    extern "C" {
+        fn gdk_x11_window_get_xid(window: *mut gtk::gdk::ffi::GdkWindow) -> std::ffi::c_ulong;
+    }
+
+    let result = (|| -> anyhow::Result<()> {
+        // SAFETY: GTK is initialized with only the X11 backend, and `native`
+        // keeps Wry's foreign GdkWindow alive throughout this call.
+        let child = u32::try_from(unsafe { gdk_x11_window_get_xid(native.to_glib_none().0) })?;
+        let display = native.display().name();
+        let (connection, _) = x11rb::connect(Some(display.as_str()))?;
+        action(&connection, child)
+    })();
+    if let Err(error) = result {
+        eprintln!("ChatHub X11 keyboard focus: {error}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn return_x11_keyboard_focus(view: &WebView, window: &Window) {
+    use gtk::prelude::*;
+    use raw_window_handle::RawWindowHandle;
+    use x11rb::protocol::xproto::{ConnectionExt, InputFocus};
+
+    let Some(host) = x11_webview_host(view).filter(|host| host.has_toplevel_focus()) else {
+        return;
+    };
+    let (Some(native), Ok(handle)) = (host.window(), HasWindowHandle::window_handle(window)) else {
+        return;
+    };
+    let parent = match handle.as_raw() {
+        RawWindowHandle::Xcb(handle) => handle.window.get(),
+        RawWindowHandle::Xlib(handle) => match u32::try_from(handle.window) {
+            Ok(parent) => parent,
+            Err(_) => return,
+        },
+        _ => return,
+    };
+    with_x11_child(&native, |connection, child| {
+        // Do not steal focus from another application if GTK is still draining
+        // its focus-out event when GPUI receives the click.
+        if connection.get_input_focus()?.reply()?.focus == child {
+            connection.set_input_focus(InputFocus::PARENT, parent, x11rb::CURRENT_TIME)?.check()?;
+        }
+        Ok(())
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn resize_x11_child(view: &WebView, rect: Rect, show: bool) -> Result<(), String> {
+    use gtk::prelude::*;
+    let host = x11_webview_host(view)
+        .ok_or_else(|| wry::Error::UnsupportedWindowHandle.to_string())?;
+    let scale = f64::from(host.scale_factor());
     let size = rect.size.to_logical::<i32>(scale);
     let width = size.width.max(1);
     let height = size.height.max(1);

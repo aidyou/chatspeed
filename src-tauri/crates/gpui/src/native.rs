@@ -63,14 +63,13 @@ pub async fn control_post(options: &Options, path: &str, body: Value) -> Result<
 /// Uses the same keyed signal path as the desktop. Terminal compression can
 /// spend minutes in goal tracking and model calls before responding.
 pub async fn manual_compress(
-    options: &Options,
+    client: &RuntimeClient,
     session: &str,
     key: &str,
 ) -> Result<(), crate::types::ManualCompressionError> {
     use crate::types::ManualCompressionError;
     use chatspeed_runtime_client::{user_error_message, ClientError};
 
-    let client = connect(options).await.ok_or(ManualCompressionError::NotSent)?;
     client
         .post_with_idempotency(
             &format!("/control/v1/workflows/{session}/signal"),
@@ -81,9 +80,11 @@ pub async fn manual_compress(
         .map(|_| ())
         .map_err(|error| match error {
             ClientError::Transport(_) | ClientError::Serialization(_) => {
-                ManualCompressionError::Unconfirmed(error.to_string())
+                ManualCompressionError::Unconfirmed
             }
-            _ => ManualCompressionError::Rejected(user_error_message(&error).to_owned()),
+            _ => ManualCompressionError::Rejected(
+                crate::types::workflow_error_detail(user_error_message(&error)).map(str::to_owned),
+            ),
         })
 }
 

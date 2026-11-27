@@ -203,6 +203,11 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                     break;
                 }
             }
+            // An aborted selection or reset can close a new connection before
+            // the worker writes HTTP headers.
+            if !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                continue;
+            }
             let request = String::from_utf8(request).unwrap();
             assert!(request
                 .to_lowercase()
@@ -246,6 +251,20 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                     "application/json",
                     json!({"workflow":{"status":"awaiting_user"}}).to_string(),
                 )
+            } else if path == "/control/v1/workflows/tool-restore?limit=500" {
+                ("application/json", json!({"workflow":{"status":"executing"}, "has_live_session":true}).to_string())
+            } else if path.starts_with("/control/v1/workflows/tool-restore/events?") {
+                ("application/json", json!([
+                    {"id":1,"event_type":"tool_started","event_data":{"tool_call_id":"old","tool_name":"read_file"}},
+                    {"id":2,"event_type":"tool_completed","event_data":{"tool_call_id":"old"}},
+                    {"id":3,"event_type":"tool_started","event_data":{"tool_call_id":"current","tool_name":"grep"},"created_at":"2024-02-29 23:59:50"}
+                ]).to_string())
+            } else if path == "/control/v1/workflows/tool-restore/stream"
+                || path == "/control/v1/workflows/compress-first/stream" {
+                // The compression listener is independent of the selected transcript.
+                let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n3\r\n:\n\n\r\n");
+                held_streams.push(socket);
+                continue;
             } else if path == "/control/v1/workflows/compress-other?limit=500" {
                 let messages = if handoff_persisted {
                     json!([{"id":8,"role":"system","messageKind":"summary","messageSubtype":"compression","message":"## Previous Context Snapshot\n<state_snapshot>handoff</state_snapshot>"}])
@@ -428,8 +447,8 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
             std::thread::sleep(Duration::from_millis(5));
         }
     }
-    // Complete the request after the selection has already changed.
-    let error = r#"{"error":{"code":"fixture_error","message":"compression rejected"}}"#;
+    // Complete the request after selection changes; legacy transport details must not reach the UI.
+    let error = r#"{"error":{"code":"fixture_error","message":"Request to backend failed: error sending request for url (https://backend.example/v1/chat/\ncompletions)"}}"#;
     write!(response, "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{error}", error.len()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(4);
     let mut other_model = Model::default();
@@ -443,7 +462,7 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                     assert_eq!(update.generation, 0);
                     assert_eq!(session, "compress-first");
                     assert_eq!(at, requested);
-                    assert!(matches!(result, Err(chatspeed_gpui::types::ManualCompressionError::Rejected(message)) if message == "compression rejected"));
+                    assert!(matches!(result, Err(chatspeed_gpui::types::ManualCompressionError::Rejected(None))));
                     rejected = true;
                 }
                 UpdateKind::Snapshot(page) if update.generation == generation + 1 => {
@@ -461,6 +480,34 @@ fn loopback_reconnect_reset_and_snapshot_race_converge() {
                     if applied {
                         assert!(!other_model.compressing);
                     }
+                }
+                _ => {}
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    let tool_generation = generation + 2;
+    worker.commands.try_send(Command::Select {
+        generation: tool_generation, id: "tool-restore".into(),
+    }).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut tool_model = Model::default();
+    loop {
+        assert!(Instant::now() < deadline, "an already running tool must recover without a new SSE start");
+        if let Ok(update) = worker.updates.try_recv() {
+            if update.generation != tool_generation {
+                continue;
+            }
+            match update.kind {
+                UpdateKind::Snapshot(page) => tool_model.page(page, false),
+                UpdateKind::RunningTools(tools) => {
+                    tool_model.restore_running_tools(tools);
+                    assert_eq!(tool_model.tool_order, ["current"]);
+                    assert_eq!(tool_model.tools["current"]["tool_name"], "grep");
+                    assert!(tool_model.tool_started["current"].elapsed() > Duration::from_secs(12));
+                    break;
                 }
                 _ => {}
             }

@@ -863,7 +863,30 @@ fn quick_actions(
         })
         .into_any_element();
     let Some(session) = observer.selected.clone() else {
-        return trigger_el;
+        if observer.start_pending {
+            return trigger_el;
+        }
+        let owner = cx.entity();
+        return MenuPopover::new("composer-draft-quick-popover", trigger_el, move |_, _, cx| {
+            let (enabled, can_toggle) = {
+                let observer = owner.read(cx);
+                (observer.final_audit_enabled(), observer.can_toggle_final_audit())
+            };
+            let owner = owner.clone();
+            v_flex().id("composer-draft-quick-list").w(px(280.)).child(menu_row(
+                "composer-draft-final-audit",
+                "check-circle",
+                t!("final_audit_label").to_string(),
+                t!("final_audit_hint").to_string(),
+                MenuRowStyle::new(OptionColors::new(cx), enabled, false).disabled(!can_toggle),
+                move |_: &mut Window, cx: &mut App| {
+                    owner.update(cx, |this, cx| {
+                        this.toggle_runtime_preference("finalAudit", cx);
+                    });
+                },
+            ))
+        })
+        .into_any_element();
     };
     let approval = observer.approval_level();
     let observer_entity = cx.entity();

@@ -510,12 +510,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                 let options = options.clone();
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let result = if options.demo {
-                        Ok(())
-                    } else {
-                        native::manual_compress(&options, &session, &idempotency_key("manual-compress")).await
-                    };
-                    let _ = send(&tx, 0, UpdateKind::ManualCompressionResponse { session, requested, result }).await;
+                    run_manual_compression(options, tx, session, requested).await;
                 });
             }
             Command::Rewind {
@@ -668,6 +663,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
             Command::CreateWorkflow {
                 agent_id,
                 allowed_paths,
+                final_audit,
                 inherited_agent_config,
             } => {
                 if options.demo {
@@ -680,6 +676,7 @@ async fn coordinate(options: Options, mut rx: mpsc::Receiver<Command>, tx: mpsc:
                         &options,
                         agent_id,
                         allowed_paths,
+                        final_audit,
                         inherited_agent_config,
                     )
                     .await;
@@ -1185,6 +1182,7 @@ async fn create_workflow(
     options: &Options,
     agent_id: Option<String>,
     allowed_paths: Option<Value>,
+    final_audit: Option<bool>,
     inherited_agent_config: Option<String>,
 ) -> Result<String, String> {
     let client = native::connect(options)
@@ -1192,20 +1190,7 @@ async fn create_workflow(
         .ok_or_else(|| "runtime unavailable".to_string())?;
     let agent_id = match agent_id {
         Some(id) => id,
-        None => client
-            .get("/control/v1/agents")
-            .await
-            .map_err(|error| error.to_string())?
-            .as_array()
-            .and_then(|agents| {
-                agents
-                    .iter()
-                    .find(|agent| agent["role"] == "primary")
-                    .or_else(|| agents.first())
-            })
-            .and_then(|agent| agent["id"].as_str())
-            .ok_or_else(|| "no agent configured".to_string())?
-            .to_owned(),
+        None => fetch_default_agent_id(&client).await?,
     };
     let created = client
         .post(
@@ -1215,7 +1200,7 @@ async fn create_workflow(
                 "agent_id": agent_id,
                 "allowed_paths": allowed_paths,
                 "auto_approve_plan": null,
-                "final_audit": null,
+                "final_audit": final_audit,
                 "inherited_agent_config": inherited_agent_config,
             }),
         )
@@ -1314,6 +1299,18 @@ fn resume_signals_only_a_live_executor_conflict() {
     assert!(!is_live_start_conflict(&conflict(None)));
 }
 
+async fn fetch_default_agent_id(client: &RuntimeClient) -> Result<String, String> {
+    let agents = client
+        .get("/control/v1/agents")
+        .await
+        .map_err(|error| error.to_string())?;
+    agents.as_array()
+        .and_then(|agents| default_workflow_agent(agents))
+        .and_then(|agent| agent["id"].as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| rust_i18n::t!("agent_placeholder").to_string())
+}
+
 async fn start_session(
     options: &Options,
     agent_id: Option<String>,
@@ -1327,14 +1324,9 @@ async fn start_session(
     let client = native::connect(options)
         .await
         .ok_or_else(|| "runtime unavailable".to_string())?;
-    let agent_id = if let Some(id) = agent_id {
-        id
-    } else {
-        let agents = client.get("/control/v1/agents").await.map_err(|error| error.to_string())?;
-        agents.as_array().and_then(|agents| {
-            agents.iter().find(|agent| agent["role"] == "primary").or_else(|| agents.first())
-        }).and_then(|agent| agent["id"].as_str())
-            .ok_or_else(|| "no agent configured".to_string())?.to_owned()
+    let agent_id = match agent_id {
+        Some(id) => id,
+        None => fetch_default_agent_id(&client).await?,
     };
     let created = client
         .post(
@@ -1530,6 +1522,171 @@ async fn follow_decisions(options: Options, tx: mpsc::Sender<Update>, id: String
     }
 }
 
+/// Subscribe before sending the signal so changing the selected transcript
+/// cannot hide the result of a request that is still running.
+async fn run_manual_compression(
+    options: Options,
+    tx: mpsc::Sender<Update>,
+    session: String,
+    requested: Instant,
+) {
+    use ManualCompressionEvent::{Applied, Running, Stopped, Unavailable};
+    if options.demo {
+        let _ = send(&tx, 0, UpdateKind::ManualCompressionResponse {
+            session, requested, result: Err(ManualCompressionError::NotSent),
+        }).await;
+        return;
+    }
+    let Some(client) = native::connect(&options).await else {
+        let _ = send(&tx, 0, UpdateKind::ManualCompressionResponse {
+            session, requested, result: Err(ManualCompressionError::NotSent),
+        }).await;
+        return;
+    };
+    let stream = tokio::time::timeout(Duration::from_secs(2), client.stream_workflow(&session, None))
+        .await.ok().and_then(Result::ok);
+    let key = idempotency_key("manual-compress");
+    let request = async {
+        let result = native::manual_compress(&client, &session, &key).await;
+        let unconfirmed = matches!(result, Ok(()) | Err(ManualCompressionError::Unconfirmed));
+        let _ = send(&tx, 0, UpdateKind::ManualCompressionResponse {
+            session: session.clone(), requested, result,
+        }).await;
+        unconfirmed
+    };
+    let Some(mut stream) = stream else {
+        request.await;
+        return;
+    };
+    let watch = async {
+        let mut running = false;
+        while let Ok(Some(envelope)) = stream.next_event().await {
+            let Some(event) = ManualCompressionEvent::from_payload(&envelope.payload) else { continue; };
+            if event == Stopped && !running {
+                continue;
+            }
+            running |= event == Running;
+            if !send(&tx, 0, UpdateKind::CompressionEvent {
+                session: session.clone(),
+                instance: envelope.server_instance_id,
+                sequence: envelope.sequence,
+                event,
+            }).await || matches!(event, Applied | Unavailable | Stopped) {
+                return;
+            }
+        }
+    };
+    tokio::pin!(watch, request);
+    tokio::select! {
+        _ = &mut watch => { request.await; }
+        unconfirmed = &mut request => {
+            if unconfirmed {
+                // A live executor may accept a signal before it reaches the
+                // compression boundary. Do not make that wait unbounded.
+                let _ = tokio::time::timeout(Duration::from_secs(300), watch).await;
+            }
+        }
+    }
+}
+
+/// SQLite audit records use UTC `YYYY-MM-DD HH:MM:SS`. Convert the
+/// reported age once so subsequent UI ticks use a monotonic clock.
+fn audit_started_at(value: &Value, now: std::time::SystemTime, tick: Instant) -> Option<Instant> {
+    let text = value.as_str()?;
+    let (date, time) = text.split_once(' ')?;
+    let mut date = date.split('-');
+    let mut time = time.split(':');
+    let year: i64 = date.next()?.parse().ok()?;
+    let month: i64 = date.next()?.parse().ok()?;
+    let day: i64 = date.next()?.parse().ok()?;
+    let hour: i64 = time.next()?.parse().ok()?;
+    let minute: i64 = time.next()?.parse().ok()?;
+    let second: i64 = time.next()?.parse().ok()?;
+    if date.next().is_some() || time.next().is_some()
+        || !(1970..=9999).contains(&year) || !(1..=12).contains(&month)
+        || !(0..24).contains(&hour) || !(0..60).contains(&minute) || !(0..60).contains(&second)
+    {
+        return None;
+    }
+    let leap = |year| year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let months = [31, if leap(year) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month = (month - 1) as usize;
+    if !(1..=months[month]).contains(&day) {
+        return None;
+    }
+    let leap_days_through = |year| year / 4 - year / 100 + year / 400;
+    let days = (year - 1970) * 365 + leap_days_through(year - 1) - leap_days_through(1969)
+        + months[..month].iter().sum::<i64>() + day - 1;
+    let seconds = days * 86400 + hour * 3600 + minute * 60 + second;
+    let reported = std::time::UNIX_EPOCH.checked_add(Duration::from_secs(seconds as u64))?;
+    tick.checked_sub(now.duration_since(reported).ok()?)
+}
+
+fn fold_running_tools(active: &mut BTreeMap<String, (i64, Value, Value)>, rows: &[Value]) {
+    for row in rows {
+        let kind = row["event_type"].as_str().unwrap_or_default();
+        if matches!(kind, "workflow_started" | "workflow_completed" | "workflow_failed" | "workflow_cancelled") {
+            active.clear();
+        }
+        let data = &row["event_data"];
+        let Some(id) = data["tool_call_id"].as_str().filter(|id| !id.is_empty()) else { continue; };
+        match kind {
+            "tool_started" => {
+                let Some(mut tool) = data.as_object().cloned() else { continue; };
+                tool.insert("type".into(), json!("tool_started"));
+                active.insert(id.to_owned(), (row["id"].as_i64().unwrap_or_default(), Value::Object(tool), row["created_at"].clone()));
+            }
+            "tool_completed" | "tool_failed" => { active.remove(id); }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn audit_tool_restore_matches_call_ids_and_preserves_the_utc_start() {
+    let mut active = BTreeMap::new();
+    fold_running_tools(&mut active, &[
+        json!({"id": 1, "event_type": "tool_started", "event_data": {"tool_call_id": "previous"}}),
+        json!({"id": 2, "event_type": "workflow_started"}),
+        json!({"id": 3, "event_type": "tool_started", "event_data": {"tool_call_id": "done"}}),
+        json!({"id": 4, "event_type": "tool_started", "event_data": {"tool_call_id": "active", "tool_name": "bash"}, "created_at": "2024-02-29 23:59:50"}),
+    ]);
+    fold_running_tools(&mut active, &[
+        json!({"id": 5, "event_type": "tool_failed", "event_data": {"tool_call_id": "done"}}),
+    ]);
+    assert_eq!(active.len(), 1);
+    let (_, tool, at) = &active["active"];
+    assert_eq!(tool["type"], "tool_started");
+    assert_eq!(tool["tool_name"], "bash");
+    let wall_now = std::time::UNIX_EPOCH + Duration::from_secs(1_709_251_202);
+    let tick = Instant::now();
+    assert_eq!(audit_started_at(at, wall_now, tick), tick.checked_sub(Duration::from_secs(12)));
+    assert_eq!(audit_started_at(&Value::Null, wall_now, tick), None);
+    assert_eq!(audit_started_at(&json!("2023-02-29 23:59:50"), wall_now, tick), None);
+}
+
+async fn running_tools(client: &RuntimeClient, id: &str) -> Option<Vec<(Value, Option<Instant>)>> {
+    let limit = chatspeed_contracts::workflow::WORKFLOW_EVENTS_MAX_LIMIT;
+    let mut active = BTreeMap::new();
+    let mut after = 0;
+    for _ in 0..20 {
+        let page = client.get(&format!("/control/v1/workflows/{id}/events?after={after}&limit={limit}")).await.ok()?;
+        let rows = page.as_array()?;
+        fold_running_tools(&mut active, rows);
+        if rows.len() < limit as usize {
+            let mut active: Vec<_> = active.into_values().collect();
+            active.sort_unstable_by_key(|(id, _, _)| *id);
+            let now = std::time::SystemTime::now();
+            let tick = Instant::now();
+            return Some(active.into_iter().map(|(_, tool, at)| (tool, audit_started_at(&at, now, tick))).collect());
+        }
+        after = rows.last()?.get("id")?.as_i64().filter(|next| *next > after)?;
+    }
+    // A truncated audit prefix cannot certify that a call is still running.
+    None
+}
+
 async fn snapshot(
     client: &RuntimeClient,
     id: &str,
@@ -1617,8 +1774,27 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                 let mut reconcile = tokio::time::interval(Duration::from_secs(5));
                 reconcile.tick().await;
                 let mut last_question_sync: Option<Instant> = None;
+                // Subscribe first; changes during the audit read can arrive on
+                // SSE and must win over the recovered state.
+                let restore_on_attach = cursor.is_none();
+                let restore_tools = async {
+                    if restore_on_attach {
+                        tokio::time::timeout(Duration::from_secs(3), running_tools(&client, &id))
+                            .await.ok().flatten()
+                    } else {
+                        None
+                    }
+                };
+                tokio::pin!(restore_tools);
+                let mut restore_pending = true;
                 loop {
                     tokio::select! {
+                        tools = &mut restore_tools, if restore_pending => {
+                            restore_pending = false;
+                            if let Some(tools) = tools {
+                                if !send(&tx, generation, UpdateKind::RunningTools(tools)).await { return; }
+                            }
+                        }
                         next = stream.next_event() => {
                             match next {
                                 Ok(Some(envelope)) => {
@@ -1635,6 +1811,12 @@ async fn follow(options: Options, tx: mpsc::Sender<Update>, generation: u64, id:
                                     // before the event clears its banner rather than waiting for polling.
                                     if event["type"] == "compression_applied" {
                                         let _ = snapshot(&client, &id, &tx, generation).await;
+                                    }
+                                    if let Some(compression) = ManualCompressionEvent::from_payload(&event) {
+                                        if !send(&tx, generation, UpdateKind::CompressionEvent {
+                                            session: id.clone(), instance: envelope.server_instance_id,
+                                            sequence: envelope.sequence, event: compression,
+                                        }).await { return; }
                                     }
                                     if !send(&tx, generation, UpdateKind::Event(event)).await { return; }
                                     // Older streams omit the question ID. Read it from the

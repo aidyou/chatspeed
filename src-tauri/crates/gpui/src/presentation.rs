@@ -601,6 +601,8 @@ pub struct FinishTaskView {
 pub enum AlertKind {
     Warning,
     Error,
+    Progress,
+    Success,
 }
 
 /// Vue keeps error records out of the transcript and surfaces the trailing one
@@ -2278,10 +2280,16 @@ fn tail_alert(messages: &[Message]) -> Option<AlertView> {
 }
 
 fn alert_view(message: &Message) -> AlertView {
-    let body = normalize_alert_content(&clean_text(&message.message));
+    let detail = message.metadata["user_error"]["message"]
+        .as_str()
+        .unwrap_or(&message.message);
+    let normalized = normalize_alert_content(&clean_text(detail));
+    let body = crate::types::workflow_error_detail(&normalized)
+        .unwrap_or_default()
+        .to_owned();
     let warning = message.metadata["category"].as_str() == Some("warning");
     AlertView {
-        key: message_key(message),
+        key: format!("msg-{}", message.id),
         kind: if warning {
             AlertKind::Warning
         } else {
@@ -3307,6 +3315,23 @@ mod tests {
         assert_eq!(alert.kind, AlertKind::Error);
         assert_eq!(alert.title, t!("error").to_string());
         assert_eq!(alert.body, "Range of input length should be [1, 1000000]");
+    }
+
+    #[test]
+    fn workflow_alert_prefers_projected_detail_and_hides_backend_urls() {
+        let raw = "Request to backend failed: error sending request for url (https://backend.example/v1/chat/\ncompletions)";
+        let mut message = Message {
+            id: 40,
+            role: "assistant".into(),
+            message: raw.into(),
+            is_error: true,
+            ..Message::default()
+        };
+        assert!(alert_view(&message).body.is_empty());
+        message.metadata = json!({"user_error":{"message":"Model is unavailable"}});
+        assert_eq!(alert_view(&message).body, "Model is unavailable");
+        message.metadata["user_error"]["message"] = json!(raw);
+        assert!(alert_view(&message).body.is_empty());
     }
 
     #[test]
