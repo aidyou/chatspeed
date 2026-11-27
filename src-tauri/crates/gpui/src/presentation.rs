@@ -133,8 +133,8 @@ fn strip_tags(text: &str) -> String {
     result
 }
 
-fn has_visible_text(text: &str) -> bool {
-    !collapse_whitespace(text).is_empty()
+pub fn has_visible_text(text: &str) -> bool {
+    text.chars().any(|ch| !ch.is_whitespace() && !matches!(ch, '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}'))
 }
 
 // ---------------------------------------------------------------------------
@@ -2277,14 +2277,20 @@ fn tail_alert(messages: &[Message]) -> Option<AlertView> {
     is_alert(last).then(|| alert_view(last))
 }
 
-fn alert_view(message: &Message) -> AlertView {
-    let detail = message.metadata["user_error"]["message"]
-        .as_str()
-        .unwrap_or(&message.message);
+pub fn alert_view(message: &Message) -> AlertView {
+    let projected = message.metadata["user_error"]["message"].as_str();
+    let detail = projected.unwrap_or(&message.message);
     let normalized = normalize_alert_content(&clean_text(detail));
-    let body = crate::types::workflow_error_detail(&normalized)
-        .unwrap_or_default()
-        .to_owned();
+    // Allow the public documentation link without relaxing filtering of request URLs.
+    const OPENCODE_DOCS: &str = "https://opencode.ai/v2/docs/console/go/#where-can-i-use-it";
+    let body = if projected.is_some() && normalized.strip_suffix(OPENCODE_DOCS)
+        .and_then(crate::types::workflow_error_detail)
+        .is_some()
+    {
+        normalized
+    } else {
+        crate::types::workflow_error_detail(&normalized).unwrap_or_default().to_owned()
+    };
     let warning = message.metadata["category"].as_str() == Some("warning");
     AlertView {
         key: format!("msg-{}", message.id),
@@ -3329,6 +3335,23 @@ mod tests {
         message.metadata = json!({"user_error":{"message":"Model is unavailable"}});
         assert_eq!(alert_view(&message).body, "Model is unavailable");
         message.metadata["user_error"]["message"] = json!(raw);
+        assert!(alert_view(&message).body.is_empty());
+    }
+
+    #[test]
+    fn opencode_retry_alert_preserves_the_public_documentation_link() {
+        let detail = "Request is missing x-opencode-session and cannot be routed efficiently. Please see https://opencode.ai/v2/docs/console/go/#where-can-i-use-it";
+        let mut message = Message {
+            id: 42,
+            role: "assistant".into(),
+            error_type: Some("llm_retry_exhausted".into()),
+            metadata: json!({"retry_attempt": 10, "retry_max_attempts": 10, "user_error": {"message": detail}}),
+            ..Message::default()
+        };
+        let alert = alert_view(&message);
+        assert_eq!(alert.body, detail);
+        assert!(alert.title.ends_with("(10/10)"));
+        message.metadata["user_error"]["message"] = json!(format!("https://private.example/v1 {detail}"));
         assert!(alert_view(&message).body.is_empty());
     }
 
