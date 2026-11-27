@@ -238,8 +238,8 @@ fn remember_edit_view(view: &Rc<WebView>) {
     });
 }
 
-/// Handle known Edit actions before AppKit can dispatch them to stale GPUI
-/// focus. Leave ordinary typing, deletion, IME and other shortcuts untouched.
+/// Give focused WebKit editing shortcuts before AppKit can dispatch them to
+/// stale GPUI focus. Leave unrelated app shortcuts and normal typing alone.
 #[cfg(target_os = "macos")]
 fn install_edit_shortcut_monitor() {
     use block2::RcBlock;
@@ -261,7 +261,7 @@ fn install_edit_shortcut_monitor() {
         }
         let handler = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
             // SAFETY: AppKit passes the key event this monitor was installed for.
-            if dispatch_webview_edit_action(unsafe { event.as_ref() }) {
+            if dispatch_webview_command_key(unsafe { event.as_ref() }) {
                 return std::ptr::null_mut();
             }
             event.as_ptr()
@@ -275,24 +275,40 @@ fn install_edit_shortcut_monitor() {
 }
 
 #[cfg(target_os = "macos")]
-fn dispatch_webview_edit_action(event: &objc2_app_kit::NSEvent) -> bool {
+fn is_webview_editing_key(key: &str) -> bool {
+    matches!(key, "a" | "c" | "v" | "x" | "z" | "\u{8}" | "\u{7f}" | "\u{f728}"
+        | "\u{f700}" | "\u{f701}" | "\u{f702}" | "\u{f703}" | "\u{f729}" | "\u{f72b}"
+        | "\u{f72c}" | "\u{f72d}")
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[::core::prelude::v1::test]
+fn webview_editing_keys_include_movement_and_deletion_but_not_app_shortcuts() {
+    for key in ["\u{f702}", "\u{f703}", "\u{7f}", "\u{f728}", "z", "v"] {
+        assert!(is_webview_editing_key(key));
+    }
+    for key in ["q", "w", "r", "", "\t"] {
+        assert!(!is_webview_editing_key(key));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn dispatch_webview_command_key(event: &objc2_app_kit::NSEvent) -> bool {
     use objc2_app_kit::{NSApplication, NSEventModifierFlags as Flags, NSView};
     use wry::WebViewExtMacOS;
 
     let flags = event.modifierFlags();
-    if !flags.contains(Flags::Command)
-        || flags.intersects(Flags::Control | Flags::Option | Flags::Shift | Flags::Function)
-    {
+    if !flags.contains(Flags::Command) {
         return false;
     }
-    let Some(characters) = event.charactersIgnoringModifiers() else { return false; };
-    let action = match characters.to_string().to_ascii_lowercase().as_str() {
-        "x" => objc2::sel!(cut:),
-        "c" => objc2::sel!(copy:),
-        "v" => objc2::sel!(paste:),
-        "a" => objc2::sel!(selectAll:),
-        _ => return false,
+    let Some(key) = event.charactersIgnoringModifiers().map(|key| key.to_string().to_ascii_lowercase()) else {
+        return false;
     };
+    // AppKit reports arrows and navigation keys as function-key characters.
+    // Scope the bridge to editing so window and application shortcuts still work.
+    if !is_webview_editing_key(&key) {
+        return false;
+    }
     let Some(marker) = objc2::MainThreadMarker::new() else { return false; };
     let Some(window) = event.window(marker).filter(|window| window.isKeyWindow()) else {
         return false;
@@ -310,15 +326,33 @@ fn dispatch_webview_edit_action(event: &objc2_app_kit::NSEvent) -> bool {
     let Some(view) = view else { return false; };
     let webview = view.webview();
     let native: &NSView = &webview;
-    let app = NSApplication::sharedApplication(marker);
-    // SAFETY: AppKit resolves these standard Edit selectors for its current
-    // responder chain. Never send an action to a target outside this WebView.
-    let target = unsafe { app.targetForAction_to_from(action, None, None) };
-    let Some(target) = target.and_then(|target| target.downcast::<NSView>().ok()) else {
-        return false;
-    };
-    target.isDescendantOf(native)
-        && unsafe { app.sendAction_to_from(action, Some(&target), None) }
+    // Keep the proven native pasteboard path (including images) for the standard
+    // Edit actions. Send everything else as the original event to WebKit, so
+    // it gets the modifiers, repeat state and its own editing/key bindings.
+    if !flags.intersects(Flags::Control | Flags::Option | Flags::Shift | Flags::Function) {
+        let action = match key.as_str() {
+            "x" => Some(objc2::sel!(cut:)),
+            "c" => Some(objc2::sel!(copy:)),
+            "v" => Some(objc2::sel!(paste:)),
+            "a" => Some(objc2::sel!(selectAll:)),
+            _ => None,
+        };
+        if let Some(action) = action {
+            let app = NSApplication::sharedApplication(marker);
+            // SAFETY: The selector is a standard AppKit Edit action. Its target
+            // must belong to the focused WebView, never the GPUI parent.
+            let target = unsafe { app.targetForAction_to_from(action, None, None) };
+            if let Some(target) = target.and_then(|target| target.downcast::<NSView>().ok()) {
+                if target.isDescendantOf(native)
+                    && unsafe { app.sendAction_to_from(action, Some(&target), None) }
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    responder.keyDown(event);
+    true
 }
 
 #[cfg(target_os = "macos")]
