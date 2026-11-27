@@ -64,39 +64,6 @@ const ALWAYS_ENABLED_SKILL_NAME: &str = "help";
 
 const MAIN_NO_TOOL_AUTHORIZATION_GUIDANCE: &str = "No tool was called. If a standalone question has already been answered, do not send another text-only reply: call `complete_workflow` with one complete non-empty `summary` and do not ask an optional follow-up. If work remains, call one concrete work tool. Use `ask_user` only for a decision required by the original objective. Only choose a mutating work tool when implementation is explicitly authorized; your own proposal, no user response, or this reminder is not authorization.";
 
-async fn await_with_stop<F, T>(
-    session_id: &str,
-    signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
-    future: F,
-) -> Result<T, WorkflowEngineError>
-where
-    F: Future<Output = T>,
-{
-    tokio::pin!(future);
-
-    loop {
-        tokio::select! {
-            biased;
-            signal = signal_rx.recv() => {
-                let Some(signal) = signal else {
-                    return Ok(future.await);
-                };
-                if matches!(parse_runtime_signal(&signal), RuntimeSignal::Stop) {
-                    log::info!(
-                        "[Workflow][session={}][phase=active_wait] Stop signal interrupted active operation",
-                        session_id
-                    );
-                    return Err(WorkflowEngineError::Cancelled(
-                        "Stopped during active operation".to_string(),
-                    ));
-                }
-                stash_runtime_signal(session_id, signal);
-            }
-            output = &mut future => return Ok(output),
-        }
-    }
-}
-
 /// Unified interface for ReAct executors (Planners and Runners).
 #[async_trait]
 pub trait ReActExecutor: Send + Sync {
@@ -3741,13 +3708,15 @@ impl WorkflowExecutor {
 
                     let workflow_signal = WorkflowSignal::parse(&signal_str);
 
-                    if !matches!(wait_reason_enum, Some(WaitReason::UserInput)) {
-                        if let RuntimeSignal::UserMessage {
-                            content,
-                            attached_context,
-                            metadata,
-                            queued_user_message_id,
-                        } = parse_runtime_signal(&signal_str)
+                    if let RuntimeSignal::UserMessage {
+                        content,
+                        attached_context,
+                        metadata,
+                        queued_user_message_id,
+                    } = parse_runtime_signal(&signal_str)
+                    {
+                        if wait_reason_enum != Some(WaitReason::UserInput)
+                            || queued_user_message_id.is_some()
                         {
                             log::info!(
                                 "[Workflow][session={}][phase=wait][event=user_message_queued] Queueing user message while wait_reason={:?}",
@@ -4159,8 +4128,7 @@ impl WorkflowExecutor {
                                     let tool_manager = self.tool_manager.clone();
                                     let global_tool_manager = self.global_tool_manager.clone();
                                     let tool_name_for_call = tool_name.clone();
-                                    let result = await_with_stop(
-                                        &self.session_id,
+                                    let result = self.await_tool_with_signals(
                                         &mut signal_rx,
                                         async move {
                                             if canonical_mcp_tool_name.is_some() {
@@ -4701,7 +4669,7 @@ impl WorkflowExecutor {
                             let global_tool_manager = self.global_tool_manager.clone();
                             let tool_name_for_call = tool_name.clone();
                             let result =
-                                await_with_stop(&self.session_id, &mut signal_rx, async move {
+                                self.await_tool_with_signals(&mut signal_rx, async move {
                                     if canonical_mcp_tool_name.is_some() {
                                         if mcp_tool_allowed {
                                             let mcp_tool_manager = if mcp_uses_session_manager {
@@ -6811,32 +6779,33 @@ impl WorkflowExecutor {
             }
 
             loop {
-                let next_result =
-                    match await_with_stop(&self.session_id, signal_rx, tool_futures.next()).await {
-                        Ok(next_result) => next_result,
-                        Err(error @ WorkflowEngineError::Cancelled(_)) => {
-                            let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
-                                "Tool execution interrupted because the workflow was cancelled"
-                                    .into(),
-                            ));
-                            for (tool_call_id, tool_name) in &started_tools {
-                                self.append_tool_terminal_event(
-                                    tool_call_id,
-                                    tool_name,
-                                    &cancelled_result,
-                                )
-                                .await;
-                                self.dispatch_tool_terminal_payload(
-                                    tool_call_id,
-                                    tool_name,
-                                    &cancelled_result,
-                                )
-                                .await;
-                            }
-                            return Err(error);
+                let next_result = match self
+                    .await_tool_with_signals(signal_rx, tool_futures.next())
+                    .await
+                {
+                    Ok(next_result) => next_result,
+                    Err(error @ WorkflowEngineError::Cancelled(_)) => {
+                        let cancelled_result = Err(crate::tools::ToolError::ExecutionFailed(
+                            "Tool execution interrupted because the workflow was cancelled".into(),
+                        ));
+                        for (tool_call_id, tool_name) in &started_tools {
+                            self.append_tool_terminal_event(
+                                tool_call_id,
+                                tool_name,
+                                &cancelled_result,
+                            )
+                            .await;
+                            self.dispatch_tool_terminal_payload(
+                                tool_call_id,
+                                tool_name,
+                                &cancelled_result,
+                            )
+                            .await;
                         }
-                        Err(error) => return Err(error),
-                    };
+                        return Err(error);
+                    }
+                    Err(error) => return Err(error),
+                };
                 let Some((id, name, args, call, res, duration_ms)) = next_result else {
                     break;
                 };
@@ -6884,7 +6853,7 @@ impl WorkflowExecutor {
             let tool_manager = self.tool_manager.clone();
             let global_tool_manager = self.global_tool_manager.clone();
             let tool_name_for_call = name.clone();
-            let final_res = match await_with_stop(&self.session_id, signal_rx, async move {
+            let final_res = match self.await_tool_with_signals(signal_rx, async move {
                 if canonical_mcp_tool_name.is_some() {
                     if mcp_tool_allowed {
                         let mcp_tool_manager = if mcp_uses_session_manager {
@@ -6976,9 +6945,8 @@ impl WorkflowExecutor {
             }
         }
 
-        // Signals received while a tool future was active are stashed by await_with_stop.
-        // Drain them before recording observations so accepted user messages become durable
-        // queued input at this turn's observe boundary, rather than missing this flush.
+        // Drain deferred controls before recording observations. Queued input is
+        // applied only by the run loop after those observations are recorded.
         if self.check_stop_signal(signal_rx).await? {
             return Err(WorkflowEngineError::Cancelled(
                 t!("workflow.cancelled").to_string(),
@@ -9109,6 +9077,65 @@ impl WorkflowExecutor {
         Ok(false)
     }
 
+    // Poll the in-flight tool and its control channel on the same executor. Queue
+    // mutations are durable before the UI sees them, but only the existing ReAct
+    // checkpoints may apply queued messages to the transcript and model context.
+    async fn await_tool_with_signals<F, T>(
+        &mut self,
+        signal_rx: &mut tokio::sync::mpsc::Receiver<String>,
+        future: F,
+    ) -> Result<T, WorkflowEngineError>
+    where
+        F: Future<Output = T>,
+    {
+        tokio::pin!(future);
+
+        loop {
+            tokio::select! {
+                biased;
+                signal = signal_rx.recv() => {
+                    let Some(signal) = signal else {
+                        return Ok(future.await);
+                    };
+                    match parse_runtime_signal(&signal) {
+                        RuntimeSignal::Stop => {
+                            log::info!(
+                                "[Workflow][session={}][phase=active_wait] Stop signal interrupted active operation",
+                                self.session_id
+                            );
+                            return Err(WorkflowEngineError::Cancelled(
+                                "Stopped during active operation".to_string(),
+                            ));
+                        }
+                        RuntimeSignal::UserMessage {
+                            content,
+                            attached_context,
+                            metadata,
+                            queued_user_message_id,
+                        } if self.current_wait_reason() != Some(WaitReason::UserInput)
+                            || queued_user_message_id.is_some() =>
+                        {
+                            self.enqueue_user_message(
+                                content,
+                                attached_context,
+                                metadata,
+                                queued_user_message_id,
+                            ).await?;
+                        }
+                        RuntimeSignal::Other {
+                            signal: Some(WorkflowSignal::RemoveQueuedUserMessage { queued_user_message_id }),
+                            ..
+                        } => {
+                            self.remove_queued_user_message(&queued_user_message_id).await?;
+                        }
+                        _ => stash_runtime_signal(&self.session_id, signal),
+                    }
+                }
+                output = &mut future => return Ok(output),
+            }
+        }
+    }
+
     /// Drains active-operation signals without consuming typed signals owned by a wait state.
     async fn check_stop_signal(
         &mut self,
@@ -9132,6 +9159,15 @@ impl WorkflowExecutor {
                     );
                     self.update_state(WorkflowState::Cancelled).await?;
                     return Ok(true);
+                }
+                RuntimeSignal::UserMessage {
+                    queued_user_message_id: None,
+                    ..
+                } if self.current_wait_reason() == Some(WaitReason::UserInput) => {
+                    // An answer belongs to the wait handler, even when the tool
+                    // batch is still finishing observations for this turn.
+                    stash_runtime_signal(&self.session_id, s);
+                    continue;
                 }
                 RuntimeSignal::UserMessage {
                     content,
@@ -9377,10 +9413,8 @@ impl WorkflowExecutor {
             return Ok(());
         }
 
-        if !self.pending_completion_reports.is_empty() {
-            self.pending_completion_reports.clear();
-            self.save_snapshot().await?;
-        }
+        // Invalidate the prior report in the same snapshot that admits this input.
+        self.pending_completion_reports.clear();
         self.next_llm_runtime_reminder = None;
 
         self.queued_user_messages.push_back((
@@ -9390,6 +9424,11 @@ impl WorkflowExecutor {
             metadata.clone(),
         ));
         self.save_snapshot().await?;
+        log::debug!(
+            "[Workflow][session={}][phase=queue] Admitted queued user message queued_id={}",
+            self.session_id,
+            queued_id
+        );
 
         let mut ui_metadata = metadata.unwrap_or_else(|| serde_json::json!({}));
         if !ui_metadata.is_object() {
@@ -11460,22 +11499,159 @@ mod recovery_tests {
 
     #[tokio::test]
     async fn active_wait_stop_interrupts_without_waiting_for_operation() {
+        let (_temp_dir, store) = create_test_store();
+        let mut executor = wrapper_test_executor(store, "active-wait-stop", Default::default());
         let (signal_tx, mut signal_rx) = mpsc::channel(1);
         signal_tx
             .send(r#"{"type":"stop"}"#.to_string())
             .await
             .expect("failed to send stop signal");
-        let started = std::time::Instant::now();
 
-        let result = await_with_stop(
-            "active-wait-stop-test",
-            &mut signal_rx,
-            tokio::time::sleep(Duration::from_secs(30)),
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            executor.await_tool_with_signals(&mut signal_rx, std::future::pending::<()>()),
         )
-        .await;
+        .await
+        .expect("stop must not wait for the tool");
 
         assert!(matches!(result, Err(WorkflowEngineError::Cancelled(_))));
-        assert!(started.elapsed() < Duration::from_millis(250));
+    }
+
+    #[tokio::test]
+    async fn active_tool_wait_acknowledges_durable_queue_without_applying_it() {
+        let (_temp_dir, store) = create_test_store();
+        let session_id = "active-tool-durable-queue";
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut executor = wrapper_test_executor(store.clone(), session_id, payloads.clone());
+        executor.state = WorkflowState::Executing;
+        let (signal_tx, mut signal_rx) = mpsc::channel(8);
+        let (release_tool, tool_released) = tokio::sync::oneshot::channel();
+        let (tool_started, wait_for_start) = tokio::sync::oneshot::channel();
+        let approval = json!({"type":"approval", "id":"pending-tool", "approved":true});
+        let queue_packet = |id: &str, content: &str| {
+            json!({"type":"user_message", "queued_user_message_id":id, "content":content})
+        };
+        let release_after_ack = async {
+            wait_for_start.await.expect("tool started");
+            for signal in [
+                queue_packet("first", "first message"),
+                queue_packet("withdraw", "withdraw this message"),
+                approval.clone(),
+                queue_packet("second", "second message"),
+                queue_packet("first", "duplicate delivery"),
+                json!({"type":"remove_queued_user_message", "queued_user_message_id":"withdraw"}),
+                queue_packet("withdraw", "late duplicate"),
+            ] {
+                signal_tx
+                    .send(signal.to_string())
+                    .await
+                    .expect("signal sent");
+            }
+
+            // The tool is deliberately blocked until the acknowledgement and its
+            // persisted recovery state are both observable.
+            loop {
+                let confirmed = payloads.lock().expect("payloads").iter().any(|payload| {
+                    matches!(payload, GatewayPayload::QueuedUserMessageRemoved {
+                        queued_user_message_id,
+                        cancelled_before_apply: true,
+                    } if queued_user_message_id == "withdraw")
+                });
+                if confirmed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            let ctx = store
+                .get_execution_context(session_id)
+                .expect("read execution snapshot")
+                .expect("durable queue snapshot");
+            assert_eq!(ctx.state, RuntimeState::Running);
+            assert_eq!(ctx.wait_reason, None);
+            assert_eq!(ctx.removed_queued_user_message_ids, ["withdraw"]);
+            assert_eq!(
+                ctx.queued_user_messages
+                    .iter()
+                    .map(|entry| entry.content.as_str())
+                    .collect::<Vec<_>>(),
+                ["first message", "second message"]
+            );
+            let acknowledgements: Vec<_> = payloads
+                .lock()
+                .expect("payloads")
+                .iter()
+                .filter_map(|payload| match payload {
+                    GatewayPayload::Message {
+                        message_id: None,
+                        metadata: Some(metadata),
+                        ..
+                    } if metadata["queue_status"] == "queued" => {
+                        metadata["queued_user_message_id"].as_str().map(str::to_owned)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(acknowledgements, ["first", "withdraw", "second"]);
+            let snapshot = store.get_workflow_snapshot(session_id).expect("read transcript");
+            assert!(snapshot.messages.iter().all(|message| message.role != "user"));
+            release_tool.send(()).expect("tool is still waiting");
+        };
+        let tool = async {
+            tool_started.send(()).expect("test awaiting tool start");
+            tool_released.await.expect("tool released");
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                executor.await_tool_with_signals(&mut signal_rx, tool),
+                release_after_ack
+            )
+        })
+        .await
+        .expect("the queue must be acknowledged before the tool finishes");
+        result.expect("tool finished");
+        assert_eq!(
+            take_stashed_runtime_signal(session_id),
+            Some(approval.to_string())
+        );
+        assert!(executor
+            .context
+            .ai_context_messages
+            .iter()
+            .all(|message| message.role != "user"));
+
+        // Simulate the existing Observe boundary, then apply the FIFO exactly once.
+        executor
+            .add_message_and_notify_internal(
+                "tool".into(),
+                "tool observation".into(),
+                None,
+                None,
+                Some(StepType::Observe),
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("record tool observation");
+        assert!(executor
+            .flush_queued_user_messages()
+            .await
+            .expect("flush after Observe"));
+        assert!(!executor
+            .flush_queued_user_messages()
+            .await
+            .expect("already drained"));
+        let snapshot = store
+            .get_workflow_snapshot(session_id)
+            .expect("read final transcript");
+        assert_eq!(
+            snapshot
+                .messages
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            ["tool observation", "first message", "second message"]
+        );
     }
 
     fn wrapper_test_executor(
@@ -12959,8 +13135,16 @@ mod recovery_tests {
                 .await
                 .expect("enter user-input wait");
 
-            let (signal_tx, signal_rx) = mpsc::channel(1);
+            let (signal_tx, signal_rx) = mpsc::channel(2);
             executor.attach_signal_rx(signal_rx);
+            signal_tx
+                .send(json!({
+                    "type": "user_message",
+                    "content": "follow-up, not an answer",
+                    "queued_user_message_id": "queued-during-ask",
+                }).to_string())
+                .await
+                .expect("queue a follow-up without answering ask_user");
             signal_tx
                 .send(
                     serde_json::json!({
@@ -12980,11 +13164,14 @@ mod recovery_tests {
                 RecoveryResult::SnapshotHit { context } => context,
                 other => panic!("expected durable snapshot recovery, got {other:?}"),
             };
-            let status = store
-                .get_workflow_snapshot(session_id)
-                .expect("read status")
-                .workflow
-                .status;
+            assert_eq!(context.queued_user_messages.len(), 1);
+            assert_eq!(
+                context.queued_user_messages[0].queued_user_message_id,
+                "queued-during-ask"
+            );
+            let snapshot = store.get_workflow_snapshot(session_id).expect("read status");
+            assert!(snapshot.messages.iter().all(|message| message.role != "user"));
+            let status = snapshot.workflow.status;
             let events = store.list_workflow_events(session_id).expect("read events");
             if runtime_shutdown {
                 assert_eq!(executor.state, WorkflowState::AwaitingUser);
