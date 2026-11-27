@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "chatspeed"
-version = "2.1.3"
+version = "2.1.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "chatspeed-cli"
-version = "2.1.3"
+version = "2.1.5"
 dependencies = [
  "chatspeed-contracts",
  "chatspeed-runtime-client",
@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "chatspeed-contracts"
-version = "2.1.3"
+version = "2.1.5"
 dependencies = [
  "hex",
  "serde",
@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "chatspeed-runtime"
-version = "2.1.3"
+version = "2.1.5"
 dependencies = [
  "axum",
  "chatspeed-contracts",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "chatspeed-runtime-backend"
-version = "2.1.3"
+version = "2.1.5"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1494,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "chatspeed-runtime-client"
-version = "2.1.3"
+version = "2.1.5"
 dependencies = [
  "chatspeed-contracts",
  "dirs 6.0.0",

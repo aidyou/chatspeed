@@ -206,6 +206,7 @@ mcp:
     client_start_failed: 'MCP client startup failed: %{error}'
     client_status_failed: 'MCP client status retrieval failed: %{error}'
     client_stop_failed: 'MCP client stop failed: %{error}'
+    invalid_install_response: The runtime returned an invalid MCP registration result. Refresh the server list before retrying.
     io_error: 'MCP I/O error: %{error}'
     not_found_error: MCP '%{name}' not found error
     serialization_error: 'MCP serialization/deserialization error: %{error}'

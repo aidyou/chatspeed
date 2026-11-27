@@ -2,6 +2,40 @@
 
 # Release Notes
 
+## [2.1.4]
+
+### New Features
+
+- **OpenCode support**: Requests to `opencode.ai` now send a stable `x-opencode-session` conversation id for better routing and prompt caching.
+- **GPT-6+ reasoning detection**: Models whose GPT major version is 6 or higher (for example `gpt-6.1-sol`, `gpt-6.2-terra`, `gpt-6.3-preview`) are now recognized as reasoning models. They resolve the OpenAI reasoning profile with a `medium` default effort and use the OpenAI thinking adapter on `api.openai.com`, including reasoning summaries. A new `gptMinMajor` matcher keeps future GPT versions covered automatically.
+- **OpenCode Go prompt cache key**: For OpenAI-protocol models marked `opencodeGoPromptCacheKey`, requests to `opencode.ai`'s `/inference/go/openai/v1/chat/completions` now carry a `prompt_cache_key` derived from the stable conversation id to improve prompt-cache reuse. The key is added only for trusted internal requests and never overrides a caller-supplied value.
+- **OpenCode Qwen 3.8 thinking adapter**: `qwen3.8-flash` and `qwen-3.8-flash` on `opencode.ai` now route through the Qwen thinking adapter, keeping `thinking_budget` while dropping the conflicting `reasoning_effort`.
+
+### Bug Fixes
+
+- **MCP add server on duplicates**: Adding an MCP server that already exists no longer implicitly starts the existing record. The add form now reads the nested registration result, enables only a newly registered server, refuses duplicates with an "already exists" message, and fails closed with a localized error when the registration id is missing or invalid.
+
+---
+
+## [2.1.3]
+
+### New Features
+
+- **Runtime-ready startup gate**: The app now shows an "Initializing ChatSpeed…" screen until the runtime reports ready, then mounts the main view. This avoids a blank window and stray interactions while startup permission prompts are still pending.
+- **Persisted approved plans**: Workflow now saves approved plans under TSID-based filenames and feeds the plan file into the execution context, so a plan survives across follow-up turns and session recovery.
+- **Readable ignore policy files**: `.gitignore` and `.csignore` can now be read, listed, searched, mentioned, diffed and staged, so your edits stay committable. Writes, edits, deletes, renames, output redirections and symlink aliases remain blocked, and Planning Mode still denies `git add`.
+
+### Bug Fixes
+
+- **Error alert sizing**: The workflow error alert now grows with its content. The fixed minimum height and the stray blank line under single-line errors are removed, so a one-line error no longer leaves a large empty gap at the bottom.
+
+### Maintenance
+
+- Ignore rules now match directory contents instead of the directories themselves, and `.pnpm-store` is ignored.
+- Removed obsolete temporary work artifacts and added model and SystemOne reference docs.
+
+---
+
 ## [2.1.2]
 
 ### Bug Fixes

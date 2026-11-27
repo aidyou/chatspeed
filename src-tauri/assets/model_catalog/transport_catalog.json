@@ -57,6 +57,15 @@
       "thinkingAdapter": "qwen"
     },
     {
+      "id": "qwen-opencode-3-8-flash",
+      "priority": 100,
+      "match": {
+        "model": ["qwen3.8-flash", "qwen-3.8-flash"],
+        "endpointHost": ["opencode.ai"]
+      },
+      "thinkingAdapter": "qwen"
+    },
+    {
       "id": "qwen-modelscope",
       "priority": 100,
       "match": {"profile": ["qwen-reasoning-family", "qwen-vision-family", "qwen3-thinking-family", "qwen-thinking-default-off-family"], "endpointHost": ["api-inference.modelscope.cn"]},

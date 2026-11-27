@@ -201,6 +201,7 @@ mcp:
     client_start_failed: 'MCP客户端启动失败: %{error}'
     client_status_failed: 'MCP客户端状态获取失败: %{error}'
     client_stop_failed: 'MCP客户端停止失败: %{error}'
+    invalid_install_response: 运行时返回了无效的 MCP 注册结果。请先刷新服务器列表，再决定是否重试。
     io_error: 'MCP I/O错误: %{error}'
     not_found_error: MCP '%{name}' 未找到错误
     serialization_error: 'MCP序列化/反序列化错误: %{error}'

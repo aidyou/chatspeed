@@ -238,6 +238,8 @@ pub fn pricing_config_from_model(model: &ModelsDevModel) -> Option<PricingConfig
 struct MatchPatterns {
     #[serde(default)]
     model: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gpt_min_major: Option<u32>,
     #[serde(default)]
     profile: Vec<String>,
     #[serde(default)]
@@ -439,8 +441,16 @@ fn merge_option<T: Clone + PartialEq>(
     Ok(())
 }
 
+fn model_matches(matcher: &MatchPatterns, model: &str) -> bool {
+    (matcher.model.is_empty() && matcher.gpt_min_major.is_none())
+        || matches(&matcher.model, model)
+        || matcher.gpt_min_major.is_some_and(|minimum| {
+            crate::ai::util::gpt_model_version(model).is_some_and(|(major, _)| major >= minimum)
+        })
+}
+
 fn profile_matches(rule: &ProfileRule, model: &str) -> bool {
-    rule.matcher.model.is_empty() || matches(&rule.matcher.model, model)
+    model_matches(&rule.matcher, model)
 }
 
 fn transport_matches(
@@ -457,7 +467,7 @@ fn transport_matches(
             .profile
             .iter()
             .any(|id| profile_ids.iter().any(|matched| matched == id));
-    let model_ok = rule.matcher.model.is_empty() || matches(&rule.matcher.model, model);
+    let model_ok = model_matches(&rule.matcher, model);
     let host_ok = ignore_host
         || rule.matcher.endpoint_host.is_empty()
         || host.is_some_and(|host| matches(&rule.matcher.endpoint_host, host));
@@ -1064,6 +1074,50 @@ mod tests {
                 field: "family"
             })
         ));
+    }
+
+    #[test]
+    fn gpt_6_and_newer_models_resolve_openai_reasoning_profile_and_transport() {
+        for model in [
+            "gpt-6.1-sol",
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
+            "openai/gpt-6.2-terra",
+            "openai@GPT-6.2-LUNA:batch",
+            "gpt-6.3-preview",
+            "gpt-10.1-preview",
+        ] {
+            let profile = resolve_model_profile(model).expect("catalog profile");
+            assert_eq!(profile.capabilities.reasoning, Some(true), "{model}");
+            assert_eq!(
+                profile.reasoning.unwrap().default_effort,
+                "medium",
+                "{model}"
+            );
+            assert_eq!(
+                resolve_transport(model, Some("https://api.openai.com/v1"), Some("openai"), None)
+                    .expect("catalog transport")
+                    .map(|(adapter, _)| adapter),
+                Some(ThinkingAdapter::OpenAi),
+                "{model}"
+            );
+            assert!(resolve_transport(
+                model,
+                Some("https://openrouter.ai/api/v1"),
+                Some("openai"),
+                None
+            )
+            .expect("catalog transport")
+            .is_none());
+        }
+
+        for model in ["gpt-4.1", "gpt-6oops", "my-gpt-6.2-sol"] {
+            let profile = resolve_model_profile(model).expect("catalog profile");
+            assert!(!profile
+                .matched_profile_ids
+                .iter()
+                .any(|id| id == "openai-reasoning-family"));
+        }
     }
 
     #[test]

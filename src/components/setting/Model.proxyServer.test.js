@@ -19,7 +19,11 @@ test('reasoning summary is available for GPT 5.6 and newer model versions', asyn
   assert.ok(match, 'reasoning summary model gate must remain independently testable')
   const supportsReasoningSummary = new Function('id', match[1])
 
-  for (const id of ['gpt-5.6', 'openai@gpt-5.6-luna-pro', 'openai/gpt-6-astra', 'gpt-6-sol', 'GPT-6-LUNA', 'gpt-7', 'gpt-10.2-preview']) {
+  for (const id of [
+    'gpt-5.6', 'openai@gpt-5.6-luna-pro', 'openai/gpt-6-astra', 'gpt-6-sol', 'GPT-6-LUNA',
+    'gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.2-terra', 'gpt-6.2-luna', 'gpt-6.3-preview',
+    'gpt-7', 'gpt-10.2-preview'
+  ]) {
     assert.equal(supportsReasoningSummary(id), true, id)
   }
   for (const id of ['gpt-5.4', 'gpt-5.5-preview', 'gpt-4.1', 'gpt-5.60x', 'gpt-6.1.2', 'my-gpt-6-sol', 'other/gpt-6oops', '']) {

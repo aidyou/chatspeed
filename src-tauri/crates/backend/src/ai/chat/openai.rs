@@ -1208,23 +1208,8 @@ pub(crate) fn build_prompt_cache_key(
 }
 
 fn supports_reasoning_summary(model_id: &str) -> bool {
-    let model_id = model_id.rsplit(['/', '@']).next().unwrap_or_default();
-    let normalized = model_id.trim().to_ascii_lowercase();
-    let Some(version) = normalized.strip_prefix("gpt-") else {
-        return false;
-    };
-    let mut parts = version
-        .split(['-', ':'])
-        .next()
-        .unwrap_or_default()
-        .split('.');
-    let Some(major) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
-        return false;
-    };
-    let Some(minor) = parts.next().unwrap_or("0").parse::<u32>().ok() else {
-        return false;
-    };
-    parts.next().is_none() && (major > 5 || (major == 5 && minor >= 6))
+    crate::ai::util::gpt_model_version(model_id)
+        .is_some_and(|(major, minor)| major > 5 || (major == 5 && minor >= 6))
 }
 
 fn responses_reasoning_summary(model_config: Option<&ModelConfig>) -> Option<&'static str> {
@@ -1693,6 +1678,11 @@ mod tests {
             "openai/gpt-6-astra",
             "openai@gpt-6-sol:batch",
             "GPT-6-LUNA",
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
+            "gpt-6.2-terra",
+            "gpt-6.2-luna",
+            "gpt-6.3-preview",
             "gpt-7",
             "gpt-10.2-preview",
         ] {
@@ -2014,16 +2004,27 @@ impl AiChatTrait for OpenAIChat {
             merged_metadata.extra.as_ref(),
             &chat_id,
         );
+        if let (Some(headers), Some(session_id)) = (headers_json.as_object_mut(), &prompt_cache_key)
+        {
+            headers.insert("x-cs-conversation-id".to_string(), json!(session_id));
+        }
         if use_responses_api {
-            // Codex-compatible headers so the upstream sees the same client
-            // surface as the official Codex CLI. Inserted as defaults only:
-            // user-configured custom headers always take precedence (ccproxy
-            // re-injects provider metadata headers after forwarding these).
+            // Keep the original Codex-compatible defaults for Responses requests.
             let codex_identity = prompt_cache_key.as_deref().unwrap_or(&chat_id);
             for (key, value) in codex_header_helper::codex_responses_headers(codex_identity) {
                 if let Some(headers_obj) = headers_json.as_object_mut() {
                     headers_obj.entry(key).or_insert(json!(value));
                 }
+            }
+        } else if let Some(headers_obj) = headers_json.as_object_mut() {
+            if !headers_obj
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("cs-user-agent"))
+            {
+                headers_obj.insert(
+                    "user-agent".to_string(),
+                    json!(concat!("chatspeed V", env!("CARGO_PKG_VERSION"))),
+                );
             }
         }
 

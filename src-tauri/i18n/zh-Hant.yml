@@ -201,6 +201,7 @@ mcp:
     client_start_failed: MCP 用戶端啟動失敗：%{error}
     client_status_failed: MCP 用戶端狀態獲取失敗：%{error}
     client_stop_failed: MCP 用戶端停止失敗：%{error}
+    invalid_install_response: 執行階段傳回無效的 MCP 註冊結果。請先重新整理伺服器清單，再決定是否重試。
     io_error: MCP I/O 錯誤：%{error}
     not_found_error: MCP '%{name}' 未找到錯誤
     serialization_error: MCP 序列化/反序列化錯誤：%{error}

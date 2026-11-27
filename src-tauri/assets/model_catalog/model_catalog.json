@@ -435,7 +435,7 @@
     {
       "id": "openai-reasoning-family",
       "priority": 100,
-      "match": { "model": ["o1*", "o3*", "o4*", "gpt-5*"] },
+      "match": { "model": ["o1*", "o3*", "o4*", "gpt-5*"], "gptMinMajor": 6 },
       "family": "openai",
       "capabilities": { "reasoning": true, "functionCall": true },
       "reasoning": {
