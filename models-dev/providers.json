@@ -622,7 +622,7 @@
       "documentationUrl": "https://developers.cloudflare.com/ai-gateway/",
       "id": "cloudflare-ai-gateway",
       "logo": "https://models.dev/logos/cloudflare-ai-gateway.svg",
-      "modelCount": 84,
+      "modelCount": 85,
       "name": "Cloudflare AI Gateway",
       "responses": false
     },
@@ -663,7 +663,7 @@
       "documentationUrl": "https://concentrate.ai/docs",
       "id": "concentrate",
       "logo": "https://models.dev/logos/concentrate.svg",
-      "modelCount": 165,
+      "modelCount": 164,
       "name": "Concentrate",
       "protocol": "openai",
       "responses": false
@@ -742,7 +742,7 @@
       "documentationUrl": "https://deepinfra.com/models",
       "id": "deepinfra",
       "logo": "https://models.dev/logos/deepinfra.svg",
-      "modelCount": 75,
+      "modelCount": 77,
       "name": "Deep Infra",
       "responses": false
     },
@@ -913,7 +913,7 @@
       "documentationUrl": "https://fireworks.ai/docs/",
       "id": "fireworks-ai",
       "logo": "https://models.dev/logos/fireworks-ai.svg",
-      "modelCount": 37,
+      "modelCount": 42,
       "name": "Fireworks AI",
       "protocol": "openai",
       "responses": false
@@ -1141,7 +1141,7 @@
       "documentationUrl": "https://huggingface.co/docs/inference-providers",
       "id": "huggingface",
       "logo": "https://models.dev/logos/huggingface.svg",
-      "modelCount": 120,
+      "modelCount": 127,
       "name": "Hugging Face",
       "protocol": "huggingface",
       "responses": false
@@ -1161,7 +1161,7 @@
       "documentationUrl": "https://hyper.charm.land",
       "id": "hyper",
       "logo": "https://models.dev/logos/hyper.svg",
-      "modelCount": 20,
+      "modelCount": 19,
       "name": "Charm Hyper",
       "protocol": "openai",
       "responses": false
@@ -1401,7 +1401,7 @@
       "documentationUrl": "https://kilo.ai",
       "id": "kilo",
       "logo": "https://models.dev/logos/kilo.svg",
-      "modelCount": 458,
+      "modelCount": 460,
       "name": "Kilo Gateway",
       "protocol": "openai",
       "responses": false
@@ -1531,7 +1531,7 @@
       "documentationUrl": "https://llmgateway.io/docs",
       "id": "llmgateway-providers",
       "logo": "https://models.dev/logos/llmgateway-providers.svg",
-      "modelCount": 512,
+      "modelCount": 518,
       "name": "LLM Gateway",
       "protocol": "openai",
       "responses": false
@@ -1885,7 +1885,7 @@
       "documentationUrl": "https://docs.nano-gpt.com",
       "id": "nano-gpt",
       "logo": "https://models.dev/logos/nano-gpt.svg",
-      "modelCount": 609,
+      "modelCount": 610,
       "name": "NanoGPT",
       "protocol": "openai",
       "responses": false
@@ -2100,7 +2100,7 @@
       "documentationUrl": "https://openrouter.ai/models",
       "id": "openrouter",
       "logo": "https://models.dev/logos/openrouter.svg",
-      "modelCount": 372,
+      "modelCount": 375,
       "name": "OpenRouter",
       "protocol": "openai",
       "responses": false
@@ -2272,7 +2272,7 @@
       "documentationUrl": "https://docs.primeintellect.ai/inference/overview",
       "id": "prime",
       "logo": "https://models.dev/logos/prime.svg",
-      "modelCount": 72,
+      "modelCount": 73,
       "name": "Prime Inference",
       "protocol": "openai",
       "responses": false
@@ -2371,7 +2371,7 @@
       "documentationUrl": "https://requesty.ai/solution/llm-routing/models",
       "id": "requesty",
       "logo": "https://models.dev/logos/requesty.svg",
-      "modelCount": 177,
+      "modelCount": 175,
       "name": "Requesty",
       "protocol": "openai",
       "responses": false
@@ -2764,7 +2764,7 @@
       "documentationUrl": "https://cloud.tencent.com/document/product/1823/130050",
       "id": "tencent-tokenhub",
       "logo": "https://models.dev/logos/tencent-tokenhub.svg",
-      "modelCount": 24,
+      "modelCount": 26,
       "name": "Tencent TokenHub",
       "protocol": "openai",
       "responses": false
@@ -3311,9 +3311,9 @@
     }
   ],
   "source": {
-    "catalogSha256": "7c13ed0c1108085fe15e7dde6a9a2ecd1e1fefba023824e127bc62ab2e98ead1",
-    "generatedAt": "2026-11-26T12:38:32Z",
+    "catalogSha256": "bda9e41cf330a1b3d1051304030c11d74b3a00eecbca02cd5eeebb847599c821",
+    "generatedAt": "2026-11-27T12:25:05Z",
     "repository": "https://github.com/anomalyco/models.dev",
-    "revision": "a4ab87c6be4922d607551a571c2a8704d068af43"
+    "revision": "d66aa6c9c4b4f75033fd55c9b0b0fcf9ccd2a472"
   }
 }
