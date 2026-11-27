@@ -36,6 +36,15 @@ pub enum StepType {
 }
 
 #[cfg(not(feature = "desktop"))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowNotificationCode {
+    ManualCompressionUnavailable,
+    #[serde(other)]
+    Unknown,
+}
+
+#[cfg(not(feature = "desktop"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GatewayPayload {
@@ -226,6 +235,8 @@ pub enum GatewayPayload {
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         category: Option<String>, // e.g., "info", "warning", "error", "fun"
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<WorkflowNotificationCode>,
     },
     /// Auto-approved tools list updated
     AutoApprovedToolsUpdated {

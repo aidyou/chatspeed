@@ -1433,6 +1433,8 @@ async fn follow_decisions(options: Options, tx: mpsc::Sender<Update>, id: String
     let mut cursor: Option<String> = None;
     let mut state = NotificationState::default();
     let mut published = Vec::new();
+    let mut reminder_pending = false;
+    let mut message_cursor: Option<i64> = None;
     loop {
         if let Some(client) = native::connect(&options).await {
             match client.stream_workflow(&id, cursor.as_deref()).await {
@@ -1443,6 +1445,9 @@ async fn follow_decisions(options: Options, tx: mpsc::Sender<Update>, id: String
                         if let Ok(snapshot) =
                             client.get(&format!("/control/v1/workflows/{id}")).await
                         {
+                            message_cursor = snapshot["messages"].as_array().and_then(|messages| {
+                                messages.iter().filter_map(|message| message["id"].as_i64()).max()
+                            });
                             let reminder = state.snapshot(&id, &snapshot);
                             let pending = state.pending();
                             if pending != published || reminder.is_some() {
@@ -1480,6 +1485,34 @@ async fn follow_decisions(options: Options, tx: mpsc::Sender<Update>, id: String
                                 }
                                 cursor =
                                     Some(chatspeed_runtime_client::stream_envelope_cursor(&event));
+                                // Keep lightweight footer feedback alive without forwarding background transcripts.
+                                if let Some(compression) = ManualCompressionEvent::from_payload(&event.payload) {
+                                    if !send(&tx, 0, UpdateKind::CompressionEvent {
+                                        session: id.clone(), instance: event.server_instance_id.clone(),
+                                        sequence: event.sequence, event: compression,
+                                    }).await {
+                                        return;
+                                    }
+                                }
+                                if event.payload["type"] == "message" {
+                                    let id = event.payload["message_id"].as_str().and_then(|id| id.parse().ok());
+                                    message_cursor = message_cursor.max(id);
+                                }
+                                if let Some(reminder) = WorkflowReminder::from_payload(&event.payload) {
+                                    let publish = match &reminder {
+                                        WorkflowReminder::Retry { .. } | WorkflowReminder::Notification { .. } => {
+                                            reminder_pending = true;
+                                            true
+                                        }
+                                        WorkflowReminder::Activity => std::mem::take(&mut reminder_pending),
+                                        WorkflowReminder::EndRetry => reminder_pending,
+                                    };
+                                    if publish && !send(&tx, 0, UpdateKind::WorkflowReminder {
+                                        session: id.clone(), through: message_cursor, event: reminder,
+                                    }).await {
+                                        return;
+                                    }
+                                }
                                 if !NotificationState::handles(&event.payload) {
                                     continue;
                                 }

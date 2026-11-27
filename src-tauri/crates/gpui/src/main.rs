@@ -568,7 +568,6 @@ fn apply_workflow_event(model: &mut Model, feedback: &mut SessionFeedback, event
         Some("chunk" | "reasoning_chunk") => event["content"]
             .as_str()
             .is_some_and(presentation::has_visible_text),
-        Some("retry_status") => event["next_retry_in_seconds"].as_u64().is_some_and(|seconds| seconds > 0),
         Some("tool_started" | "tool_completed" | "tool_failed" | "approval_requested" | "confirm") => true,
         _ => false,
     };
@@ -583,7 +582,13 @@ fn apply_workflow_event(model: &mut Model, feedback: &mut SessionFeedback, event
 
 fn apply_feedback_snapshot(model: &mut Model, feedback: &mut SessionFeedback, page: chatspeed_gpui::types::Page) {
     let before = latest_message_id(model);
+    let fetched_from = page.fetched_from;
     model.page(page, false);
+    if (chimes::terminal(&model.state) || model.state == "stopped")
+        && feedback.retry.as_ref().zip(fetched_from).is_some_and(|(retry, fetched)| retry.received < fetched)
+    {
+        feedback.retry = None;
+    }
     feedback.observe_messages(model, before);
 }
 
@@ -592,12 +597,49 @@ fn apply_feedback_snapshot(model: &mut Model, feedback: &mut SessionFeedback, pa
 #[derive(Default)]
 struct SessionFeedback {
     current: Option<presentation::AlertView>,
+    notification: Option<presentation::AlertView>,
+    retry: Option<RetryCountdown>,
     compression_alert: Option<presentation::AlertView>,
     seen_alert: Option<i64>,
     // Outer None means the session has not been hydrated yet.
     seen_compression: Option<Option<i64>>,
     compression_cursor: Option<(String, u64)>,
     compression: Option<CompressionProgress>,
+}
+
+struct RetryCountdown {
+    received: Instant,
+    deadline: Instant,
+    attempt: u64,
+    total: u64,
+    kind: String,
+    summary: String,
+}
+
+impl RetryCountdown {
+    fn remaining(&self, now: Instant) -> u64 {
+        let remaining = self.deadline.saturating_duration_since(now);
+        remaining.as_secs() + u64::from(remaining.subsec_nanos() != 0)
+    }
+
+    fn view(&self, now: Instant) -> Option<presentation::AlertView> {
+        let seconds = self.remaining(now);
+        if seconds == 0 {
+            return None;
+        }
+        let title = if self.kind == "rate_limited" {
+            t!("retry_rate_limited", attempt = self.attempt, total = self.total, seconds = seconds)
+        } else {
+            let summary = if self.summary.is_empty() { String::new() } else { format!(" — {}", self.summary) };
+            t!("retry_classified", kind = self.kind, summary = summary, attempt = self.attempt, total = self.total, seconds = seconds)
+        };
+        Some(presentation::AlertView {
+            key: "workflow-retry".into(),
+            kind: presentation::AlertKind::Warning,
+            title: title.into_owned(),
+            body: String::new(),
+        })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -609,6 +651,41 @@ struct CompressionProgress {
 }
 
 impl SessionFeedback {
+    fn apply_reminder(&mut self, event: WorkflowReminder, received: Instant, through: Option<i64>) {
+        match event {
+            WorkflowReminder::Retry { .. } | WorkflowReminder::Notification { .. }
+                if through.is_some() && self.seen_alert > through => return,
+            WorkflowReminder::Retry { attempt, total, seconds, kind, summary } => {
+                let Some(deadline) = received.checked_add(Duration::from_secs(u64::from(seconds))) else { return; };
+                self.retry = Some(RetryCountdown { received, deadline, attempt, total, kind, summary });
+                self.clear_alert(through);
+                self.notification = None;
+            }
+            WorkflowReminder::Notification { warning, message } => {
+                self.clear_alert(through);
+                self.notification = Some(presentation::AlertView {
+                    key: "workflow-notification".into(),
+                    kind: if warning { presentation::AlertKind::Warning } else { presentation::AlertKind::Error },
+                    title: if warning { t!("warning").into_owned() } else { t!("error").into_owned() },
+                    body: message,
+                });
+            }
+            WorkflowReminder::Activity => {
+                self.retry = None;
+                self.notification = None;
+            }
+            WorkflowReminder::EndRetry => self.retry = None,
+        }
+    }
+
+    fn expire_retry(&mut self, now: Instant) -> bool {
+        if self.retry.as_ref().is_some_and(|retry| retry.remaining(now) == 0) {
+            self.retry = None;
+            return true;
+        }
+        false
+    }
+
     fn observe_messages(&mut self, model: &Model, before: Option<i64>) {
         // Only new durable replies advance the alert. A history refresh may
         // enrich the current error, but must not revive a consumed one.
@@ -619,11 +696,15 @@ impl SessionFeedback {
             if Some(message.id) > self.seen_alert {
                 self.seen_alert = Some(message.id);
                 self.current = Some(presentation::alert_view(message));
+                self.retry = None;
+                self.notification = None;
             } else if self.current.as_ref().is_some_and(|alert| alert.key == format!("msg-{}", message.id)) {
                 self.current = Some(presentation::alert_view(message));
             }
         } else if Some(message.id) > before.max(self.seen_alert) {
             self.clear_alert(Some(message.id));
+            self.retry = None;
+            self.notification = None;
         }
     }
 
@@ -647,7 +728,6 @@ impl SessionFeedback {
 
     fn clear_alert(&mut self, through: Option<i64>) {
         self.current = None;
-        self.compression_alert = None;
         self.seen_alert = self.seen_alert.max(through);
     }
 
@@ -655,6 +735,7 @@ impl SessionFeedback {
         use presentation::AlertKind::{Error, Warning};
         match event {
             ManualCompressionEvent::Running => {
+                self.compression_alert = None;
                 self.compression.get_or_insert(CompressionProgress {
                     since: now,
                     running: true,
@@ -666,7 +747,8 @@ impl SessionFeedback {
                 self.compression = None;
                 self.compression_alert = None;
             }
-            ManualCompressionEvent::Unavailable if self.compression.take().is_some() => {
+            ManualCompressionEvent::Unavailable => {
+                self.compression = None;
                 self.set_alert("compression-feedback", Warning, t!("compression_unavailable").into_owned());
             }
             ManualCompressionEvent::Stopped => {
@@ -677,7 +759,6 @@ impl SessionFeedback {
                     }
                 }
             }
-            _ => {}
         }
     }
 
@@ -741,7 +822,13 @@ impl SessionFeedback {
     }
 
     fn view(&self) -> Option<Row> {
-        self.current.clone().map(Row::Alert)
+        self.tail_alert(Instant::now()).map(Row::Alert)
+    }
+
+    fn tail_alert(&self, now: Instant) -> Option<presentation::AlertView> {
+        self.current.clone()
+            .or_else(|| self.notification.clone())
+            .or_else(|| self.retry.as_ref()?.view(now))
     }
 }
 
@@ -3803,6 +3890,18 @@ impl Observer {
                     cx.notify();
                     continue;
                 }
+                UpdateKind::WorkflowReminder { session, through, event } => {
+                    let selected = self.selected.as_ref() == Some(&session);
+                    let feedback = self.feedback.entry(Some(session)).or_default();
+                    feedback.apply_reminder(event, update.queued, through);
+                    if selected {
+                        if self.timeline_scroll.follow {
+                            self.timeline_scroll.scroll_pending = true;
+                        }
+                        cx.notify();
+                    }
+                    continue;
+                }
                 UpdateKind::CompressionEvent { session, instance, sequence, event } => {
                     let feedback = self.feedback.entry(Some(session)).or_default();
                     if feedback.compression_cursor.as_ref().is_some_and(|(server, seen)| server == &instance && *seen >= sequence) {
@@ -3996,8 +4095,12 @@ impl Observer {
         }
         self.settle_queue_edit(cx);
         let now = Instant::now();
-        for feedback in self.feedback.values_mut() {
+        let retry_expired = self.feedback.values_mut().fold(false, |expired, feedback| {
             dirty |= feedback.expire_compression(now);
+            feedback.expire_retry(now) || expired
+        });
+        if retry_expired {
+            cx.notify();
         }
         if self
             .sound_player
@@ -4024,9 +4127,9 @@ impl Observer {
         }
         // The live status line counts seconds; a running task needs a repaint
         // even when no event arrives.
-        let compression_pending = self.feedback.get(&self.selected)
-            .is_some_and(|feedback| feedback.compression.is_some());
-        if (self.workflow_running() || compression_pending)
+        let reminder_ticking = self.feedback.get(&self.selected)
+            .is_some_and(|feedback| feedback.compression.is_some() || feedback.retry.is_some());
+        if (self.workflow_running() || reminder_ticking)
             && self.last_tick.elapsed() >= Duration::from_secs(1)
         {
             self.last_tick = Instant::now();
@@ -6522,7 +6625,8 @@ impl Render for Observer {
                         .child(div().text_size(px(12.)).text_color(muted).child(hint)),
                 ));
             }
-            for alert in [&feedback.current, &feedback.compression_alert].into_iter().flatten() {
+            let tail = feedback.tail_alert(Instant::now());
+            for alert in tail.iter().chain(feedback.compression_alert.iter()) {
                 let row = Row::Alert(alert.clone());
                 content = content.child(div().w_full().min_w_0().mb(px(20.)).child(
                     self.row(&row, None, MsgScope::Main, cx),
@@ -6956,6 +7060,85 @@ mod tests {
         apply_workflow_event(&mut model, &mut feedback, json!({"type":"chunk","content":"answer"}));
         apply_workflow_event(&mut model, &mut feedback, error);
         assert!(feedback.view().is_none());
+    }
+
+    #[test]
+    fn background_reminders_are_session_local_and_keep_the_original_deadline() {
+        use super::{apply_feedback_snapshot, ManualCompressionEvent, Model, SessionFeedback, WorkflowReminder};
+        use chatspeed_gpui::types::Page;
+        use std::{collections::BTreeMap, time::{Duration, Instant}};
+
+        let now = Instant::now();
+        let mut sessions = BTreeMap::from([("a", SessionFeedback::default()), ("b", SessionFeedback::default())]);
+        let retry = |attempt| WorkflowReminder::from_payload(&json!({
+            "type":"retry_status", "attempt":attempt, "total_attempts":10,
+            "next_retry_in_seconds":13, "error_kind":"rate_limited",
+        })).unwrap();
+        {
+            let a = sessions.get_mut("a").unwrap();
+            a.apply_compression(ManualCompressionEvent::Running, now);
+            a.apply_reminder(retry(5), now, Some(42));
+            let initial = a.tail_alert(now).unwrap();
+            assert_eq!(initial.key, "workflow-retry");
+            assert!(initial.title.contains("5/10") && initial.title.contains("13"));
+        }
+        assert!(sessions["b"].tail_alert(now).is_none());
+        assert!(sessions["b"].compression_hint().is_none());
+        let a = sessions.get_mut("a").unwrap();
+        let reopened = now + Duration::from_secs(4);
+        apply_feedback_snapshot(&mut Model::default(), a, Page {
+            status: "executing".into(), fetched_from: Some(reopened), ..Page::default()
+        });
+        assert_eq!(a.retry.as_ref().unwrap().remaining(reopened), 9);
+        assert!(a.compression_hint().is_some());
+        a.apply_reminder(retry(6), reopened, Some(42));
+        assert_eq!(a.retry.as_ref().unwrap().attempt, 6);
+        assert_eq!(a.retry.as_ref().unwrap().remaining(reopened), 13);
+        let deadline = reopened + Duration::from_secs(13);
+        assert!(a.tail_alert(deadline).is_none());
+        assert!(a.expire_retry(deadline));
+        assert!(a.compression_hint().is_some());
+        a.apply_compression(ManualCompressionEvent::Applied, deadline);
+        assert!(a.compression_hint().is_none());
+    }
+
+    #[test]
+    fn workflow_reminders_do_not_revive_consumed_errors_or_cross_compression() {
+        use super::{apply_feedback_snapshot, apply_workflow_event, ManualCompressionEvent, Model, SessionFeedback, WorkflowReminder};
+        use chatspeed_gpui::types::{Message, Page};
+        use std::time::Instant;
+
+        let now = Instant::now();
+        let mut feedback = SessionFeedback::default();
+        let retry = || WorkflowReminder::from_payload(&json!({
+            "type":"retry_status", "attempt":5, "total_attempts":10, "next_retry_in_seconds":13,
+        })).unwrap();
+        feedback.apply_compression(ManualCompressionEvent::Running, now);
+        feedback.apply_compression(ManualCompressionEvent::Unavailable, now);
+        feedback.apply_reminder(retry(), now, Some(42));
+        let notification = || WorkflowReminder::from_payload(&json!({
+            "type":"notification", "category":"warning", "message":"Provider is switching regions",
+        })).unwrap();
+        feedback.apply_reminder(notification(), now, Some(42));
+        let mut model = Model::default();
+        apply_feedback_snapshot(&mut model, &mut feedback, Page {
+            messages: vec![Message { id: 42, role: "assistant".into(), is_error: true, ..Message::default() }],
+            ..Page::default()
+        });
+        assert_eq!(feedback.tail_alert(now).unwrap().key, "workflow-notification");
+        feedback.apply_reminder(WorkflowReminder::EndRetry, now, Some(42));
+        assert!(feedback.retry.is_none());
+        assert!(feedback.notification.is_some());
+        assert!(feedback.compression_alert.is_some());
+        apply_workflow_event(&mut model, &mut feedback, json!({
+            "type":"message", "message_id":"43", "role":"assistant", "is_error":true,
+            "error_type":"llm_retry_exhausted", "content":"failed",
+        }));
+        assert_eq!(feedback.tail_alert(now).unwrap().key, "msg-43");
+        feedback.apply_reminder(retry(), now, Some(42));
+        assert!(feedback.retry.is_none());
+        assert_eq!(feedback.tail_alert(now).unwrap().key, "msg-43");
+        assert!(feedback.compression_alert.is_some());
     }
 
     #[test]

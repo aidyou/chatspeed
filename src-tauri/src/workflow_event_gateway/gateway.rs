@@ -326,6 +326,7 @@ mod tests {
         let notification = GatewayPayload::Notification {
             message: "note".to_string(),
             category: None,
+            code: None,
         };
         let emissions = batcher.process(notification);
         assert_eq!(emissions.len(), 1);

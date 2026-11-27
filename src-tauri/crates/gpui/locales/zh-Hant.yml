@@ -297,6 +297,8 @@ result_label: 結果
 remove_attachment: "移除附件"
 resume_agent_missing: 此工作流沒有已儲存的智慧體。
 resume_runtime_unavailable: 無法連線至執行階段以繼續工作流。
+retry_classified: "正在重試（%{kind}）%{summary}：第 %{attempt}/%{total} 次，等待 %{seconds} 秒..."
+retry_rate_limited: "請求頻率過快，正在重試 (第 %{attempt}/%{total} 次)，等待 %{seconds} 秒..."
 rewind_confirm: 確定移除最近一步並回退會話嗎？
 rewind_done: 已回退會話
 rewind_unavailable: 目前無法回退會話
@@ -511,6 +513,7 @@ unit_minute: 分
 unit_second: 秒
 unpin: 取消置頂
 untitled: 未命名工作流
+warning: 警告
 window_error: 無法打開 GPUI 窗口
 worker_error: 無法啟動觀察器後臺線程
 workflow_resume_pending: 正在繼續工作流…

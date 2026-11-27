@@ -297,6 +297,8 @@ result_label: Result
 remove_attachment: "Remove attachment"
 resume_agent_missing: The workflow has no saved agent.
 resume_runtime_unavailable: Could not connect to the runtime to resume the workflow.
+retry_classified: "Retrying (%{kind})%{summary}: attempt %{attempt}/%{total}, waiting %{seconds} seconds..."
+retry_rate_limited: "Request too fast, retrying (attempt %{attempt}/%{total}), waiting %{seconds} seconds..."
 rewind_confirm: Rewind this conversation by removing its latest step?
 rewind_done: Conversation rewound
 rewind_unavailable: The conversation cannot be rewound right now
@@ -511,6 +513,7 @@ unit_minute: m
 unit_second: s
 unpin: Unpin
 untitled: Untitled workflow
+warning: Warning
 window_error: Cannot open GPUI window
 worker_error: Cannot start observer worker
 workflow_resume_pending: Resuming workflow…

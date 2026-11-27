@@ -440,8 +440,7 @@ impl ManualCompressionEvent {
                 Self::Stopped
             }),
             "compression_applied" => Some(Self::Applied),
-            // The runtime's only warning notification is the no-safe-segment case.
-            "notification" if event["category"] == "warning" => Some(Self::Unavailable),
+            "notification" if event["code"] == "manual_compression_unavailable" => Some(Self::Unavailable),
             _ => None,
         }
     }
@@ -459,6 +458,84 @@ pub enum ManualCompressionError {
 pub(crate) fn workflow_error_detail(detail: &str) -> Option<&str> {
     let detail = detail.trim();
     (!detail.is_empty() && !detail.contains("://")).then_some(detail)
+}
+
+/// Small presentation updates from the subscription that stays live while switching chats.
+pub enum WorkflowReminder {
+    Retry { attempt: u64, total: u64, seconds: u32, kind: String, summary: String },
+    Notification { warning: bool, message: String },
+    Activity,
+    EndRetry,
+}
+
+impl WorkflowReminder {
+    pub fn from_payload(event: &Value) -> Option<Self> {
+        match event["type"].as_str()? {
+            "retry_status" => {
+                let seconds = u32::try_from(event["next_retry_in_seconds"].as_u64()?).ok()?;
+                if seconds == 0 {
+                    return Some(Self::EndRetry);
+                }
+                let attempt = event["attempt"].as_u64()?;
+                let total = event["total_attempts"].as_u64()?;
+                (attempt > 0 && attempt <= total).then(|| Self::Retry {
+                    attempt, total, seconds,
+                    kind: event["error_kind"].as_str().filter(|kind| !kind.is_empty()
+                        && kind.len() <= 40 && kind.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
+                        .unwrap_or("unknown").to_ascii_lowercase(),
+                    summary: workflow_error_detail(event["error_summary"].as_str().unwrap_or_default())
+                        .unwrap_or_default().chars().take(160).collect(),
+                })
+            }
+            "notification" => {
+                if ManualCompressionEvent::from_payload(event).is_some() {
+                    return None;
+                }
+                let warning = match event["category"].as_str()? {
+                    "warning" => true,
+                    "error" => false,
+                    _ => return None,
+                };
+                let message = workflow_error_detail(event["message"].as_str()?)?;
+                Some(Self::Notification { warning, message: message.chars().take(4096).collect() })
+            }
+            "state" if event["state"].as_str().is_some_and(|state| crate::chimes::terminal(state) || state == "stopped") => Some(Self::EndRetry),
+            "chunk" | "reasoning_chunk" if event["content"].as_str().is_some_and(crate::presentation::has_visible_text) => Some(Self::Activity),
+            "message" if matches!(event["role"].as_str(), Some("assistant" | "tool"))
+                && event["metadata"]["ui_visibility"] != "hide"
+                && (event["role"] == "tool"
+                    || event["is_error"] == true
+                    || event["metadata"]["is_error"] == true
+                    || event["error_type"].as_str().is_some_and(|kind| !kind.is_empty())
+                    || ["content", "reasoning"].into_iter().any(|field| {
+                        event[field].as_str().is_some_and(crate::presentation::has_visible_text)
+                    })
+                    || event["metadata"]["tool_calls"].as_array().is_some_and(|calls| !calls.is_empty())) => Some(Self::Activity),
+            "tool_started" | "tool_completed" | "tool_failed" | "approval_requested" | "confirm" => Some(Self::Activity),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn workflow_reminder_routes_only_the_tagged_compression_warning_to_compression() {
+    use serde_json::json;
+
+    let mut notification = json!({"type":"notification","category":"warning", "message":"Provider is busy"});
+    assert_eq!(ManualCompressionEvent::from_payload(&notification), None);
+    assert!(matches!(WorkflowReminder::from_payload(&notification), Some(WorkflowReminder::Notification { warning: true, .. })));
+    notification["message"] = json!("当前没有可安全压缩的上下文片段");
+    assert_eq!(ManualCompressionEvent::from_payload(&notification), None);
+    notification["code"] = json!("manual_compression_unavailable");
+    notification["message"] = json!("Localized text can change");
+    assert_eq!(ManualCompressionEvent::from_payload(&notification), Some(ManualCompressionEvent::Unavailable));
+    assert!(WorkflowReminder::from_payload(&notification).is_none());
+    notification["code"] = serde_json::Value::Null;
+    notification["category"] = json!("info");
+    assert!(WorkflowReminder::from_payload(&notification).is_none());
+    assert!(WorkflowReminder::from_payload(&json!({"type":"chunk","content":" \u{200b}"})).is_none());
+    assert!(matches!(WorkflowReminder::from_payload(&json!({"type":"state","state":"cancelled"})), Some(WorkflowReminder::EndRetry)));
 }
 
 /// Control messages share the reliable queue with text deltas.
@@ -495,6 +572,11 @@ pub enum UpdateKind {
     },
     Event(Value),
     RunningTools(Vec<(Value, Option<Instant>)>),
+    WorkflowReminder {
+        session: String,
+        through: Option<i64>,
+        event: WorkflowReminder,
+    },
     CompressionEvent {
         session: String,
         instance: String,

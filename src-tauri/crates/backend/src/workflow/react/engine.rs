@@ -56,7 +56,7 @@ use crate::workflow::react::{
     types::{
         sub_agent_completion_user_error, EffectiveTaskObjective, ExecutionContext, GatewayPayload,
         PendingCompletionReport, PendingTool, QueuedUserMessage, RuntimeState, StepType,
-        SubAgentCompletion, WaitReason, WorkflowSignal, WorkflowState,
+        SubAgentCompletion, WaitReason, WorkflowNotificationCode, WorkflowSignal, WorkflowState,
     },
 };
 
@@ -1186,6 +1186,7 @@ impl WorkflowExecutor {
         self.dispatch_ui_payload(GatewayPayload::Notification {
             message: t!("workflow.compression_in_progress").to_string(),
             category: Some("info".to_string()),
+            code: None,
         })
         .await?;
 
@@ -1214,6 +1215,7 @@ impl WorkflowExecutor {
                         .dispatch_ui_payload(GatewayPayload::Notification {
                             message: String::new(),
                             category: Some("info".to_string()),
+                            code: None,
                         })
                         .await;
                     return Err(error);
@@ -1289,6 +1291,7 @@ impl WorkflowExecutor {
         let notification = self.dispatch_ui_payload(GatewayPayload::Notification {
             message: String::new(),
             category: Some("info".to_string()),
+            code: None,
         }).await;
         let applied = result?;
         status?;
@@ -1376,6 +1379,7 @@ impl WorkflowExecutor {
             self.dispatch_ui_payload(GatewayPayload::Notification {
                 message: t!("workflow.manual_compression_unavailable").to_string(),
                 category: Some("warning".to_string()),
+                code: Some(WorkflowNotificationCode::ManualCompressionUnavailable),
             })
             .await?;
             return Ok(false);
@@ -8754,6 +8758,7 @@ impl WorkflowExecutor {
                 self.dispatch_ui_payload(GatewayPayload::Notification {
                     message: t!("workflow.manual_compression_unavailable").to_string(),
                     category: Some("warning".to_string()),
+                    code: Some(WorkflowNotificationCode::ManualCompressionUnavailable),
                 })
                 .await?;
             }

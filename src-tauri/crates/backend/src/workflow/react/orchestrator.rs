@@ -1759,6 +1759,7 @@ impl ToolDefinition for TaskTool {
                                         task_id_clone, task_id_clone
                                     ),
                                     category: Some("info".to_string()),
+                                    code: None,
                                 },
                             )
                             .await;

@@ -908,6 +908,7 @@ impl LlmProcessor {
                             GatewayPayload::Notification {
                                 message: String::new(),
                                 category: Some("info".to_string()),
+                                code: None,
                             },
                         )
                         .await;
